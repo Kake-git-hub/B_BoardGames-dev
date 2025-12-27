@@ -553,7 +553,7 @@
   function renderHome(viewEl) {
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">はじめる</div>\n      <div class="muted">ゲームマスターが部屋を作り、QRを配布します。</div>\n\n      <hr />\n\n      <div class="stack">\n        <a class="btn primary" href="?screen=create">部屋を作る（ゲームマスター）</a>\n        <a class="btn ghost" href="?screen=setup">セットアップ（Firebase設定）</a>\n\n        <div class="field">\n          <label>ルームIDがある場合（参加者）</label>\n          <div class="row">\n            <input id="joinRoomId" placeholder="例: a1b2c3d4" inputmode="latin" />\n            <button id="goJoin" class="ghost">参加</button>\n          </div>\n          <div class="muted">QRが読めない時の手入力用です。</div>\n        </div>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">はじめる</div>\n      <div class="muted">ゲームマスターが部屋を作り、QRを配布します。</div>\n\n      <hr />\n\n      <div class="stack">\n        <a class="btn primary" href="?screen=create">部屋を作る（ゲームマスター）</a>\n\n        <div class="field">\n          <label>ルームIDがある場合（参加者）</label>\n          <div class="row">\n            <input id="joinRoomId" placeholder="例: a1b2c3d4" inputmode="latin" />\n            <button id="goJoin" class="ghost">参加</button>\n          </div>\n          <div class="muted">QRが読めない時の手入力用です。</div>\n        </div>\n      </div>\n    </div>\n  '
     );
   }
 
@@ -1092,10 +1092,28 @@
     function drawQr() {
       return new Promise(function (resolve) {
         var canvas = document.getElementById('qr');
-        if (!canvas || !window.QRCode) return resolve();
-        window.QRCode.toCanvas(canvas, joinUrl, { margin: 1, width: 220 }, function () {
+        var errEl = document.getElementById('qrError');
+        if (errEl) errEl.textContent = '';
+        if (!canvas) {
+          if (errEl) errEl.textContent = 'QR表示領域が見つかりません。';
+          return resolve();
+        }
+
+        var qr = window.QRCode || window.qrcode || window.QR;
+        if (!qr || !qr.toCanvas) {
+          if (errEl) errEl.textContent = 'QRの生成に失敗しました（ライブラリ未読込）。URLをコピーして配布してください。';
+          return resolve();
+        }
+
+        try {
+          qr.toCanvas(canvas, joinUrl, { margin: 1, width: 240 }, function (err) {
+            if (err && errEl) errEl.textContent = 'QRの生成に失敗しました。URLをコピーして配布してください。';
+            resolve();
+          });
+        } catch (e) {
+          if (errEl) errEl.textContent = 'QRの生成に失敗しました。URLをコピーして配布してください。';
           resolve();
-        });
+        }
       });
     }
 
