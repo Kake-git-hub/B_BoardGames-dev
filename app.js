@@ -768,7 +768,7 @@
       viewEl,
       '\n    <div class="stack">\n      <div class="big">QR配布</div>\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="field">\n        <label>参加者用URL</label>\n        <div class="code" id="joinUrl">' +
         escapeHtml(joinUrl) +
-        '</div>\n      </div>\n\n      <div class="center">\n        <canvas id="qr"></canvas>\n      </div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
+        '</div>\n      </div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
         playerCount +
         ' / ' +
         limit +
@@ -1363,7 +1363,7 @@
   try {
     viewEl = qs('#view');
     var buildInfoEl = document.querySelector('#buildInfo');
-    if (buildInfoEl) buildInfoEl.textContent = 'v0.5 (setup link on error)';
+    if (buildInfoEl) buildInfoEl.textContent = 'v0.6 (qr error + fallback visible)';
 
     window.addEventListener('popstate', function () {
       route();
