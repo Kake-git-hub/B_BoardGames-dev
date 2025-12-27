@@ -1302,7 +1302,7 @@
   try {
     viewEl = qs('#view');
     var buildInfoEl = document.querySelector('#buildInfo');
-    if (buildInfoEl) buildInfoEl.textContent = 'v0.2 (single-file no-async)';
+    if (buildInfoEl) buildInfoEl.textContent = 'v0.3 (qr+setup stable)';
 
     window.addEventListener('popstate', function () {
       route();
