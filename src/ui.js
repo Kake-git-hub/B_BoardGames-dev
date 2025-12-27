@@ -28,8 +28,8 @@ export function renderHome(viewEl) {
       <hr />
 
       <div class="stack">
-        <button class="primary" id="goCreate">部屋を作る（ゲームマスター）</button>
-        <button class="ghost" id="goSetup">セットアップ（Firebase設定）</button>
+        <a class="btn primary" id="goCreate" href="?screen=create">部屋を作る（ゲームマスター）</a>
+        <a class="btn ghost" id="goSetup" href="?screen=setup">セットアップ（Firebase設定）</a>
 
         <div class="field">
           <label>ルームIDがある場合（参加者）</label>
