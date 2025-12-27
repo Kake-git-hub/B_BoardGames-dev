@@ -1093,6 +1093,7 @@
       return new Promise(function (resolve) {
         var canvas = document.getElementById('qr');
         var errEl = document.getElementById('qrError');
+        var wrapEl = document.getElementById('qrWrap');
         if (errEl) errEl.textContent = '';
         if (!canvas) {
           if (errEl) errEl.textContent = 'QR表示領域が見つかりません。';
@@ -1105,14 +1106,64 @@
           return resolve();
         }
 
+        function showAsImage() {
+          if (!qr.toDataURL || !wrapEl) return;
+          try {
+            qr.toDataURL(joinUrl, { margin: 1, width: 240 }, function (err, url) {
+              if (err || !url) {
+                if (errEl) errEl.textContent = 'QRの生成に失敗しました。URLをコピーして配布してください。';
+                return resolve();
+              }
+              wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />';
+              if (errEl) errEl.textContent = '（QRは画像で表示しています）';
+              return resolve();
+            });
+          } catch (e) {
+            if (errEl) errEl.textContent = 'QRの生成に失敗しました。URLをコピーして配布してください。';
+            return resolve();
+          }
+        }
+
+        function looksBlank(c) {
+          try {
+            var ctx = c.getContext && c.getContext('2d');
+            if (!ctx) return true;
+            var w = c.width || 0;
+            var h = c.height || 0;
+            if (!w || !h) return true;
+            // sample a few pixels; if all fully transparent or all white-ish, treat as blank
+            var img = ctx.getImageData(0, 0, Math.min(16, w), Math.min(16, h)).data;
+            var allZero = true;
+            var allWhite = true;
+            for (var i = 0; i < img.length; i += 4) {
+              var r = img[i], g = img[i + 1], b = img[i + 2], a = img[i + 3];
+              if (a !== 0) allZero = false;
+              if (!(a !== 0 && r > 240 && g > 240 && b > 240)) allWhite = false;
+              if (!allZero && !allWhite) return false;
+            }
+            return allZero || allWhite;
+          } catch (e) {
+            // If we can't read pixels, don't assume blank.
+            return false;
+          }
+        }
+
         try {
           qr.toCanvas(canvas, joinUrl, { margin: 1, width: 240 }, function (err) {
-            if (err && errEl) errEl.textContent = 'QRの生成に失敗しました。URLをコピーして配布してください。';
+            if (err) {
+              if (errEl) errEl.textContent = 'QRの生成に失敗しました。URLをコピーして配布してください。';
+              showAsImage();
+              return;
+            }
+            if (looksBlank(canvas)) {
+              showAsImage();
+              return;
+            }
             resolve();
           });
         } catch (e) {
           if (errEl) errEl.textContent = 'QRの生成に失敗しました。URLをコピーして配布してください。';
-          resolve();
+          showAsImage();
         }
       });
     }
@@ -1302,7 +1353,7 @@
   try {
     viewEl = qs('#view');
     var buildInfoEl = document.querySelector('#buildInfo');
-    if (buildInfoEl) buildInfoEl.textContent = 'v0.3 (qr+setup stable)';
+    if (buildInfoEl) buildInfoEl.textContent = 'v0.4 (qr fallback)';
 
     window.addEventListener('popstate', function () {
       route();
