@@ -60,7 +60,7 @@ async function copyToClipboard(text) {
   try {
     await navigator.clipboard.writeText(text);
     return true;
-  } catch {
+  } catch (e) {
     return false;
   }
 }
@@ -104,7 +104,7 @@ function routeSetup() {
       setSearch(new URLSearchParams());
       route();
     } catch (e) {
-      renderError(viewEl, e?.message || '保存に失敗しました');
+      renderError(viewEl, (e && e.message) || '保存に失敗しました');
     }
   });
 }
@@ -119,12 +119,13 @@ function routeCreate() {
   });
 
   qs('#pickRandom').addEventListener('click', () => {
-    const catId = String(document.getElementById('topicCategory')?.value || TOPIC_CATEGORIES[0].id);
+    const el = document.getElementById('topicCategory');
+    const catId = String((el && el.value) || TOPIC_CATEGORIES[0].id);
     try {
       const picked = pickRandomPair(catId);
       setWords(picked.majority, picked.minority);
     } catch (e) {
-      alert(e?.message || '出題に失敗しました');
+      alert((e && e.message) || '出題に失敗しました');
     }
   });
 
@@ -137,7 +138,7 @@ function routeCreate() {
       setSearch(new URLSearchParams({ room: roomId, host: '1' }));
       route();
     } catch (e) {
-      renderError(viewEl, e?.message || '作成に失敗しました');
+      renderError(viewEl, (e && e.message) || '作成に失敗しました');
     }
   });
 }
@@ -159,7 +160,7 @@ function routeJoin(roomId, isHost) {
       setSearch(new URLSearchParams({ room: roomId, player: '1', ...(isHost ? { host: '1' } : {}) }));
       route();
     } catch (e) {
-      renderError(viewEl, e?.message || '参加に失敗しました');
+      renderError(viewEl, (e && e.message) || '参加に失敗しました');
     }
   });
 }
@@ -196,7 +197,7 @@ function routeHost(roomId) {
       try {
         await startGameAssignRoles(roomId);
       } catch (e) {
-        alert(e?.message || '失敗');
+        alert((e && e.message) || '失敗');
       }
     });
 
@@ -204,7 +205,7 @@ function routeHost(roomId) {
       try {
         await startDiscussion(roomId);
       } catch (e) {
-        alert(e?.message || '失敗');
+        alert((e && e.message) || '失敗');
       }
     });
 
@@ -212,7 +213,7 @@ function routeHost(roomId) {
       try {
         await startVoting(roomId);
       } catch (e) {
-        alert(e?.message || '失敗');
+        alert((e && e.message) || '失敗');
       }
     });
 
@@ -220,7 +221,7 @@ function routeHost(roomId) {
       try {
         await revealVoteResult(roomId);
       } catch (e) {
-        alert(e?.message || '失敗');
+        alert((e && e.message) || '失敗');
       }
     });
 
@@ -229,7 +230,7 @@ function routeHost(roomId) {
       try {
         await reveal(roomId);
       } catch (e) {
-        alert(e?.message || '失敗');
+        alert((e && e.message) || '失敗');
       }
     });
   };
@@ -245,7 +246,7 @@ function routeHost(roomId) {
         renderWithRoom(room);
       });
     } catch (e) {
-      renderError(viewEl, e?.message || 'Firebase接続に失敗しました');
+      renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
     }
   })();
 
@@ -266,7 +267,7 @@ function routePlayer(roomId, isHost) {
   const rerenderTimer = (room) => {
     const el = document.getElementById('timer');
     if (!el) return;
-    const endAt = room?.discussion?.endsAt || 0;
+    const endAt = room && room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
     const remain = Math.max(0, Math.floor((endAt - Date.now()) / 1000));
     el.textContent = formatMMSS(remain);
   };
@@ -279,7 +280,7 @@ function routePlayer(roomId, isHost) {
           renderError(viewEl, '部屋が見つかりません');
           return;
         }
-        const player = room.players?.[playerId];
+        const player = room.players ? room.players[playerId] : null;
         renderPlayer(viewEl, { roomId, playerId, player, room, isHost });
 
         if (timerHandle) clearInterval(timerHandle);
@@ -298,12 +299,13 @@ function routePlayer(roomId, isHost) {
         const submitBtn = document.getElementById('submitGuess');
         if (submitBtn) {
           submitBtn.addEventListener('click', async () => {
-            const guessText = String(document.getElementById('guessText')?.value || '').trim();
+            const el = document.getElementById('guessText');
+            const guessText = String((el && el.value) || '').trim();
             if (!guessText) return;
             try {
               await submitGuess(roomId, guessText);
             } catch (e) {
-              alert(e?.message || '失敗');
+              alert((e && e.message) || '失敗');
             }
           });
         }
@@ -311,18 +313,19 @@ function routePlayer(roomId, isHost) {
         const voteBtn = document.getElementById('submitVote');
         if (voteBtn) {
           voteBtn.addEventListener('click', async () => {
-            const toPlayerId = String(document.getElementById('voteTo')?.value || '').trim();
+            const el = document.getElementById('voteTo');
+            const toPlayerId = String((el && el.value) || '').trim();
             if (!toPlayerId) return;
             try {
               await submitVote(roomId, playerId, toPlayerId);
             } catch (e) {
-              alert(e?.message || '失敗');
+              alert((e && e.message) || '失敗');
             }
           });
         }
       });
     } catch (e) {
-      renderError(viewEl, e?.message || 'Firebase接続に失敗しました');
+      renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
     }
   })();
 

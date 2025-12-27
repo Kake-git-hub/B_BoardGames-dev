@@ -71,7 +71,7 @@ export function getCategoryById(id) {
 
 export function pickRandomPair(categoryId) {
   const cat = getCategoryById(categoryId);
-  const pairs = cat?.pairs || [];
+  const pairs = (cat && cat.pairs) || [];
   if (!pairs.length) throw new Error('候補がありません');
   const idx = Math.floor(Math.random() * pairs.length);
   const pair = pairs[idx];

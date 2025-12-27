@@ -20,8 +20,8 @@ async function loadFirebaseConfig() {
   // 1) `src/config.js` が存在する場合はそれを優先
   try {
     const mod = await import('./config.js');
-    if (mod?.firebaseConfig?.apiKey) return mod.firebaseConfig;
-  } catch {
+    if (mod && mod.firebaseConfig && mod.firebaseConfig.apiKey) return mod.firebaseConfig;
+  } catch (e) {
     // ignore
   }
 
@@ -31,7 +31,7 @@ async function loadFirebaseConfig() {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     return parsed;
-  } catch {
+  } catch (e) {
     return null;
   }
 }
@@ -45,7 +45,7 @@ export function loadFirebaseConfigFromLocalStorage() {
   if (!raw) return null;
   try {
     return JSON.parse(raw);
-  } catch {
+  } catch (e) {
     return null;
   }
 }

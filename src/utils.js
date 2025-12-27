@@ -10,11 +10,11 @@ export function qsa(selector, root = document) {
 
 export function escapeHtml(s) {
   return String(s)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 export function nowMs() {
@@ -24,8 +24,18 @@ export function nowMs() {
 export function randomId(len = 20) {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
   let out = '';
-  const bytes = crypto.getRandomValues(new Uint8Array(len));
-  for (let i = 0; i < len; i++) out += alphabet[bytes[i] % alphabet.length];
+  let bytes = null;
+  try {
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+      bytes = crypto.getRandomValues(new Uint8Array(len));
+    }
+  } catch (e) {
+    bytes = null;
+  }
+  for (let i = 0; i < len; i++) {
+    const v = bytes ? bytes[i] : Math.floor(Math.random() * 256);
+    out += alphabet[v % alphabet.length];
+  }
   return out;
 }
 

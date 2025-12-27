@@ -94,8 +94,8 @@ export async function startGameAssignRoles(roomId) {
 
     const playersObj = room.players || {};
     const playerIds = Object.keys(playersObj);
-    const limit = room.settings?.playerLimit || 0;
-    const minorityCount = room.settings?.minorityCount || 1;
+    const limit = (room.settings && room.settings.playerLimit) || 0;
+    const minorityCount = (room.settings && room.settings.minorityCount) || 1;
 
     if (limit <= 0 || playerIds.length < limit) {
       // 全員揃っていない
@@ -139,7 +139,7 @@ export async function startDiscussion(roomId) {
   await runTxn(base, (room) => {
     if (!room) return room;
     if (room.phase !== 'assigned') return room;
-    const talkSeconds = room.settings?.talkSeconds ?? 180;
+    const talkSeconds = room.settings && room.settings.talkSeconds != null ? room.settings.talkSeconds : 180;
     const startedAt = nowMs();
     return {
       ...room,
@@ -159,7 +159,7 @@ export async function reveal(roomId) {
     if (room.phase !== 'discussion' && room.phase !== 'assigned' && room.phase !== 'voteResult') return room;
     return {
       ...room,
-      phase: room.settings?.reversal ? 'guess' : 'finished',
+      phase: room.settings && room.settings.reversal ? 'guess' : 'finished',
       reveal: { revealedAt: nowMs() },
     };
   });
@@ -214,7 +214,7 @@ export async function submitGuess(roomId, guessText) {
     if (!room) return room;
     if (room.phase !== 'guess') return room;
 
-    const majorityWord = String(room.words?.majority || '').trim();
+    const majorityWord = String((room.words && room.words.majority) || '').trim();
     const gt = String(guessText || '').trim();
     const correct = gt.length > 0 && majorityWord.length > 0 && gt === majorityWord;
 

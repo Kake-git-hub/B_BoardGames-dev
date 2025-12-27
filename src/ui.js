@@ -76,12 +76,13 @@ export function renderSetup(viewEl) {
 }
 
 export function readSetupForm() {
-  const raw = String(document.getElementById('firebaseConfigJson')?.value || '').trim();
+  const el = document.getElementById('firebaseConfigJson');
+  const raw = String((el && el.value) || '').trim();
   if (!raw) throw new Error('Firebase config JSON を貼り付けてください。');
   let parsed;
   try {
     parsed = JSON.parse(raw);
-  } catch {
+  } catch (e) {
     throw new Error('JSONとして解釈できません。');
   }
   if (!parsed || !parsed.apiKey) throw new Error('apiKey が見つかりません。');
@@ -157,13 +158,20 @@ export function renderCreate(viewEl) {
 }
 
 export function readCreateForm() {
-  const playerLimit = clamp(parseIntSafe(document.getElementById('playerLimit')?.value, 6), 3, 30);
-  const minorityCount = clamp(parseIntSafe(document.getElementById('minorityCount')?.value, 1), 1, 10);
-  const talkSeconds = clamp(parseIntSafe(document.getElementById('talkSeconds')?.value, 180), 30, 1800);
-  const reversal = (document.getElementById('reversal')?.value || '1') === '1';
+  const pl = document.getElementById('playerLimit');
+  const mc = document.getElementById('minorityCount');
+  const ts = document.getElementById('talkSeconds');
+  const rv = document.getElementById('reversal');
+  const mj = document.getElementById('majorityWord');
+  const mn = document.getElementById('minorityWord');
 
-  const majorityWord = String(document.getElementById('majorityWord')?.value || '').trim();
-  const minorityWord = String(document.getElementById('minorityWord')?.value || '').trim();
+  const playerLimit = clamp(parseIntSafe(pl && pl.value, 6), 3, 30);
+  const minorityCount = clamp(parseIntSafe(mc && mc.value, 1), 1, 10);
+  const talkSeconds = clamp(parseIntSafe(ts && ts.value, 180), 30, 1800);
+  const reversal = ((rv && rv.value) || '1') === '1';
+
+  const majorityWord = String((mj && mj.value) || '').trim();
+  const minorityWord = String((mn && mn.value) || '').trim();
 
   if (minorityCount >= playerLimit) throw new Error('少数側人数は参加人数より小さくしてください。');
   if (!majorityWord) throw new Error('多数側ワードを入力してください。');
@@ -212,14 +220,15 @@ export function renderJoin(viewEl, roomId) {
 }
 
 export function readJoinForm() {
-  const name = String(document.getElementById('playerName')?.value || '').trim();
+  const el = document.getElementById('playerName');
+  const name = String((el && el.value) || '').trim();
   if (!name) throw new Error('名前を入力してください。');
   return { name };
 }
 
 export function renderHostQr(viewEl, { roomId, joinUrl, hostUrl, room }) {
-  const playerCount = room?.players ? Object.keys(room.players).length : 0;
-  const limit = room?.settings?.playerLimit ?? 0;
+  const playerCount = room && room.players ? Object.keys(room.players).length : 0;
+  const limit = room && room.settings && room.settings.playerLimit != null ? room.settings.playerLimit : 0;
 
   render(
     viewEl,
@@ -238,7 +247,7 @@ export function renderHostQr(viewEl, { roomId, joinUrl, hostUrl, room }) {
       </div>
 
       <div class="kv"><span class="muted">参加状況</span><b>${playerCount} / ${limit}</b></div>
-      <div class="kv"><span class="muted">フェーズ</span><b>${escapeHtml(room?.phase || '-') }</b></div>
+      <div class="kv"><span class="muted">フェーズ</span><b>${escapeHtml((room && room.phase) || '-') }</b></div>
 
       <hr />
 
@@ -271,21 +280,21 @@ export function renderHostQr(viewEl, { roomId, joinUrl, hostUrl, room }) {
 }
 
 export function renderPlayer(viewEl, { roomId, playerId, player, room, isHost }) {
-  const role = player?.role || 'unknown';
-  const phase = room?.phase || 'lobby';
+  const role = (player && player.role) || 'unknown';
+  const phase = (room && room.phase) || 'lobby';
 
-  const players = room?.players || {};
+  const players = (room && room.players) || {};
   const activePlayers = Object.entries(players)
     .filter(([, p]) => p && p.role !== 'spectator')
     .map(([id, p]) => ({ id, name: p.name || '' }));
 
-  const votedTo = room?.votes?.[playerId]?.to || '';
+  const votedTo = room && room.votes && room.votes[playerId] && room.votes[playerId].to ? room.votes[playerId].to : '';
 
   const tally = (() => {
-    const votes = room?.votes || {};
+    const votes = (room && room.votes) || {};
     const counts = new Map();
     for (const v of Object.values(votes)) {
-      if (!v?.to) continue;
+      if (!v || !v.to) continue;
       counts.set(v.to, (counts.get(v.to) || 0) + 1);
     }
     const rows = activePlayers
@@ -296,9 +305,9 @@ export function renderPlayer(viewEl, { roomId, playerId, player, room, isHost })
 
   const word =
     role === 'minority'
-      ? room?.words?.minority
+      ? (room && room.words ? room.words.minority : '')
       : role === 'majority'
-        ? room?.words?.majority
+        ? (room && room.words ? room.words.majority : '')
         : '';
 
   const roleLabel =
@@ -310,7 +319,7 @@ export function renderPlayer(viewEl, { roomId, playerId, player, room, isHost })
           ? '観戦'
           : '未確定';
 
-  const endAt = room?.discussion?.endsAt || 0;
+  const endAt = room && room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
   const now = Date.now();
   const remain = Math.max(0, Math.floor((endAt - now) / 1000));
 
@@ -321,7 +330,7 @@ export function renderPlayer(viewEl, { roomId, playerId, player, room, isHost })
       <div class="row" style="justify-content:space-between">
         <div>
           <div class="badge">ルーム ${escapeHtml(roomId)}</div>
-          <div class="big">${escapeHtml(player?.name || '')}</div>
+          <div class="big">${escapeHtml((player && player.name) || '')}</div>
         </div>
         <div class="badge">${escapeHtml(phase)}</div>
       </div>
@@ -339,7 +348,7 @@ export function renderPlayer(viewEl, { roomId, playerId, player, room, isHost })
         <div class="timer" id="timer">${formatMMSS(remain)}</div>
       </div>
 
-      ${room?.phase === 'voting' ? `
+      ${phase === 'voting' ? `
         <div class="stack">
           <div class="big">投票</div>
           <div class="muted">少数側だと思う人を選んで投票します。</div>
@@ -357,7 +366,7 @@ export function renderPlayer(viewEl, { roomId, playerId, player, room, isHost })
         </div>
       ` : ''}
 
-      ${room?.phase === 'voteResult' ? `
+      ${phase === 'voteResult' ? `
         <div class="stack">
           <div class="big">投票結果</div>
           <div class="muted">得票数（多い順）</div>
@@ -370,7 +379,7 @@ export function renderPlayer(viewEl, { roomId, playerId, player, room, isHost })
         </div>
       ` : ''}
 
-      ${room?.phase === 'guess' ? `
+      ${phase === 'guess' ? `
         <div class="stack">
           <div class="muted">逆転あり: 少数側は多数側ワードを入力</div>
           <div class="row">
@@ -381,16 +390,16 @@ export function renderPlayer(viewEl, { roomId, playerId, player, room, isHost })
         </div>
       ` : ''}
 
-      ${room?.phase === 'finished' ? `
+      ${phase === 'finished' ? `
         <div class="stack">
           <div class="big">結果</div>
           <div class="muted">少数側: 多数側ワードを当てれば勝ち（逆転あり時）</div>
-          <div class="kv"><span class="muted">多数側ワード</span><b>${escapeHtml(room?.words?.majority || '')}</b></div>
-          <div class="kv"><span class="muted">少数側ワード</span><b>${escapeHtml(room?.words?.minority || '')}</b></div>
-          ${room?.settings?.reversal ? `
+          <div class="kv"><span class="muted">多数側ワード</span><b>${escapeHtml((room && room.words && room.words.majority) || '')}</b></div>
+          <div class="kv"><span class="muted">少数側ワード</span><b>${escapeHtml((room && room.words && room.words.minority) || '')}</b></div>
+          ${room && room.settings && room.settings.reversal ? `
             <hr />
-            <div class="kv"><span class="muted">少数側の回答</span><b>${escapeHtml(room?.guess?.guessText || '（未回答）')}</b></div>
-            <div class="kv"><span class="muted">正誤</span><b>${room?.guess?.correct === true ? '正解（少数側勝ち）' : room?.guess?.correct === false ? '不正解（多数側勝ち）' : '未確定'}</b></div>
+            <div class="kv"><span class="muted">少数側の回答</span><b>${escapeHtml((room && room.guess && room.guess.guessText) || '（未回答）')}</b></div>
+            <div class="kv"><span class="muted">正誤</span><b>${room && room.guess && room.guess.correct === true ? '正解（少数側勝ち）' : room && room.guess && room.guess.correct === false ? '不正解（多数側勝ち）' : '未確定'}</b></div>
           ` : ''}
 
           <hr />
