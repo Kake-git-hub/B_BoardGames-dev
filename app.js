@@ -1,0 +1,1204 @@
+/* Single-file build (no ES modules) for maximum mobile compatibility. */
+
+(function () {
+  'use strict';
+
+  // Extremely old browsers can't run Firebase compat (Promise required).
+  if (typeof Promise === 'undefined') {
+    var v = document.getElementById('view');
+    if (v) {
+      v.innerHTML =
+        '<div class="stack"><div class="badge">エラー</div><div class="big">このブラウザは古すぎます</div><div class="muted">別のブラウザ（Chrome/Safari最新版）で開いてください。</div></div>';
+    }
+    return;
+  }
+
+  // -------------------- tiny helpers --------------------
+  var hasOwn = Object.prototype.hasOwnProperty;
+
+  function assign(target) {
+    if (!target) target = {};
+    for (var i = 1; i < arguments.length; i++) {
+      var src = arguments[i];
+      if (!src) continue;
+      for (var k in src) {
+        if (hasOwn.call(src, k)) target[k] = src[k];
+      }
+    }
+    return target;
+  }
+
+  function qs(selector, root) {
+    var r = root || document;
+    var el = r.querySelector(selector);
+    if (!el) throw new Error('Not found: ' + selector);
+    return el;
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function nowMs() {
+    return Date.now ? Date.now() : new Date().getTime();
+  }
+
+  function pad2(n) {
+    var s = String(Math.floor(Math.abs(n)));
+    return s.length >= 2 ? s : '0' + s;
+  }
+
+  function formatMMSS(totalSeconds) {
+    var s = Math.max(0, Math.floor(totalSeconds));
+    return pad2(Math.floor(s / 60)) + ':' + pad2(s % 60);
+  }
+
+  function parseIntSafe(v, fallback) {
+    var n = parseInt(String(v), 10);
+    return isFinite(n) ? n : fallback;
+  }
+
+  function clamp(n, min, max) {
+    return Math.max(min, Math.min(max, n));
+  }
+
+  function randomId(len) {
+    var l = len == null ? 20 : len;
+    var alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    var out = '';
+    var bytes = null;
+    try {
+      if (typeof crypto !== 'undefined' && crypto.getRandomValues && typeof Uint8Array !== 'undefined') {
+        bytes = crypto.getRandomValues(new Uint8Array(l));
+      }
+    } catch (e) {
+      bytes = null;
+    }
+    for (var i = 0; i < l; i++) {
+      var v = bytes ? bytes[i] : Math.floor(Math.random() * 256);
+      out += alphabet[v % alphabet.length];
+    }
+    return out;
+  }
+
+  // -------------------- query helpers (no URL/URLSearchParams) --------------------
+  function decodeQS(s) {
+    try {
+      return decodeURIComponent(String(s || '').replace(/\+/g, ' '));
+    } catch (e) {
+      return String(s || '');
+    }
+  }
+
+  function encodeQS(s) {
+    try {
+      return encodeURIComponent(String(s));
+    } catch (e) {
+      return String(s);
+    }
+  }
+
+  function parseQuery() {
+    var q = String(location.search || '').replace(/^\?/, '');
+    var out = {};
+    if (!q) return out;
+    var parts = q.split('&');
+    for (var i = 0; i < parts.length; i++) {
+      var part = parts[i];
+      if (!part) continue;
+      var idx = part.indexOf('=');
+      var k = idx >= 0 ? part.slice(0, idx) : part;
+      var v = idx >= 0 ? part.slice(idx + 1) : '';
+      out[decodeQS(k)] = decodeQS(v);
+    }
+    return out;
+  }
+
+  function buildQuery(obj) {
+    var parts = [];
+    for (var k in obj) {
+      if (!hasOwn.call(obj, k)) continue;
+      if (obj[k] == null || obj[k] === '') continue;
+      parts.push(encodeQS(k) + '=' + encodeQS(obj[k]));
+    }
+    return parts.join('&');
+  }
+
+  function baseUrl() {
+    var origin = '';
+    if (location.protocol && location.host) origin = location.protocol + '//' + location.host;
+    return origin + (location.pathname || '/');
+  }
+
+  function setQuery(obj) {
+    var q = buildQuery(obj);
+    var url = baseUrl() + (q ? '?' + q : '');
+    if (location.hash) url += location.hash;
+    history.pushState(null, '', url);
+  }
+
+  function getCacheBusterParam() {
+    var q = parseQuery();
+    return q.v ? String(q.v) : '';
+  }
+
+  // -------------------- topics --------------------
+  var TOPIC_CATEGORIES = [
+    {
+      id: 'food',
+      name: '食べ物',
+      pairs: [
+        ['カレー', 'シチュー'],
+        ['ラーメン', 'うどん'],
+        ['寿司', '刺身'],
+        ['ハンバーガー', 'サンドイッチ'],
+        ['チョコ', 'クッキー'],
+        ['おにぎり', 'サンドイッチ'],
+        ['焼肉', 'しゃぶしゃぶ'],
+        ['ピザ', 'グラタン'],
+        ['アイス', 'かき氷'],
+        ['プリン', 'ゼリー']
+      ]
+    },
+    {
+      id: 'place',
+      name: '場所',
+      pairs: [
+        ['映画館', '劇場'],
+        ['学校', '塾'],
+        ['コンビニ', 'スーパー'],
+        ['病院', '薬局'],
+        ['図書館', '本屋'],
+        ['温泉', '銭湯'],
+        ['水族館', '動物園'],
+        ['空港', '駅'],
+        ['海', '山'],
+        ['カフェ', 'レストラン']
+      ]
+    },
+    {
+      id: 'thing',
+      name: 'モノ',
+      pairs: [
+        ['スマホ', 'タブレット'],
+        ['テレビ', 'パソコン'],
+        ['傘', 'レインコート'],
+        ['時計', 'カレンダー'],
+        ['リュック', 'バッグ'],
+        ['自転車', 'バイク'],
+        ['鉛筆', 'シャーペン'],
+        ['ノート', '教科書'],
+        ['鍵', '財布'],
+        ['メガネ', 'コンタクト']
+      ]
+    },
+    {
+      id: 'job',
+      name: '職業',
+      pairs: [
+        ['先生', '講師'],
+        ['医者', '看護師'],
+        ['警察官', '消防士'],
+        ['料理人', 'パティシエ'],
+        ['スポーツ選手', '監督'],
+        ['店員', '店長'],
+        ['運転手', '整備士'],
+        ['漫画家', 'イラストレーター'],
+        ['記者', '編集者'],
+        ['配達員', '郵便局員']
+      ]
+    }
+  ];
+
+  function getCategoryById(id) {
+    for (var i = 0; i < TOPIC_CATEGORIES.length; i++) {
+      if (TOPIC_CATEGORIES[i].id === id) return TOPIC_CATEGORIES[i];
+    }
+    return TOPIC_CATEGORIES[0];
+  }
+
+  function pickRandomPair(categoryId) {
+    var cat = getCategoryById(categoryId);
+    var pairs = (cat && cat.pairs) || [];
+    if (!pairs.length) throw new Error('候補がありません');
+    var idx = Math.floor(Math.random() * pairs.length);
+    var pair = pairs[idx];
+    if (Math.random() < 0.5) return { category: cat, majority: pair[0], minority: pair[1] };
+    return { category: cat, majority: pair[1], minority: pair[0] };
+  }
+
+  // -------------------- firebase (compat scripts) --------------------
+  var LS_KEY = 'ww_firebase_config_v1';
+
+  function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = src;
+      s.async = true;
+      s.onload = function () {
+        resolve();
+      };
+      s.onerror = function () {
+        reject(new Error('Failed to load: ' + src));
+      };
+      document.head.appendChild(s);
+    });
+  }
+
+  function saveFirebaseConfigToLocalStorage(config) {
+    localStorage.setItem(LS_KEY, JSON.stringify(config));
+  }
+
+  function loadFirebaseConfigFromLocalStorage() {
+    var raw = localStorage.getItem(LS_KEY);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  var _dbReady = null;
+
+  function firebaseReady() {
+    if (_dbReady) return _dbReady;
+
+    _dbReady = Promise.resolve()
+      .then(function () {
+        var firebaseConfig = window.firebaseConfig || loadFirebaseConfigFromLocalStorage();
+        if (!firebaseConfig || !firebaseConfig.apiKey) {
+          throw new Error('Firebase設定がありません。?screen=setup で設定してください。');
+        }
+        if (!firebaseConfig.databaseURL) {
+          throw new Error('Firebase設定に databaseURL がありません。');
+        }
+        return firebaseConfig;
+      })
+      .then(function (firebaseConfig) {
+        return loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js')
+          .then(function () {
+            return loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js');
+          })
+          .then(function () {
+            firebase.initializeApp(firebaseConfig);
+            return firebase.database();
+          });
+      });
+
+    return _dbReady;
+  }
+
+  function dbRef(path) {
+    return firebaseReady().then(function (db) {
+      return db.ref(path);
+    });
+  }
+
+  function onValue(path, cb) {
+    return dbRef(path).then(function (ref) {
+      var handler = function (snap) {
+        cb(snap.val());
+      };
+      ref.on('value', handler);
+      return function () {
+        ref.off('value', handler);
+      };
+    });
+  }
+
+  function setValue(path, value) {
+    return dbRef(path).then(function (ref) {
+      return ref.set(value);
+    });
+  }
+
+  function runTxn(path, updateFn) {
+    return dbRef(path)
+      .then(function (ref) {
+        return ref.transaction(function (current) {
+          return updateFn(current);
+        });
+      })
+      .then(function (res) {
+        return res.snapshot.val();
+      });
+  }
+
+  // -------------------- state --------------------
+  function getUrlState() {
+    var q = parseQuery();
+    var roomId = q.room ? String(q.room) : '';
+    var isHost = q.host === '1';
+    return { roomId: roomId, isHost: isHost };
+  }
+
+  function makeRoomId() {
+    return randomId(8);
+  }
+
+  function getOrCreatePlayerId(roomId) {
+    var key = 'ww_player_' + roomId;
+    var id = localStorage.getItem(key);
+    if (!id) {
+      id = randomId(12);
+      localStorage.setItem(key, id);
+    }
+    return id;
+  }
+
+  function roomPath(roomId) {
+    return 'rooms/' + roomId;
+  }
+
+  function playerPath(roomId, playerId) {
+    return 'rooms/' + roomId + '/players/' + playerId;
+  }
+
+  function createRoom(roomId, settings) {
+    var base = roomPath(roomId);
+    var room = {
+      createdAt: nowMs(),
+      phase: 'lobby',
+      settings: {
+        playerLimit: settings.playerLimit,
+        minorityCount: settings.minorityCount,
+        talkSeconds: settings.talkSeconds,
+        reversal: settings.reversal
+      },
+      words: {
+        majority: settings.majorityWord,
+        minority: settings.minorityWord
+      },
+      discussion: {
+        startedAt: 0,
+        endsAt: 0
+      },
+      reveal: {
+        revealedAt: 0
+      },
+      guess: {
+        enabled: !!settings.reversal,
+        submittedAt: 0,
+        guessText: '',
+        correct: null
+      },
+      voting: {
+        startedAt: 0,
+        revealedAt: 0
+      },
+      votes: {},
+      players: {}
+    };
+    return setValue(base, room);
+  }
+
+  function upsertPlayer(roomId, playerId, name) {
+    var path = playerPath(roomId, playerId);
+    return runTxn(path, function (current) {
+      var base = current || {};
+      return {
+        name: name,
+        joinedAt: base.joinedAt || nowMs(),
+        lastSeenAt: nowMs(),
+        role: base.role
+      };
+    });
+  }
+
+  function startGameAssignRoles(roomId) {
+    var base = roomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'lobby') return room;
+
+      var playersObj = room.players || {};
+      var playerIds = Object.keys(playersObj);
+      var limit = room.settings && room.settings.playerLimit ? room.settings.playerLimit : 0;
+      var minorityCount = room.settings && room.settings.minorityCount ? room.settings.minorityCount : 1;
+
+      if (limit <= 0 || playerIds.length < limit) return room;
+
+      var shuffled = playerIds.slice();
+      for (var i = shuffled.length - 1; i > 0; i--) {
+        var j = Math.floor(Math.random() * (i + 1));
+        var tmp = shuffled[i];
+        shuffled[i] = shuffled[j];
+        shuffled[j] = tmp;
+      }
+
+      var ids = shuffled.slice(0, limit);
+      var minoritySet = {};
+      for (var k = 0; k < minorityCount; k++) minoritySet[ids[k]] = true;
+
+      var nextPlayers = assign({}, playersObj);
+      var keys = Object.keys(nextPlayers);
+      for (var m = 0; m < keys.length; m++) {
+        var id = keys[m];
+        var p = nextPlayers[id] || {};
+        if (ids.indexOf(id) === -1) {
+          nextPlayers[id] = assign({}, p, { role: 'spectator' });
+        } else {
+          nextPlayers[id] = assign({}, p, { role: minoritySet[id] ? 'minority' : 'majority' });
+        }
+      }
+
+      return assign({}, room, { phase: 'assigned', players: nextPlayers });
+    });
+  }
+
+  function startDiscussion(roomId) {
+    var base = roomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'assigned') return room;
+      var talkSeconds = room.settings && room.settings.talkSeconds != null ? room.settings.talkSeconds : 180;
+      var startedAt = nowMs();
+      return assign({}, room, {
+        phase: 'discussion',
+        discussion: { startedAt: startedAt, endsAt: startedAt + talkSeconds * 1000 }
+      });
+    });
+  }
+
+  function startVoting(roomId) {
+    var base = roomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'discussion') return room;
+      return assign({}, room, {
+        phase: 'voting',
+        voting: { startedAt: nowMs(), revealedAt: 0 },
+        votes: {}
+      });
+    });
+  }
+
+  function submitVote(roomId, voterId, toPlayerId) {
+    var base = roomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'voting') return room;
+      var playersObj = room.players || {};
+      var voter = playersObj[voterId];
+      var to = playersObj[toPlayerId];
+      if (!voter || voter.role === 'spectator') return room;
+      if (!to || to.role === 'spectator') return room;
+      var nextVotes = assign({}, room.votes || {});
+      nextVotes[voterId] = { to: toPlayerId, at: nowMs() };
+      return assign({}, room, { votes: nextVotes });
+    });
+  }
+
+  function revealVoteResult(roomId) {
+    var base = roomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'voting') return room;
+      var voting = assign({}, room.voting || {}, { revealedAt: nowMs() });
+      return assign({}, room, { phase: 'voteResult', voting: voting });
+    });
+  }
+
+  function reveal(roomId) {
+    var base = roomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'discussion' && room.phase !== 'assigned' && room.phase !== 'voteResult') return room;
+      return assign({}, room, {
+        phase: room.settings && room.settings.reversal ? 'guess' : 'finished',
+        reveal: { revealedAt: nowMs() }
+      });
+    });
+  }
+
+  function submitGuess(roomId, guessText) {
+    var base = roomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'guess') return room;
+      var majorityWord = String((room.words && room.words.majority) || '').trim();
+      var gt = String(guessText || '').trim();
+      var correct = gt.length > 0 && majorityWord.length > 0 && gt === majorityWord;
+      return assign({}, room, {
+        phase: 'finished',
+        guess: assign({}, room.guess || {}, { submittedAt: nowMs(), guessText: gt, correct: correct })
+      });
+    });
+  }
+
+  function subscribeRoom(roomId, cb) {
+    return onValue(roomPath(roomId), cb);
+  }
+
+  // -------------------- UI --------------------
+  function render(viewEl, html) {
+    viewEl.innerHTML = html;
+  }
+
+  function renderError(viewEl, message) {
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="badge">エラー</div>\n      <div class="big">' +
+        escapeHtml(message) +
+        '</div>\n      <div class="muted">設定やURLを確認してください。</div>\n    </div>\n  '
+    );
+  }
+
+  function renderHome(viewEl) {
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">はじめる</div>\n      <div class="muted">ゲームマスターが部屋を作り、QRを配布します。</div>\n\n      <hr />\n\n      <div class="stack">\n        <a class="btn primary" href="?screen=create">部屋を作る（ゲームマスター）</a>\n        <a class="btn ghost" href="?screen=setup">セットアップ（Firebase設定）</a>\n\n        <div class="field">\n          <label>ルームIDがある場合（参加者）</label>\n          <div class="row">\n            <input id="joinRoomId" placeholder="例: a1b2c3d4" inputmode="latin" />\n            <button id="goJoin" class="ghost">参加</button>\n          </div>\n          <div class="muted">QRが読めない時の手入力用です。</div>\n        </div>\n      </div>\n    </div>\n  '
+    );
+  }
+
+  function renderSetup(viewEl) {
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">セットアップ</div>\n      <div class="muted">Firebase（Realtime Database）のWeb設定JSONを貼り付けて保存します。</div>\n\n      <div class="field">\n        <label>Firebase config（JSON）</label>\n        <textarea id="firebaseConfigJson" placeholder=\'{"apiKey":"...","authDomain":"...","databaseURL":"...","projectId":"...","appId":"..."}\'></textarea>\n        <div class="muted">※ databaseURL が入っていることを確認してください。</div>\n      </div>\n\n      <div class="row">\n        <button id="saveSetup" class="primary">保存</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+    );
+
+    var saved = loadFirebaseConfigFromLocalStorage();
+    if (saved) {
+      var el = document.getElementById('firebaseConfigJson');
+      if (el) el.value = JSON.stringify(saved);
+    }
+  }
+
+  function readSetupForm() {
+    var el = document.getElementById('firebaseConfigJson');
+    var raw = String((el && el.value) || '').trim();
+    if (!raw) throw new Error('Firebase config JSON を貼り付けてください。');
+    var parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      throw new Error('JSONとして解釈できません。');
+    }
+    if (!parsed || !parsed.apiKey) throw new Error('apiKey が見つかりません。');
+    if (!parsed.databaseURL) throw new Error('databaseURL が見つかりません。');
+    return parsed;
+  }
+
+  function renderCreate(viewEl) {
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">部屋を作成</div>\n\n      <div class="field">\n        <label>参加人数（ゲームマスター含む）</label>\n        <input id="playerLimit" type="number" min="3" max="30" value="6" />\n      </div>\n\n      <div class="field">\n        <label>少数側の人数</label>\n        <input id="minorityCount" type="number" min="1" max="10" value="1" />\n      </div>\n\n      <div class="field">\n        <label>トーク時間（秒）</label>\n        <input id="talkSeconds" type="number" min="30" max="1800" value="180" />\n      </div>\n\n      <div class="field">\n        <label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>\n        <select id="reversal">\n          <option value="1" selected>あり</option>\n          <option value="0">なし</option>\n        </select>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>お題カテゴリ（ランダム出題）</label>\n        <div class="row">\n          <select id="topicCategory"></select>\n          <button id="pickRandom" class="ghost">ランダム出題</button>\n        </div>\n        <div class="muted">※ 手入力でもOKです。</div>\n      </div>\n\n      <div class="field">\n        <label>多数側ワード</label>\n        <input id="majorityWord" placeholder="例: カレー" />\n      </div>\n\n      <div class="field">\n        <label>少数側ワード</label>\n        <input id="minorityWord" placeholder="例: シチュー" />\n      </div>\n\n      <hr />\n\n      <div class="row">\n        <button id="createRoom" class="primary">作成してQRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+    );
+
+    var sel = document.getElementById('topicCategory');
+    if (sel) {
+      var html = '';
+      for (var i = 0; i < TOPIC_CATEGORIES.length; i++) {
+        var c = TOPIC_CATEGORIES[i];
+        html += '<option value="' + escapeHtml(c.id) + '">' + escapeHtml(c.name) + '</option>';
+      }
+      sel.innerHTML = html;
+    }
+  }
+
+  function readCreateForm() {
+    var pl = document.getElementById('playerLimit');
+    var mc = document.getElementById('minorityCount');
+    var ts = document.getElementById('talkSeconds');
+    var rv = document.getElementById('reversal');
+    var mj = document.getElementById('majorityWord');
+    var mn = document.getElementById('minorityWord');
+
+    var playerLimit = clamp(parseIntSafe(pl && pl.value, 6), 3, 30);
+    var minorityCount = clamp(parseIntSafe(mc && mc.value, 1), 1, 10);
+    var talkSeconds = clamp(parseIntSafe(ts && ts.value, 180), 30, 1800);
+    var reversal = ((rv && rv.value) || '1') === '1';
+
+    var majorityWord = String((mj && mj.value) || '').trim();
+    var minorityWord = String((mn && mn.value) || '').trim();
+
+    if (minorityCount >= playerLimit) throw new Error('少数側人数は参加人数より小さくしてください。');
+    if (!majorityWord) throw new Error('多数側ワードを入力してください。');
+    if (!minorityWord) throw new Error('少数側ワードを入力してください。');
+
+    return {
+      playerLimit: playerLimit,
+      minorityCount: minorityCount,
+      talkSeconds: talkSeconds,
+      reversal: reversal,
+      majorityWord: majorityWord,
+      minorityWord: minorityWord
+    };
+  }
+
+  function renderJoin(viewEl, roomId) {
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">参加</div>\n      <div class="kv"><span class="muted">ルームID</span><b>' +
+        escapeHtml(roomId) +
+        '</b></div>\n\n      <div class="field">\n        <label>名前（表示用）</label>\n        <input id="playerName" placeholder="例: たろう" />\n      </div>\n\n      <div class="row">\n        <button id="join" class="primary">参加する</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+    );
+  }
+
+  function readJoinForm() {
+    var el = document.getElementById('playerName');
+    var name = String((el && el.value) || '').trim();
+    if (!name) throw new Error('名前を入力してください。');
+    return { name: name };
+  }
+
+  function renderHostQr(viewEl, opts) {
+    var roomId = opts.roomId;
+    var joinUrl = opts.joinUrl;
+    var hostUrl = opts.hostUrl;
+    var room = opts.room;
+
+    var playerCount = room && room.players ? Object.keys(room.players).length : 0;
+    var limit = room && room.settings && room.settings.playerLimit != null ? room.settings.playerLimit : 0;
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">QR配布</div>\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="field">\n        <label>参加者用URL</label>\n        <div class="code" id="joinUrl">' +
+        escapeHtml(joinUrl) +
+        '</div>\n      </div>\n\n      <div class="center">\n        <canvas id="qr"></canvas>\n      </div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
+        playerCount +
+        ' / ' +
+        limit +
+        '</b></div>\n      <div class="kv"><span class="muted">フェーズ</span><b>' +
+        escapeHtml((room && room.phase) || '-') +
+        '</b></div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="row">\n          <button id="copyJoin" class="ghost">URLコピー</button>\n          <a class="badge" href="' +
+        escapeHtml(hostUrl) +
+        '">この端末をGMモードで開く</a>\n        </div>\n\n        <div class="row">\n          <button id="hostJoin" class="primary">GMも参加（名前入力へ）</button>\n          <button id="startAssign" class="ghost">役職配布（全員揃ったら）</button>\n        </div>\n\n        <div class="row">\n          <button id="startDiscussion" class="ghost">トーク開始</button>\n          <button id="reveal" class="danger">開示（少数側発表）</button>\n        </div>\n\n        <div class="row">\n          <button id="startVoting" class="ghost">投票開始</button>\n          <button id="revealVotes" class="ghost">集計して開示</button>\n        </div>\n      </div>\n\n      <div class="muted">※ 役職配布→トーク開始→投票→集計→開示 の順に進めます。</div>\n    </div>\n  '
+    );
+  }
+
+  function renderPlayer(viewEl, opts) {
+    var roomId = opts.roomId;
+    var playerId = opts.playerId;
+    var player = opts.player;
+    var room = opts.room;
+
+    var role = (player && player.role) || 'unknown';
+    var phase = (room && room.phase) || 'lobby';
+
+    var players = (room && room.players) || {};
+    var activePlayers = [];
+    var playerKeys = Object.keys(players);
+    for (var i = 0; i < playerKeys.length; i++) {
+      var id = playerKeys[i];
+      var p = players[id];
+      if (!p || p.role === 'spectator') continue;
+      activePlayers.push({ id: id, name: p.name || '' });
+    }
+
+    var votedTo = room && room.votes && room.votes[playerId] && room.votes[playerId].to ? room.votes[playerId].to : '';
+
+    var votesObj = (room && room.votes) || {};
+    var counts = {};
+    var voteKeys = Object.keys(votesObj);
+    for (var vki = 0; vki < voteKeys.length; vki++) {
+      var vid = voteKeys[vki];
+      var v = votesObj[vid];
+      if (!v || !v.to) continue;
+      counts[v.to] = (counts[v.to] || 0) + 1;
+    }
+
+    var tally = [];
+    for (var ai = 0; ai < activePlayers.length; ai++) {
+      var ap = activePlayers[ai];
+      tally.push({ id: ap.id, name: ap.name, count: counts[ap.id] || 0 });
+    }
+    tally.sort(function (a, b) {
+      return b.count - a.count;
+    });
+
+    var word = '';
+    if (role === 'minority') word = (room && room.words ? room.words.minority : '') || '';
+    if (role === 'majority') word = (room && room.words ? room.words.majority : '') || '';
+
+    var roleLabel = '未確定';
+    if (role === 'minority') roleLabel = '少数側';
+    if (role === 'majority') roleLabel = '多数側';
+    if (role === 'spectator') roleLabel = '観戦';
+
+    var endAt = room && room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
+    var remain = Math.max(0, Math.floor((endAt - (Date.now ? Date.now() : new Date().getTime())) / 1000));
+
+    var votingHtml = '';
+    if (phase === 'voting') {
+      var options = '';
+      for (var oi = 0; oi < activePlayers.length; oi++) {
+        var ap2 = activePlayers[oi];
+        if (ap2.id === playerId) continue;
+        options +=
+          '<option value="' +
+          escapeHtml(ap2.id) +
+          '" ' +
+          (ap2.id === votedTo ? 'selected' : '') +
+          '>' +
+          escapeHtml(ap2.name) +
+          '</option>';
+      }
+
+      votingHtml =
+        '<div class="stack">' +
+        '<div class="big">投票</div>' +
+        '<div class="muted">少数側だと思う人を選んで投票します。</div>' +
+        '<div class="row">' +
+        '<select id="voteTo"><option value="">選択…</option>' +
+        options +
+        '</select>' +
+        '<button id="submitVote" class="primary">投票</button>' +
+        '</div>' +
+        (votedTo ? '<div class="muted">投票済み</div>' : '<div class="muted">未投票</div>') +
+        '</div>';
+    }
+
+    var voteResultHtml = '';
+    if (phase === 'voteResult' || phase === 'finished') {
+      var rows = '';
+      for (var ti = 0; ti < tally.length; ti++) {
+        var r = tally[ti];
+        rows += '<div class="kv"><span class="muted">' + escapeHtml(r.name) + '</span><b>' + r.count + '</b></div>';
+      }
+      voteResultHtml = '<hr /><div class="muted">投票結果（得票数）</div><div class="stack">' + rows + '</div>';
+    }
+
+    var guessHtml = '';
+    if (phase === 'guess') {
+      guessHtml =
+        '<div class="stack">' +
+        '<div class="muted">逆転あり: 少数側は多数側ワードを入力</div>' +
+        '<div class="row"><input id="guessText" placeholder="多数側ワード" />' +
+        '<button id="submitGuess" class="primary">確定</button></div>' +
+        '</div>';
+    }
+
+    var finishedHtml = '';
+    if (phase === 'finished') {
+      var mj = (room && room.words && room.words.majority) || '';
+      var mn = (room && room.words && room.words.minority) || '';
+      var reversal = room && room.settings && room.settings.reversal;
+      var guessText = (room && room.guess && room.guess.guessText) || '（未回答）';
+      var correct = room && room.guess ? room.guess.correct : null;
+
+      var correctness = '未確定';
+      if (correct === true) correctness = '正解（少数側勝ち）';
+      if (correct === false) correctness = '不正解（多数側勝ち）';
+
+      finishedHtml =
+        '<div class="stack">' +
+        '<div class="big">結果</div>' +
+        '<div class="kv"><span class="muted">多数側ワード</span><b>' +
+        escapeHtml(mj) +
+        '</b></div>' +
+        '<div class="kv"><span class="muted">少数側ワード</span><b>' +
+        escapeHtml(mn) +
+        '</b></div>' +
+        (reversal
+          ? '<hr /><div class="kv"><span class="muted">少数側の回答</span><b>' +
+            escapeHtml(guessText) +
+            '</b></div><div class="kv"><span class="muted">正誤</span><b>' +
+            escapeHtml(correctness) +
+            '</b></div>'
+          : '') +
+        voteResultHtml +
+        '</div>';
+      voteResultHtml = '';
+    }
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="row" style="justify-content:space-between">\n        <div>\n          <div class="badge">ルーム ' +
+        escapeHtml(roomId) +
+        '</div>\n          <div class="big">' +
+        escapeHtml((player && player.name) || '') +
+        '</div>\n        </div>\n        <div class="badge">' +
+        escapeHtml(phase) +
+        '</div>\n      </div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">あなたの役職</div>\n        <div class="big">' +
+        escapeHtml(roleLabel) +
+        '</div>\n        <hr />\n        <div class="muted">あなたのワード</div>\n        <div class="big">' +
+        escapeHtml(word || '（未配布）') +
+        '</div>\n      </div>\n\n      <div class="card center" style="padding:12px">\n        <div class="muted">残り時間</div>\n        <div class="timer" id="timer">' +
+        escapeHtml(formatMMSS(remain)) +
+        '</div>\n      </div>\n\n      ' +
+        votingHtml +
+        (phase === 'voteResult' ? '<div class="stack"><div class="big">投票結果</div>' + voteResultHtml + '</div>' : '') +
+        guessHtml +
+        finishedHtml +
+        (phase !== 'finished' ? voteResultHtml : '') +
+        '\n\n      <div class="row">\n        <a class="btn ghost" href="./">ホームへ</a>\n      </div>\n    </div>\n  '
+    );
+  }
+
+  // -------------------- main (router) --------------------
+  var viewEl = null;
+
+  function makeJoinUrl(roomId) {
+    var q = {};
+    var v = getCacheBusterParam();
+    if (v) q.v = v;
+    q.room = roomId;
+    return baseUrl() + '?' + buildQuery(q);
+  }
+
+  function makeHostUrl(roomId) {
+    var q = {};
+    var v = getCacheBusterParam();
+    if (v) q.v = v;
+    q.room = roomId;
+    q.host = '1';
+    return baseUrl() + '?' + buildQuery(q);
+  }
+
+  function routeHome() {
+    renderHome(viewEl);
+    var joinBtn = document.getElementById('goJoin');
+    if (joinBtn) {
+      joinBtn.addEventListener('click', function () {
+        var ridEl = document.getElementById('joinRoomId');
+        var rid = String((ridEl && ridEl.value) || '').trim();
+        if (!rid) return;
+        var q = {};
+        var v = getCacheBusterParam();
+        if (v) q.v = v;
+        q.room = rid;
+        setQuery(q);
+        route();
+      });
+    }
+  }
+
+  function routeSetup() {
+    renderSetup(viewEl);
+    var saveBtn = document.getElementById('saveSetup');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', function () {
+        try {
+          var cfg = readSetupForm();
+          saveFirebaseConfigToLocalStorage(cfg);
+        } catch (e) {
+          renderError(viewEl, (e && e.message) || '保存に失敗しました');
+          return;
+        }
+
+        firebaseReady()
+          .then(function () {
+            alert('保存しました。');
+            var q = {};
+            var v = getCacheBusterParam();
+            if (v) q.v = v;
+            setQuery(q);
+            route();
+          })
+          .catch(function (e) {
+            renderError(viewEl, (e && e.message) || '保存に失敗しました');
+          });
+      });
+    }
+  }
+
+  function routeCreate() {
+    renderCreate(viewEl);
+
+    var pickBtn = document.getElementById('pickRandom');
+    if (pickBtn) {
+      pickBtn.addEventListener('click', function () {
+        var el = document.getElementById('topicCategory');
+        var catId = String((el && el.value) || TOPIC_CATEGORIES[0].id);
+        try {
+          var picked = pickRandomPair(catId);
+          var mj = document.getElementById('majorityWord');
+          var mn = document.getElementById('minorityWord');
+          if (mj) mj.value = picked.majority;
+          if (mn) mn.value = picked.minority;
+        } catch (e) {
+          alert((e && e.message) || '出題に失敗しました');
+        }
+      });
+    }
+
+    var createBtn = document.getElementById('createRoom');
+    if (createBtn) {
+      createBtn.addEventListener('click', function () {
+        var settings;
+        try {
+          settings = readCreateForm();
+        } catch (e) {
+          renderError(viewEl, (e && e.message) || '作成に失敗しました');
+          return;
+        }
+        var roomId = makeRoomId();
+        firebaseReady()
+          .then(function () {
+            return createRoom(roomId, settings);
+          })
+          .then(function () {
+            var q = {};
+            var v = getCacheBusterParam();
+            if (v) q.v = v;
+            q.room = roomId;
+            q.host = '1';
+            setQuery(q);
+            route();
+          })
+          .catch(function (e) {
+            renderError(viewEl, (e && e.message) || '作成に失敗しました');
+          });
+      });
+    }
+  }
+
+  function routeJoin(roomId, isHost) {
+    renderJoin(viewEl, roomId);
+    var joinBtn = document.getElementById('join');
+    if (!joinBtn) return;
+
+    joinBtn.addEventListener('click', function () {
+      var form;
+      try {
+        form = readJoinForm();
+      } catch (e) {
+        renderError(viewEl, (e && e.message) || '参加に失敗しました');
+        return;
+      }
+
+      firebaseReady()
+        .then(function () {
+          var playerId = getOrCreatePlayerId(roomId);
+          return upsertPlayer(roomId, playerId, form.name).then(function () {
+            return playerId;
+          });
+        })
+        .then(function () {
+          var q = {};
+          var v = getCacheBusterParam();
+          if (v) q.v = v;
+          q.room = roomId;
+          q.player = '1';
+          if (isHost) q.host = '1';
+          setQuery(q);
+          route();
+        })
+        .catch(function (e) {
+          renderError(viewEl, (e && e.message) || '参加に失敗しました');
+        });
+    });
+  }
+
+  function routeHost(roomId) {
+    var unsub = null;
+    var joinUrl = makeJoinUrl(roomId);
+    var hostUrl = makeHostUrl(roomId);
+
+    function drawQr() {
+      return new Promise(function (resolve) {
+        var canvas = document.getElementById('qr');
+        if (!canvas || !window.QRCode) return resolve();
+        window.QRCode.toCanvas(canvas, joinUrl, { margin: 1, width: 220 }, function () {
+          resolve();
+        });
+      });
+    }
+
+    function renderWithRoom(room) {
+      renderHostQr(viewEl, { roomId: roomId, joinUrl: joinUrl, hostUrl: hostUrl, room: room });
+      drawQr();
+
+      var hostJoin = document.getElementById('hostJoin');
+      if (hostJoin)
+        hostJoin.addEventListener('click', function () {
+          var q = {};
+          var v = getCacheBusterParam();
+          if (v) q.v = v;
+          q.room = roomId;
+          q.host = '1';
+          q.screen = 'join';
+          setQuery(q);
+          if (unsub) unsub();
+          route();
+        });
+
+      var startAssign = document.getElementById('startAssign');
+      if (startAssign)
+        startAssign.addEventListener('click', function () {
+          startGameAssignRoles(roomId).catch(function (e) {
+            alert((e && e.message) || '失敗');
+          });
+        });
+
+      var startDiscussionBtn = document.getElementById('startDiscussion');
+      if (startDiscussionBtn)
+        startDiscussionBtn.addEventListener('click', function () {
+          startDiscussion(roomId).catch(function (e) {
+            alert((e && e.message) || '失敗');
+          });
+        });
+
+      var startVotingBtn = document.getElementById('startVoting');
+      if (startVotingBtn)
+        startVotingBtn.addEventListener('click', function () {
+          startVoting(roomId).catch(function (e) {
+            alert((e && e.message) || '失敗');
+          });
+        });
+
+      var revealVotesBtn = document.getElementById('revealVotes');
+      if (revealVotesBtn)
+        revealVotesBtn.addEventListener('click', function () {
+          revealVoteResult(roomId).catch(function (e) {
+            alert((e && e.message) || '失敗');
+          });
+        });
+
+      var revealBtn = document.getElementById('reveal');
+      if (revealBtn)
+        revealBtn.addEventListener('click', function () {
+          if (!confirm('少数側を開示します。よいですか？')) return;
+          reveal(roomId).catch(function (e) {
+            alert((e && e.message) || '失敗');
+          });
+        });
+
+      var copyJoin = document.getElementById('copyJoin');
+      if (copyJoin)
+        copyJoin.addEventListener('click', function () {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(joinUrl).catch(function () {
+              prompt('コピーしてください', joinUrl);
+            });
+          } else {
+            prompt('コピーしてください', joinUrl);
+          }
+        });
+    }
+
+    firebaseReady()
+      .then(function () {
+        return subscribeRoom(roomId, function (room) {
+          if (!room) {
+            renderError(viewEl, '部屋が見つかりません');
+            return;
+          }
+          renderWithRoom(room);
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+    });
+  }
+
+  function routePlayer(roomId, isHost) {
+    var playerId = getOrCreatePlayerId(roomId);
+    var unsub = null;
+    var timerHandle = null;
+
+    function rerenderTimer(room) {
+      var el = document.getElementById('timer');
+      if (!el) return;
+      var endAt = room && room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
+      var remain = Math.max(0, Math.floor((endAt - (Date.now ? Date.now() : new Date().getTime())) / 1000));
+      el.textContent = formatMMSS(remain);
+    }
+
+    firebaseReady()
+      .then(function () {
+        return subscribeRoom(roomId, function (room) {
+          if (!room) {
+            renderError(viewEl, '部屋が見つかりません');
+            return;
+          }
+
+          var player = room.players ? room.players[playerId] : null;
+          renderPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost });
+
+          if (timerHandle) clearInterval(timerHandle);
+          timerHandle = setInterval(function () {
+            rerenderTimer(room);
+          }, 250);
+
+          var submitGuessBtn = document.getElementById('submitGuess');
+          if (submitGuessBtn) {
+            submitGuessBtn.addEventListener('click', function () {
+              var el = document.getElementById('guessText');
+              var guessText = String((el && el.value) || '').trim();
+              if (!guessText) return;
+              submitGuess(roomId, guessText).catch(function (e) {
+                alert((e && e.message) || '失敗');
+              });
+            });
+          }
+
+          var voteBtn = document.getElementById('submitVote');
+          if (voteBtn) {
+            voteBtn.addEventListener('click', function () {
+              var el2 = document.getElementById('voteTo');
+              var toPlayerId = String((el2 && el2.value) || '').trim();
+              if (!toPlayerId) return;
+              submitVote(roomId, playerId, toPlayerId).catch(function (e) {
+                alert((e && e.message) || '失敗');
+              });
+            });
+          }
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+      if (timerHandle) clearInterval(timerHandle);
+    });
+  }
+
+  function route() {
+    var q = parseQuery();
+    var screen = q.screen ? String(q.screen) : '';
+    var st = getUrlState();
+    var roomId = st.roomId;
+    var isHost = st.isHost;
+    var isPlayer = q.player === '1';
+
+    if (screen === 'setup') return routeSetup();
+    if (screen === 'create') return routeCreate();
+
+    if (!roomId) return routeHome();
+
+    if (screen === 'join') return routeJoin(roomId, isHost);
+    if (isPlayer) return routePlayer(roomId, isHost);
+    if (isHost) return routeHost(roomId);
+
+    return routeJoin(roomId, false);
+  }
+
+  // boot
+  try {
+    viewEl = qs('#view');
+    var buildInfoEl = document.querySelector('#buildInfo');
+    if (buildInfoEl) buildInfoEl.textContent = 'v0.2 (single-file no-async)';
+
+    window.addEventListener('popstate', function () {
+      route();
+    });
+
+    route();
+  } catch (e) {
+    var el = document.getElementById('view');
+    if (el) {
+      el.innerHTML =
+        '<div class="stack"><div class="badge">エラー</div><div class="big">起動できません</div><div class="muted">この端末のブラウザが古い可能性があります。</div></div>';
+    }
+  }
+})();
