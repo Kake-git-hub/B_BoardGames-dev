@@ -542,11 +542,21 @@
   }
 
   function renderError(viewEl, message) {
+    var msg = escapeHtml(message);
+    var showSetupLink =
+      String(message || '').indexOf('Firebase設定がありません') >= 0 ||
+      String(message || '').indexOf('?screen=setup') >= 0 ||
+      String(message || '').indexOf('databaseURL') >= 0;
+
     render(
       viewEl,
       '\n    <div class="stack">\n      <div class="badge">エラー</div>\n      <div class="big">' +
-        escapeHtml(message) +
-        '</div>\n      <div class="muted">設定やURLを確認してください。</div>\n    </div>\n  '
+        msg +
+        '</div>\n      <div class="muted">設定やURLを確認してください。</div>' +
+        (showSetupLink
+          ? '\n      <a class="btn primary" href="?screen=setup">Firebaseセットアップを開く</a>'
+          : '') +
+        '\n    </div>\n  '
     );
   }
 
@@ -1353,7 +1363,7 @@
   try {
     viewEl = qs('#view');
     var buildInfoEl = document.querySelector('#buildInfo');
-    if (buildInfoEl) buildInfoEl.textContent = 'v0.4 (qr fallback)';
+    if (buildInfoEl) buildInfoEl.textContent = 'v0.5 (setup link on error)';
 
     window.addEventListener('popstate', function () {
       route();
