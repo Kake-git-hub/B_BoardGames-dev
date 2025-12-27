@@ -1,0 +1,7 @@
+# local only
+src/config.js
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/

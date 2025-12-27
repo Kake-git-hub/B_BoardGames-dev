@@ -1,0 +1,6 @@
+// Firebase設定をここに貼り付けて `config.js` として保存してください。
+// 例: const firebaseConfig = { apiKey: "...", authDomain: "...", databaseURL: "...", ... }
+
+export const firebaseConfig = {
+  // TODO: Firebaseコンソールから貼り付け
+};

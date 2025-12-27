@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ワードウルフ サポート</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <h1>ワードウルフ</h1>
+        <p class="sub">対面プレイ用・オンライン同期（ブラウザ）</p>
+      </header>
+
+      <section id="view" class="card" aria-live="polite"></section>
+
+      <footer class="footer">
+        <small>
+          <span id="buildInfo"></span>
+        </small>
+      </footer>
+    </main>
+
+    <!-- QR生成（軽量CDN） -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
