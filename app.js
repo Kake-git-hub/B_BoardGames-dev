@@ -570,15 +570,59 @@
     }
   }
 
+  function extractObjectLiteralAfter(text, marker) {
+    var idx = text.indexOf(marker);
+    if (idx < 0) return null;
+    var braceStart = text.indexOf('{', idx);
+    if (braceStart < 0) return null;
+    var depth = 0;
+    for (var i = braceStart; i < text.length; i++) {
+      var ch = text.charAt(i);
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) {
+          return text.slice(braceStart, i + 1);
+        }
+      }
+    }
+    return null;
+  }
+
+  function jsObjectLiteralToJsonText(objText) {
+    // Convert a simple JS object literal (no functions) into JSON text.
+    // Handles common Firebase snippet format.
+    var s = String(objText || '');
+    // Remove line comments
+    s = s.replace(/\/\/.*$/gm, '');
+    // Remove trailing commas before } or ]
+    s = s.replace(/,\s*([}\]])/g, '$1');
+    // Quote unquoted keys: { apiKey: "..." } -> { "apiKey": "..." }
+    s = s.replace(/([\{,]\s*)([A-Za-z0-9_$]+)\s*:/g, '$1"$2":');
+    return s;
+  }
+
   function readSetupForm() {
     var el = document.getElementById('firebaseConfigJson');
     var raw = String((el && el.value) || '').trim();
     if (!raw) throw new Error('Firebase config JSON を貼り付けてください。');
+
+    // Accept either strict JSON or the official Firebase snippet code.
+    var candidate = raw;
+    if (raw.indexOf('firebaseConfig') >= 0) {
+      var extracted = extractObjectLiteralAfter(raw, 'firebaseConfig');
+      if (extracted) candidate = extracted;
+    }
+
     var parsed;
     try {
-      parsed = JSON.parse(raw);
-    } catch (e) {
-      throw new Error('JSONとして解釈できません。');
+      parsed = JSON.parse(candidate);
+    } catch (e1) {
+      try {
+        parsed = JSON.parse(jsObjectLiteralToJsonText(candidate));
+      } catch (e2) {
+        throw new Error('JSONとして解釈できません。firebaseConfig の { ... } 部分だけを貼るか、キーをダブルクォートで囲んでください。');
+      }
     }
     if (!parsed || !parsed.apiKey) throw new Error('apiKey が見つかりません。');
     if (!parsed.databaseURL) throw new Error('databaseURL が見つかりません。');
