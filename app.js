@@ -560,7 +560,7 @@
   function renderSetup(viewEl) {
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">セットアップ</div>\n      <div class="muted">Firebase（Realtime Database）のWeb設定JSONを貼り付けて保存します。</div>\n\n      <div class="field">\n        <label>Firebase config（JSON）</label>\n        <textarea id="firebaseConfigJson" placeholder=\'{"apiKey":"...","authDomain":"...","databaseURL":"...","projectId":"...","appId":"..."}\'></textarea>\n        <div class="muted">※ databaseURL が入っていることを確認してください。</div>\n      </div>\n\n      <div class="row">\n        <button id="saveSetup" class="primary">保存</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">セットアップ</div>\n      <div class="muted">Firebase（Realtime Database）のWeb設定を貼り付けて保存します（JSON でも firebaseConfig のサンプルコードでもOK）。</div>\n\n      <div class="field">\n        <label>Firebase config</label>\n        <textarea id="firebaseConfigJson" placeholder=\'{"apiKey":"...","authDomain":"...","databaseURL":"...","projectId":"...","appId":"..."}\n\nまたは\n\nconst firebaseConfig = { apiKey: "...", databaseURL: "..." }\'></textarea>\n        <div class="muted">※ databaseURL が入っていることを確認してください。</div>\n      </div>\n\n      <div class="row">\n        <button id="saveSetup" class="primary">保存</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
     );
 
     var saved = loadFirebaseConfigFromLocalStorage();
@@ -602,6 +602,52 @@
     return s;
   }
 
+  function parseLooseFirebaseConfig(objText) {
+    // Last-resort tolerant parser: picks `key: value` pairs even if commas are missing.
+    // Accepts string/number/boolean/null values.
+    var text = String(objText || '');
+    // Strip surrounding braces if present
+    var start = text.indexOf('{');
+    var end = text.lastIndexOf('}');
+    if (start >= 0 && end > start) text = text.slice(start + 1, end);
+
+    // Remove line comments
+    text = text.replace(/\/\/.*$/gm, '');
+
+    var out = {};
+    var re = /([A-Za-z0-9_$]+)\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|true|false|null|-?\d+(?:\.\d+)?)\s*,?/g;
+    var m;
+    while ((m = re.exec(text))) {
+      var k = m[1];
+      var rawVal = m[2];
+      var val;
+      if (rawVal === 'true') val = true;
+      else if (rawVal === 'false') val = false;
+      else if (rawVal === 'null') val = null;
+      else if (rawVal.charAt(0) === '"' || rawVal.charAt(0) === "'") {
+        // Use JSON.parse for double-quoted strings; for single-quoted, convert safely.
+        if (rawVal.charAt(0) === '"') {
+          try {
+            val = JSON.parse(rawVal);
+          } catch (e) {
+            val = rawVal.slice(1, -1);
+          }
+        } else {
+          var dq = '"' + rawVal.slice(1, -1).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+          try {
+            val = JSON.parse(dq);
+          } catch (e2) {
+            val = rawVal.slice(1, -1);
+          }
+        }
+      } else {
+        val = Number(rawVal);
+      }
+      out[k] = val;
+    }
+    return out;
+  }
+
   function readSetupForm() {
     var el = document.getElementById('firebaseConfigJson');
     var raw = String((el && el.value) || '').trim();
@@ -621,7 +667,14 @@
       try {
         parsed = JSON.parse(jsObjectLiteralToJsonText(candidate));
       } catch (e2) {
-        throw new Error('JSONとして解釈できません。firebaseConfig の { ... } 部分だけを貼るか、キーをダブルクォートで囲んでください。');
+        try {
+          parsed = parseLooseFirebaseConfig(candidate);
+        } catch (e3) {
+          parsed = null;
+        }
+        if (!parsed || !parsed.apiKey) {
+          throw new Error('JSONとして解釈できません。firebaseConfig の { ... } 部分だけを貼るか、Firebaseコンソールの設定をそのまま貼ってください。');
+        }
       }
     }
     if (!parsed || !parsed.apiKey) throw new Error('apiKey が見つかりません。');
