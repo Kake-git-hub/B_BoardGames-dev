@@ -286,6 +286,12 @@
     return { category: cat, majority: pair[1], minority: pair[0] };
   }
 
+  function pickRandomPairAny() {
+    if (!TOPIC_CATEGORIES.length) throw new Error('候補がありません');
+    var idx = Math.floor(Math.random() * TOPIC_CATEGORIES.length);
+    return pickRandomPair(TOPIC_CATEGORIES[idx].id);
+  }
+
   // -------------------- firebase (compat scripts) --------------------
   var LS_KEY = 'ww_firebase_config_v1';
 
@@ -461,6 +467,15 @@
 
   function createRoom(roomId, settings) {
     var base = roomPath(roomId);
+
+    var picked;
+    try {
+      if (settings.topicCategoryId === 'random') picked = pickRandomPairAny();
+      else picked = pickRandomPair(settings.topicCategoryId);
+    } catch (e) {
+      picked = pickRandomPairAny();
+    }
+
     var room = {
       createdAt: nowMs(),
       phase: 'lobby',
@@ -469,9 +484,13 @@
         talkSeconds: settings.talkSeconds,
         reversal: settings.reversal
       },
+      topic: {
+        categoryId: picked.category && picked.category.id ? picked.category.id : '',
+        categoryName: picked.category && picked.category.name ? picked.category.name : ''
+      },
       words: {
-        majority: settings.majorityWord,
-        minority: settings.minorityWord
+        majority: picked.majority,
+        minority: picked.minority
       },
       discussion: {
         startedAt: 0,
@@ -496,7 +515,7 @@
     return setValue(base, room);
   }
 
-  function joinPlayerInRoom(roomId, playerId, name) {
+  function joinPlayerInRoom(roomId, playerId, name, isHostPlayer) {
     var base = roomPath(roomId);
     return runTxn(base, function (room) {
       if (!room) return room;
@@ -504,14 +523,24 @@
 
       var players = assign({}, room.players || {});
       var prev = players[playerId] || {};
-      players[playerId] = assign({}, prev, {
+      var next = assign({}, prev, {
         name: name,
         joinedAt: prev.joinedAt || nowMs(),
         lastSeenAt: nowMs()
       });
 
+      if (isHostPlayer) next.isHost = true;
+
+      players[playerId] = next;
+
       return assign({}, room, { players: players });
     });
+  }
+
+  function formatPlayerDisplayName(player) {
+    var name = player && player.name ? String(player.name) : '';
+    if (player && player.isHost) name += ' (ゲームマスター)';
+    return name;
   }
 
   function listActivePlayerIds(room) {
@@ -684,7 +713,36 @@
   function renderHome(viewEl) {
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">はじめる</div>\n      <div class="muted">ゲームマスターが部屋を作り、QRを配布します。</div>\n\n      <hr />\n\n      <div class="stack">\n        <a class="btn primary" href="?screen=create">部屋を作る（ゲームマスター）</a>\n\n        <div class="field">\n          <label>ルームIDがある場合（参加者）</label>\n          <div class="row">\n            <input id="joinRoomId" placeholder="例: a1b2c3d4" inputmode="latin" />\n            <button id="goJoin" class="ghost">参加</button>\n          </div>\n          <div class="muted">QRが読めない時の手入力用です。</div>\n        </div>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">ゲーム一覧</div>\n      <div class="muted">最初に遊ぶゲームを選びます（今後ここに追加していきます）。</div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">ワードウルフ</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=create">ワードウルフ開始</a>\n          <a class="btn ghost" href="?screen=history">勝敗履歴</a>\n        </div>\n        <div class="muted">参加者はQRを読み取って参加します。</div>\n      </div>\n    </div>\n  '
+    );
+  }
+
+  function renderHistory(viewEl, items) {
+    var rows = '';
+    if (!items || !items.length) {
+      rows = '<div class="muted">履歴はまだありません。</div>';
+    } else {
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i] || {};
+        rows +=
+          '<div class="card" style="padding:12px">' +
+          '<div class="kv"><span class="muted">日時</span><b>' +
+          escapeHtml(it.when || '-') +
+          '</b></div>' +
+          '<div class="kv"><span class="muted">勝利</span><b>' +
+          escapeHtml(it.winner || '-') +
+          '</b></div>' +
+          (it.minorityNames ? '<div class="muted">少数側: ' + escapeHtml(it.minorityNames) + '</div>' : '') +
+          (it.words ? '<div class="muted">お題: ' + escapeHtml(it.words) + '</div>' : '') +
+          '</div>';
+      }
+    }
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">勝敗履歴</div>\n      <div class="muted">この端末（主にGM）に保存される簡易履歴です。</div>\n\n      <div class="stack">' +
+        rows +
+        '</div>\n\n      <div class="row">\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
     );
   }
 
@@ -819,47 +877,58 @@
   function renderCreate(viewEl) {
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">部屋を作成</div>\n\n      <div class="field">\n        <label>GMの名前（表示用）</label>\n        <input id="gmName" placeholder="例: たろう" />\n      </div>\n\n      <div class="field">\n        <label>少数側の人数</label>\n        <input id="minorityCount" type="number" min="1" max="10" value="1" />\n      </div>\n\n      <div class="field">\n        <label>トーク時間（秒）</label>\n        <input id="talkSeconds" type="number" min="30" max="1800" value="180" />\n      </div>\n\n      <div class="field">\n        <label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>\n        <select id="reversal">\n          <option value="1" selected>あり</option>\n          <option value="0">なし</option>\n        </select>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>お題カテゴリ（ランダム出題）</label>\n        <div class="row">\n          <select id="topicCategory"></select>\n          <button id="pickRandom" class="ghost">ランダム出題</button>\n        </div>\n        <div class="muted">※ 手入力でもOKです。</div>\n      </div>\n\n      <div class="field">\n        <label>多数側ワード</label>\n        <input id="majorityWord" placeholder="例: カレー" />\n      </div>\n\n      <div class="field">\n        <label>少数側ワード</label>\n        <input id="minorityWord" placeholder="例: シチュー" />\n      </div>\n\n      <hr />\n\n      <div class="row">\n        <button id="createRoom" class="primary">作成してQRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">部屋を作成</div>\n\n      <div class="field">\n        <label>GMの名前（表示用）</label>\n        <input id="gmName" placeholder="例: たろう" />\n        <div class="muted">※ ゲーム中は「(ゲームマスター)」を付けて表示します。</div>\n      </div>\n\n      <div class="field">\n        <label>少数側の人数（最大5）</label>\n        <input id="minorityCount" type="range" min="1" max="5" step="1" value="1" />\n        <div class="kv"><span class="muted">現在</span><b id="minorityCountLabel">1</b></div>\n      </div>\n\n      <div class="field">\n        <label>トーク時間（分・最大5分）</label>\n        <input id="talkMinutes" type="range" min="1" max="5" step="1" value="3" />\n        <div class="kv"><span class="muted">現在</span><b id="talkMinutesLabel">3分</b></div>\n      </div>\n\n      <div class="field">\n        <label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>\n        <select id="reversal">\n          <option value="1" selected>あり</option>\n          <option value="0">なし</option>\n        </select>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>お題カテゴリ</label>\n        <select id="topicCategory"></select>\n        <div class="muted">※ 作成時点（QR表示時）にワードを確定してDBに保持します。画面には表示しません。</div>\n      </div>\n\n      <div class="row">\n        <button id="createRoom" class="primary">QRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
     );
 
     var sel = document.getElementById('topicCategory');
     if (sel) {
-      var html = '';
+      var html = '<option value="random">ランダム</option>';
       for (var i = 0; i < TOPIC_CATEGORIES.length; i++) {
         var c = TOPIC_CATEGORIES[i];
         html += '<option value="' + escapeHtml(c.id) + '">' + escapeHtml(c.name) + '</option>';
       }
       sel.innerHTML = html;
     }
+
+    function updateLabels() {
+      var mc = document.getElementById('minorityCount');
+      var mcl = document.getElementById('minorityCountLabel');
+      if (mc && mcl) mcl.textContent = String(mc.value || '1');
+      var tm = document.getElementById('talkMinutes');
+      var tml = document.getElementById('talkMinutesLabel');
+      if (tm && tml) tml.textContent = String(tm.value || '1') + '分';
+    }
+
+    var mcEl = document.getElementById('minorityCount');
+    if (mcEl) mcEl.addEventListener('input', updateLabels);
+    var tmEl = document.getElementById('talkMinutes');
+    if (tmEl) tmEl.addEventListener('input', updateLabels);
+    updateLabels();
   }
 
   function readCreateForm() {
     var gn = document.getElementById('gmName');
     var mc = document.getElementById('minorityCount');
-    var ts = document.getElementById('talkSeconds');
+    var tm = document.getElementById('talkMinutes');
     var rv = document.getElementById('reversal');
-    var mj = document.getElementById('majorityWord');
-    var mn = document.getElementById('minorityWord');
+    var tc = document.getElementById('topicCategory');
 
     var gmName = String((gn && gn.value) || '').trim();
-    var minorityCount = clamp(parseIntSafe(mc && mc.value, 1), 1, 10);
-    var talkSeconds = clamp(parseIntSafe(ts && ts.value, 180), 30, 1800);
+    var minorityCount = clamp(parseIntSafe(mc && mc.value, 1), 1, 5);
+    var talkMinutes = clamp(parseIntSafe(tm && tm.value, 3), 1, 5);
+    var talkSeconds = talkMinutes * 60;
     var reversal = ((rv && rv.value) || '1') === '1';
 
-    var majorityWord = String((mj && mj.value) || '').trim();
-    var minorityWord = String((mn && mn.value) || '').trim();
+    var topicCategoryId = String((tc && tc.value) || 'random');
 
     if (!gmName) throw new Error('GMの名前を入力してください。');
-    if (!majorityWord) throw new Error('多数側ワードを入力してください。');
-    if (!minorityWord) throw new Error('少数側ワードを入力してください。');
 
     return {
       gmName: gmName,
       minorityCount: minorityCount,
       talkSeconds: talkSeconds,
       reversal: reversal,
-      majorityWord: majorityWord,
-      minorityWord: minorityWord
+      topicCategoryId: topicCategoryId
     };
   }
 
@@ -882,7 +951,6 @@
   function renderHostQr(viewEl, opts) {
     var roomId = opts.roomId;
     var joinUrl = opts.joinUrl;
-    var hostUrl = opts.hostUrl;
     var room = opts.room;
 
     var playerCount = room && room.players ? Object.keys(room.players).length : 0;
@@ -890,21 +958,16 @@
 
     var actionHtml = '';
     if (phase === 'lobby') actionHtml = '<button id="startGame" class="primary">スタート（トーク開始）</button>';
-    if (phase === 'voting') actionHtml = '<button id="revealNext" class="primary">次へ進む（結果開示）</button>';
 
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">QR配布</div>\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="field">\n        <label>参加者用URL</label>\n        <div class="code" id="joinUrl">' +
-        escapeHtml(joinUrl) +
-        '</div>\n      </div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
+      '\n    <div class="stack">\n      <div class="big">QR配布</div>\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
         playerCount +
         '</b></div>\n      <div class="kv"><span class="muted">フェーズ</span><b>' +
         escapeHtml(phase) +
-        '</b></div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="row">\n          <button id="copyJoin" class="ghost">URLコピー</button>\n          <a class="badge" href="' +
-        escapeHtml(hostUrl) +
-        '">この端末をGMモードで開く</a>\n        </div>\n\n        <div class="row">\n          ' +
+        '</b></div>\n\n      <hr />\n\n      <div class="row">\n        ' +
         actionHtml +
-        '\n        </div>\n      </div>\n\n      <div class="muted">※ スタートでトーク開始。時間終了で全員が投票へ進みます。投票完了後、GMが次へ進むで結果開示。</div>\n    </div>\n  '
+        '\n      </div>\n\n      <div class="muted">※ スタート後、GM端末もプレイヤー画面に移動します。</div>\n    </div>\n  '
     );
   }
 
@@ -926,7 +989,7 @@
       var id = playerKeys[i];
       var p = players[id];
       if (!p || p.role === 'spectator') continue;
-      activePlayers.push({ id: id, name: p.name || '' });
+      activePlayers.push({ id: id, name: formatPlayerDisplayName(p) });
     }
 
     var votedTo = room && room.votes && room.votes[playerId] && room.votes[playerId].to ? room.votes[playerId].to : '';
@@ -956,20 +1019,18 @@
       if (role === 'majority') word = (room && room.words ? room.words.majority : '') || '';
     }
 
-    var roleLabel = '未確定';
-    if (role === 'minority') roleLabel = '少数側';
-    if (role === 'majority') roleLabel = '多数側';
-    if (role === 'spectator') roleLabel = '観戦';
-
-    var roleLabelView = roleLabel;
     var wordView = word;
-    if (isHost) {
-      roleLabelView = '（非表示）';
-      wordView = '（非表示）';
-    }
+    if (isHost) wordView = '（非表示）';
 
     var endAt = room && room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
     var remain = Math.max(0, Math.floor((endAt - (Date.now ? Date.now() : new Date().getTime())) / 1000));
+
+    var statusText = '';
+    if (phase === 'lobby') statusText = '待機中：GMがスタートするまでお待ちください。';
+    else if (phase === 'discussion') statusText = 'トーク中：少数側を探しましょう。';
+    else if (phase === 'voting') statusText = votedTo ? '待機中：全員の投票を待っています。' : '投票してください。';
+    else if (phase === 'guess') statusText = role === 'minority' ? '少数側は多数側ワードを入力してください。' : '待機中：少数側の入力を待っています。';
+    else if (phase === 'finished') statusText = 'ゲーム終了：結果を確認してください。';
 
     var votingHtml = '';
     if (phase === 'voting') {
@@ -1075,23 +1136,21 @@
 
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="row" style="justify-content:space-between">\n        <div>\n          <div class="badge">ルーム ' +
-        escapeHtml(roomId) +
-        '</div>\n          <div class="big">' +
-        escapeHtml((player && player.name) || '') +
-        '</div>\n        </div>\n        <div class="badge">' +
-        escapeHtml(phase) +
-        '</div>\n      </div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">あなたの役職</div>\n        <div class="big">' +
-        escapeHtml(roleLabelView) +
-        '</div>\n        <hr />\n        <div class="muted">あなたのワード</div>\n        <div class="big">' +
+      '\n    <div class="stack">\n      <div class="big">' +
+        escapeHtml(formatPlayerDisplayName(player) || '') +
+        '</div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">あなたのワード</div>\n        <div class="big">' +
         escapeHtml(wordView || '（未配布）') +
         '</div>\n      </div>\n\n      <div class="card center" style="padding:12px">\n        <div class="muted">残り時間</div>\n        <div class="timer" id="timer">' +
         escapeHtml(formatMMSS(remain)) +
+        '</div>\n        <div class="muted">' +
+        escapeHtml(statusText) +
         '</div>\n      </div>\n\n      ' +
         votingHtml +
         guessHtml +
         finishedHtml +
-        '\n\n      <div class="row">\n        <a class="btn ghost" href="./">ホームへ</a>\n      </div>\n    </div>\n  '
+        '\n\n      <div class="row">' +
+        (isHost && phase === 'voting' && isVotingComplete(room) ? '<button id="revealNext" class="primary">結果発表</button>' : '') +
+        '</div>\n    </div>\n  '
     );
   }
 
@@ -1117,20 +1176,28 @@
 
   function routeHome() {
     renderHome(viewEl);
-    var joinBtn = document.getElementById('goJoin');
-    if (joinBtn) {
-      joinBtn.addEventListener('click', function () {
-        var ridEl = document.getElementById('joinRoomId');
-        var rid = String((ridEl && ridEl.value) || '').trim();
-        if (!rid) return;
-        var q = {};
-        var v = getCacheBusterParam();
-        if (v) q.v = v;
-        q.room = rid;
-        setQuery(q);
-        route();
-      });
+  }
+
+  var HISTORY_KEY = 'ww_history_v1';
+
+  function loadHistory() {
+    var raw = null;
+    try {
+      raw = localStorage.getItem(HISTORY_KEY);
+    } catch (e) {
+      raw = null;
     }
+    if (!raw) return [];
+    try {
+      var arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr : [];
+    } catch (e2) {
+      return [];
+    }
+  }
+
+  function routeHistory() {
+    renderHistory(viewEl, loadHistory());
   }
 
   function routeSetup() {
@@ -1165,23 +1232,6 @@
   function routeCreate() {
     renderCreate(viewEl);
 
-    var pickBtn = document.getElementById('pickRandom');
-    if (pickBtn) {
-      pickBtn.addEventListener('click', function () {
-        var el = document.getElementById('topicCategory');
-        var catId = String((el && el.value) || TOPIC_CATEGORIES[0].id);
-        try {
-          var picked = pickRandomPair(catId);
-          var mj = document.getElementById('majorityWord');
-          var mn = document.getElementById('minorityWord');
-          if (mj) mj.value = picked.majority;
-          if (mn) mn.value = picked.minority;
-        } catch (e) {
-          alert((e && e.message) || '出題に失敗しました');
-        }
-      });
-    }
-
     var createBtn = document.getElementById('createRoom');
     if (createBtn) {
       createBtn.addEventListener('click', function () {
@@ -1199,7 +1249,7 @@
           })
           .then(function () {
             var playerId = getOrCreatePlayerId(roomId);
-            return joinPlayerInRoom(roomId, playerId, settings.gmName).then(function (room) {
+            return joinPlayerInRoom(roomId, playerId, settings.gmName, true).then(function (room) {
               if (!room || !room.players || !room.players[playerId]) {
                 throw new Error('GMの参加に失敗しました');
               }
@@ -1239,7 +1289,7 @@
       firebaseReady()
         .then(function () {
           var playerId = getOrCreatePlayerId(roomId);
-          return joinPlayerInRoom(roomId, playerId, form.name).then(function (room) {
+          return joinPlayerInRoom(roomId, playerId, form.name, false).then(function (room) {
             if (!room || !room.players || !room.players[playerId]) {
               throw new Error('参加できません（ゲームが開始済みです）');
             }
@@ -1265,7 +1315,6 @@
   function routeHost(roomId) {
     var unsub = null;
     var joinUrl = makeJoinUrl(roomId);
-    var hostUrl = makeHostUrl(roomId);
 
     function drawQr() {
       return new Promise(function (resolve) {
@@ -1280,7 +1329,7 @@
 
         var qr = window.QRCode || window.qrcode || window.QR;
         if (!qr || !qr.toCanvas) {
-          if (errEl) errEl.textContent = 'QRの生成に失敗しました（ライブラリ未読込）。URLをコピーして配布してください。';
+          if (errEl) errEl.textContent = 'QRの生成に失敗しました（ライブラリ未読込）。';
           return resolve();
         }
 
@@ -1289,7 +1338,7 @@
           try {
             qr.toDataURL(joinUrl, { margin: 1, width: 240 }, function (err, url) {
               if (err || !url) {
-                if (errEl) errEl.textContent = 'QRの生成に失敗しました。URLをコピーして配布してください。';
+                if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
                 return resolve();
               }
               wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />';
@@ -1297,7 +1346,7 @@
               return resolve();
             });
           } catch (e) {
-            if (errEl) errEl.textContent = 'QRの生成に失敗しました。URLをコピーして配布してください。';
+            if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
             return resolve();
           }
         }
@@ -1329,7 +1378,7 @@
         try {
           qr.toCanvas(canvas, joinUrl, { margin: 1, width: 240 }, function (err) {
             if (err) {
-              if (errEl) errEl.textContent = 'QRの生成に失敗しました。URLをコピーして配布してください。';
+              if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
               showAsImage();
               return;
             }
@@ -1340,42 +1389,33 @@
             resolve();
           });
         } catch (e) {
-          if (errEl) errEl.textContent = 'QRの生成に失敗しました。URLをコピーして配布してください。';
+          if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
           showAsImage();
         }
       });
     }
 
     function renderWithRoom(room) {
-      renderHostQr(viewEl, { roomId: roomId, joinUrl: joinUrl, hostUrl: hostUrl, room: room });
+      renderHostQr(viewEl, { roomId: roomId, joinUrl: joinUrl, room: room });
       drawQr();
 
       var startGameBtn = document.getElementById('startGame');
       if (startGameBtn)
         startGameBtn.addEventListener('click', function () {
-          startGame(roomId).catch(function (e) {
-            alert((e && e.message) || '失敗');
-          });
-        });
-
-      var revealNextBtn = document.getElementById('revealNext');
-      if (revealNextBtn)
-        revealNextBtn.addEventListener('click', function () {
-          revealAfterVoting(roomId).catch(function (e) {
-            alert((e && e.message) || '失敗');
-          });
-        });
-
-      var copyJoin = document.getElementById('copyJoin');
-      if (copyJoin)
-        copyJoin.addEventListener('click', function () {
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(joinUrl).catch(function () {
-              prompt('コピーしてください', joinUrl);
+          startGame(roomId)
+            .then(function () {
+              var q = {};
+              var v = getCacheBusterParam();
+              if (v) q.v = v;
+              q.room = roomId;
+              q.player = '1';
+              q.host = '1';
+              setQuery(q);
+              route();
+            })
+            .catch(function (e) {
+              alert((e && e.message) || '失敗');
             });
-          } else {
-            prompt('コピーしてください', joinUrl);
-          }
         });
     }
 
@@ -1463,6 +1503,15 @@
               });
             });
           }
+
+          var revealNextBtn = document.getElementById('revealNext');
+          if (revealNextBtn) {
+            revealNextBtn.addEventListener('click', function () {
+              revealAfterVoting(roomId).catch(function (e) {
+                alert((e && e.message) || '失敗');
+              });
+            });
+          }
         });
       })
       .then(function (u) {
@@ -1487,6 +1536,7 @@
     var isPlayer = q.player === '1';
 
     if (screen === 'setup') return routeSetup();
+    if (screen === 'history') return routeHistory();
     if (screen === 'create') return routeCreate();
 
     if (!roomId) return routeHome();
