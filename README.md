@@ -23,7 +23,7 @@
 
 ### Firebase設定をコードに組み込みたい場合（ブラウザ設定不要）
 
-- [config.js](config.js) を開き、`ENABLE_EMBEDDED_FIREBASE_CONFIG = true` にする
+- [bbg-config.js](bbg-config.js) を開き、`ENABLE_EMBEDDED_FIREBASE_CONFIG = true` にする
 - Firebase Console の `firebaseConfig` オブジェクトを貼り付け
 
 これで `?screen=setup` を使わなくても動作します（配布先URLに設定が固定されます）。

@@ -44,6 +44,48 @@
       .replace(/'/g, '&#39;');
   }
 
+  function copyTextToClipboard(text) {
+    var t = String(text == null ? '' : text);
+    if (!t) return Promise.resolve(false);
+
+    try {
+      if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard
+          .writeText(t)
+          .then(function () {
+            return true;
+          })
+          .catch(function () {
+            return false;
+          });
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = t;
+      ta.setAttribute('readonly', 'readonly');
+      ta.style.position = 'fixed';
+      ta.style.top = '-1000px';
+      ta.style.left = '-1000px';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      var ok = false;
+      try {
+        ok = document.execCommand && document.execCommand('copy');
+      } catch (e2) {
+        ok = false;
+      }
+      document.body.removeChild(ta);
+      return Promise.resolve(!!ok);
+    } catch (e3) {
+      return Promise.resolve(false);
+    }
+  }
+
   function nowMs() {
     return Date.now ? Date.now() : new Date().getTime();
   }
@@ -205,9 +247,12 @@
       var scripts = document.getElementsByTagName('script');
       for (var i = scripts.length - 1; i >= 0; i--) {
         var s = scripts[i];
-        if (s && s.src && String(s.src).indexOf('app.js') !== -1) {
+        if (s && s.src) {
+          var ss = String(s.src);
+          if (ss.indexOf('app.js') !== -1 || ss.indexOf('bbg.js') !== -1) {
           src = String(s.src);
           break;
+          }
         }
       }
     }
@@ -2930,7 +2975,11 @@
 
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">コードネーム：QR配布</div>\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
+      '\n    <div class="stack">\n      <div class="big">コードネーム：QR配布</div>\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="field">\n        <label>参加URL（スマホ以外はこちら）</label>\n        <div class="code" id="joinUrlText">' +
+        escapeHtml(joinUrl || '') +
+        '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n          <a class="btn ghost" id="openJoinUrl" href="' +
+        escapeHtml(joinUrl || '') +
+        '" target="_blank" rel="noopener">開く</a>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
         playerCount +
         '</b></div>\n      <div class="kv"><span class="muted">フェーズ</span><b>' +
         escapeHtml(phase) +
@@ -2954,6 +3003,8 @@
     var room = opts.room;
     var player = opts.player;
     var isHost = !!opts.isHost;
+    var ui = opts.ui || {};
+    var pendingIdx = ui && ui.pendingIdx != null ? ui.pendingIdx : null;
 
     var phase = (room && room.phase) || 'lobby';
     var myTeam = player && player.team ? player.team : '';
@@ -2965,8 +3016,25 @@
     var key = board && board.key ? board.key : [];
     var revealed = board && board.revealed ? board.revealed : [];
 
-    var title = '<div class="big">コードネーム</div>';
-    var meLine = '<div class="kv"><span class="muted">あなた</span><b>' + escapeHtml(formatPlayerDisplayName(player)) + '</b></div>';
+    var nameText = escapeHtml(formatPlayerDisplayName(player));
+    var roleText = myTeam || myRole ? escapeHtml((myTeam === 'red' ? '赤' : myTeam === 'blue' ? '青' : '-') + ' / ' + (myRole === 'spymaster' ? 'スパイマスター' : myRole === 'operative' ? '当てる側' : '-')) : '-';
+    var turnTeam = phase === 'playing' && room && room.turn ? room.turn.team : '';
+    var turnLabel = turnTeam === 'red' ? '赤' : turnTeam === 'blue' ? '青' : '-';
+    var turnCls = 'cn-turn' + (turnTeam === 'red' ? ' cn-turn-red' : turnTeam === 'blue' ? ' cn-turn-blue' : '') + (myTeam && turnTeam && myTeam === turnTeam ? ' cn-turn-active' : '');
+    var topLine =
+      '<div class="cn-topline">' +
+      '<div class="cn-me">' +
+      nameText +
+      '</div>' +
+      '<div class="cn-role">' +
+      roleText +
+      '</div>' +
+      '<div class="' +
+      turnCls +
+      '">手番: ' +
+      escapeHtml(turnLabel) +
+      '</div>' +
+      '</div>';
 
     var lobbyHtml = '';
     if (phase === 'lobby') {
@@ -2983,38 +3051,32 @@
         '</div>';
     }
 
-    var statusHtml = '';
-    if (phase === 'playing') {
-      var t = room.turn || {};
-      var team = t.team || 'red';
-      var teamLabel = team === 'red' ? '赤' : '青';
-      var clue = t.clue || { word: '', number: 0 };
-      var clueLine = clue.word ? escapeHtml(clue.word) + ' / ' + escapeHtml(String(clue.number || 0)) : '（未提示）';
-      statusHtml =
-        '<div class="stack">' +
-        '<div class="kv"><span class="muted">手番</span><b>' +
-        teamLabel +
-        '</b></div>' +
-        '<div class="kv"><span class="muted">ヒント</span><b>' +
-        clueLine +
-        '</b></div>' +
-        '<div class="kv"><span class="muted">残り</span><b>' +
-        escapeHtml(String(t.guessesLeft || 0)) +
-        '</b></div>' +
-        '</div>';
-    }
-
-    var clueFormHtml = '';
+    var clueRowHtml = '';
     if (phase === 'playing') {
       var tt = room.turn || {};
+      var clue = tt.clue || { word: '', number: 0 };
+      var clueText = clue && clue.word ? String(clue.word) : '';
+      var clueNum = clue && clue.number != null ? String(clue.number) : '';
+      var guessesLeft = tt.guessesLeft != null ? String(tt.guessesLeft) : '0';
       var canClue = myRole === 'spymaster' && myTeam && tt.team === myTeam && tt.status === 'awaiting_clue';
+
       if (canClue) {
-        clueFormHtml =
-          '<hr /><div class="stack">' +
-          '<div class="big">ヒントを出す</div>' +
-          '<div class="field"><label>単語</label><input id="cnClueWord" placeholder="例: 動物" /></div>' +
-          '<div class="field"><label>数</label><input id="cnClueNum" type="number" min="0" max="20" value="1" /></div>' +
+        clueRowHtml =
+          '<div class="cn-clue-row">' +
+          '<input id="cnClueWord" placeholder="ヒント" />' +
+          '<input id="cnClueNum" class="cn-clue-num" type="number" min="0" max="20" value="1" />' +
           '<button id="cnSubmitClue" class="primary">送信</button>' +
+          '</div>';
+      } else {
+        var clueLine = clueText ? escapeHtml(clueText) + ' / ' + escapeHtml(clueNum || '0') : '（未提示）';
+        clueRowHtml =
+          '<div class="cn-clue-row">' +
+          '<div class="cn-clue-view">ヒント: <b>' +
+          clueLine +
+          '</b></div>' +
+          '<div class="cn-clue-left">残り: <b>' +
+          escapeHtml(guessesLeft) +
+          '</b></div>' +
           '</div>';
       }
     }
@@ -3028,6 +3090,7 @@
         var isRev = !!revealed[i];
         var k = key[i];
         var cls = codenamesCellClass(k, isRev || (showKey && phase === 'playing'));
+        if (!isRev && pendingIdx != null && String(pendingIdx) === String(i)) cls += ' cn-pending';
         var disabled = phase !== 'playing' || isRev || myRole !== 'operative' || !myTeam || !room.turn || room.turn.team !== myTeam || room.turn.status !== 'guessing';
         var tagStart = disabled ? '<button class="' + cls + '" disabled>' : '<button class="' + cls + ' cnPick" data-idx="' + i + '">';
         cells += tagStart + '<span class="cn-word">' + escapeHtml(word) + '</span></button>';
@@ -3035,7 +3098,6 @@
 
       boardHtml =
         '<hr /><div class="stack">' +
-        '<div class="big">ボード</div>' +
         '<div class="cn-board" style="grid-template-columns: repeat(' +
         escapeHtml(String(size)) +
         ', 1fr);">' +
@@ -3063,28 +3125,21 @@
         '<div class="kv"><span class="muted">勝者</span><b>' +
         escapeHtml(wLabel) +
         '</b></div>' +
+        (isHost ? '<div class="row"><a class="btn primary" href="./">次ゲームへ</a></div>' : '') +
         '</div>';
     }
 
     render(
       viewEl,
       '\n    <div class="stack">\n      ' +
-        title +
-        '\n      ' +
-        meLine +
-        (myTeam || myRole
-          ? '<div class="kv"><span class="muted">役職</span><b>' +
-            escapeHtml((myTeam === 'red' ? '赤' : myTeam === 'blue' ? '青' : '-') + ' / ' + (myRole === 'spymaster' ? 'スパイマスター' : myRole === 'operative' ? '当てる側' : '-')) +
-            '</b></div>'
-          : '') +
+        topLine +
         '\n\n      ' +
         (phase === 'lobby' ? lobbyHtml : '') +
-        (phase === 'playing' ? statusHtml : '') +
-        (phase === 'playing' ? clueFormHtml : '') +
+        (phase === 'playing' ? clueRowHtml : '') +
         (phase === 'playing' ? actionsHtml : '') +
         (phase === 'finished' ? finishedHtml : '') +
         boardHtml +
-        '\n\n      <div class="row">\n        <a class="btn ghost" href="./">ホーム</a>\n      </div>\n    </div>\n  '
+        '\n    </div>\n  '
     );
 
     if (phase === 'lobby') {
@@ -3340,7 +3395,11 @@
 
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">QR配布</div>\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
+      '\n    <div class="stack">\n      <div class="big">QR配布</div>\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="field">\n        <label>参加URL（スマホ以外はこちら）</label>\n        <div class="code" id="joinUrlText">' +
+        escapeHtml(joinUrl || '') +
+        '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n          <a class="btn ghost" id="openJoinUrl" href="' +
+        escapeHtml(joinUrl || '') +
+        '" target="_blank" rel="noopener">開く</a>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
         playerCount +
         '</b></div>\n      <div class="kv"><span class="muted">フェーズ</span><b>' +
         escapeHtml(phase) +
@@ -4047,6 +4106,22 @@
       renderHostQr(viewEl, { roomId: roomId, joinUrl: joinUrl, room: room });
       drawQr();
 
+      var copyBtn = document.getElementById('copyJoinUrl');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', function () {
+          var st = document.getElementById('copyStatus');
+          if (st) st.textContent = 'コピー中...';
+          copyTextToClipboard(joinUrl)
+            .then(function (ok) {
+              if (!st) return;
+              st.textContent = ok ? 'コピーしました' : 'コピーできませんでした（長押しで選択してコピーしてください）';
+            })
+            .catch(function () {
+              if (st) st.textContent = 'コピーできませんでした（長押しで選択してコピーしてください）';
+            });
+        });
+      }
+
       var startGameBtn = document.getElementById('startGame');
       if (startGameBtn)
         startGameBtn.addEventListener('click', function () {
@@ -4493,6 +4568,22 @@
       renderCodenamesHost(viewEl, { roomId: roomId, joinUrl: joinUrl, room: room });
       drawQr();
 
+      var copyBtn = document.getElementById('copyJoinUrl');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', function () {
+          var st = document.getElementById('copyStatus');
+          if (st) st.textContent = 'コピー中...';
+          copyTextToClipboard(joinUrl)
+            .then(function (ok) {
+              if (!st) return;
+              st.textContent = ok ? 'コピーしました' : 'コピーできませんでした（長押しで選択してコピーしてください）';
+            })
+            .catch(function () {
+              if (st) st.textContent = 'コピーできませんでした（長押しで選択してコピーしてください）';
+            });
+        });
+      }
+
       var startBtn = document.getElementById('cnStart');
       if (startBtn) {
         startBtn.addEventListener('click', function () {
@@ -4540,6 +4631,7 @@
   function routeCodenamesPlayer(roomId, isHost) {
     var playerId = getOrCreateCodenamesPlayerId(roomId);
     var unsub = null;
+    var ui = { pendingIdx: null };
 
     firebaseReady()
       .then(function () {
@@ -4550,7 +4642,7 @@
           }
 
           var player = room.players ? room.players[playerId] : null;
-          renderCodenamesPlayer(viewEl, { roomId: roomId, playerId: playerId, room: room, player: player, isHost: isHost });
+          renderCodenamesPlayer(viewEl, { roomId: roomId, playerId: playerId, room: room, player: player, isHost: isHost, ui: ui });
 
           var saveBtn = document.getElementById('cnSavePrefs');
           if (saveBtn && !saveBtn.__cn_bound) {
@@ -4590,20 +4682,123 @@
             });
           }
 
+          function syncPendingClasses() {
+            var btns = document.querySelectorAll('.cnPick');
+            for (var bi = 0; bi < btns.length; bi++) {
+              var bb = btns[bi];
+              if (!bb || !bb.classList) continue;
+              bb.classList.remove('cn-pending');
+            }
+            if (ui.pendingIdx == null) return;
+            var sel = '.cnPick[data-idx="' + String(ui.pendingIdx) + '"]';
+            var p = null;
+            try {
+              p = document.querySelector(sel);
+            } catch (e) {
+              p = null;
+            }
+            if (p && p.classList) p.classList.add('cn-pending');
+          }
+
+          function togglePending(idx) {
+            if (idx == null) return;
+            ui.pendingIdx = String(ui.pendingIdx) === String(idx) ? null : idx;
+            syncPendingClasses();
+          }
+
+          function confirmPick(idx) {
+            if (idx == null) return;
+            ui.pendingIdx = null;
+            revealCodenamesCard(roomId, playerId, idx).catch(function (e) {
+              alert((e && e.message) || '失敗');
+            });
+          }
+
           var pickBtns = document.querySelectorAll('.cnPick');
           for (var i = 0; i < pickBtns.length; i++) {
             var b = pickBtns[i];
             if (b.__cn_bound) continue;
             b.__cn_bound = true;
-            b.addEventListener('click', function (ev) {
-              var el = ev && ev.currentTarget ? ev.currentTarget : null;
-              if (!el) return;
-              var idx = el.getAttribute('data-idx');
-              revealCodenamesCard(roomId, playerId, idx).catch(function (e) {
-                alert((e && e.message) || '失敗');
+
+            (function (btn) {
+              var holdMs = 450;
+              var timer = null;
+              var longFired = false;
+
+              function clearTimer() {
+                if (timer) {
+                  clearTimeout(timer);
+                  timer = null;
+                }
+              }
+
+              function getIdxFromEvent(ev) {
+                var el = ev && ev.currentTarget ? ev.currentTarget : btn;
+                if (!el) return null;
+                return el.getAttribute('data-idx');
+              }
+
+              btn.addEventListener('click', function (ev) {
+                // Short tap: pending toggle. If long-press fired, ignore the click.
+                if (longFired) {
+                  longFired = false;
+                  if (ev && ev.preventDefault) ev.preventDefault();
+                  if (ev && ev.stopPropagation) ev.stopPropagation();
+                  return;
+                }
+                if (ev && ev.preventDefault) ev.preventDefault();
+                var idx = getIdxFromEvent(ev);
+                togglePending(idx);
               });
-            });
+
+              if (typeof PointerEvent !== 'undefined') {
+                btn.addEventListener('pointerdown', function (ev) {
+                  // Only primary button / touch
+                  if (ev && ev.button != null && ev.button !== 0) return;
+                  clearTimer();
+                  longFired = false;
+                  var idx = getIdxFromEvent(ev);
+                  timer = setTimeout(function () {
+                    longFired = true;
+                    clearTimer();
+                    confirmPick(idx);
+                  }, holdMs);
+                });
+                btn.addEventListener('pointerup', clearTimer);
+                btn.addEventListener('pointercancel', clearTimer);
+                btn.addEventListener('pointerleave', clearTimer);
+              } else {
+                btn.addEventListener('touchstart', function (ev) {
+                  clearTimer();
+                  longFired = false;
+                  var idx = getIdxFromEvent(ev);
+                  timer = setTimeout(function () {
+                    longFired = true;
+                    clearTimer();
+                    confirmPick(idx);
+                  }, holdMs);
+                });
+                btn.addEventListener('touchend', clearTimer);
+                btn.addEventListener('touchcancel', clearTimer);
+
+                btn.addEventListener('mousedown', function (ev) {
+                  if (ev && ev.button != null && ev.button !== 0) return;
+                  clearTimer();
+                  longFired = false;
+                  var idx = getIdxFromEvent(ev);
+                  timer = setTimeout(function () {
+                    longFired = true;
+                    clearTimer();
+                    confirmPick(idx);
+                  }, holdMs);
+                });
+                btn.addEventListener('mouseup', clearTimer);
+                btn.addEventListener('mouseleave', clearTimer);
+              }
+            })(b);
           }
+
+          syncPendingClasses();
         });
       })
       .then(function (u) {
