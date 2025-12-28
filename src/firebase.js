@@ -59,6 +59,24 @@ export async function firebaseReady() {
       throw new Error('Firebase設定がありません。?screen=setup で設定してください。');
     }
 
+    if (!firebaseConfig.databaseURL) {
+      throw new Error('Firebase設定に databaseURL がありません。');
+    }
+
+    // Normalize & validate RTDB databaseURL (old + new formats)
+    const url = String(firebaseConfig.databaseURL || '').trim().replace(/\/+$/, '');
+    const isHttps = url.startsWith('https://');
+    const host = isHttps ? url.slice('https://'.length).split('/')[0].toLowerCase() : '';
+    const okHost =
+      (host.includes('firebaseio.com') && host !== 'firebaseio.com') ||
+      (host.includes('firebasedatabase.app') && host !== 'firebasedatabase.app');
+    if (!isHttps || !okHost) {
+      throw new Error(
+        'databaseURL の形式が正しくありません。Realtime Database のURLを https:// から貼り付けてください。\n例: https://<プロジェクト>.firebaseio.com\n例: https://<プロジェクト>-default-rtdb.<リージョン>.firebasedatabase.app'
+      );
+    }
+    firebaseConfig.databaseURL = url;
+
     // firebase-app-compat + firebase-database-compat
     await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js');
     await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js');

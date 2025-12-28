@@ -142,9 +142,63 @@
     history.pushState(null, '', url);
   }
 
+  function getScriptQueryParam(src, key) {
+    var s = String(src || '');
+    var qi = s.indexOf('?');
+    if (qi < 0) return '';
+    var q = s.slice(qi + 1);
+    var parts = q.split('&');
+    for (var i = 0; i < parts.length; i++) {
+      var part = parts[i];
+      if (!part) continue;
+      var idx = part.indexOf('=');
+      var k = idx >= 0 ? part.slice(0, idx) : part;
+      var v = idx >= 0 ? part.slice(idx + 1) : '';
+      if (decodeQS(k) === key) return decodeQS(v);
+    }
+    return '';
+  }
+
+  var _bundledAssetV = null;
+
+  function getBundledAssetVersion() {
+    if (_bundledAssetV != null) return _bundledAssetV;
+
+    var src = '';
+    try {
+      if (document.currentScript && document.currentScript.src) src = String(document.currentScript.src);
+    } catch (e) {
+      src = '';
+    }
+
+    if (!src) {
+      var scripts = document.getElementsByTagName('script');
+      for (var i = scripts.length - 1; i >= 0; i--) {
+        var s = scripts[i];
+        if (s && s.src && String(s.src).indexOf('app.js') !== -1) {
+          src = String(s.src);
+          break;
+        }
+      }
+    }
+
+    _bundledAssetV = getScriptQueryParam(src, 'v') || '';
+    return _bundledAssetV;
+  }
+
   function getCacheBusterParam() {
     var q = parseQuery();
-    return q.v ? String(q.v) : '';
+    if (q.v) return String(q.v);
+    return getBundledAssetVersion();
+  }
+
+  function ensureUrlHasCacheBuster() {
+    var q = parseQuery();
+    if (q.v) return;
+    var v = getCacheBusterParam();
+    if (!v) return;
+    q.v = v;
+    setQuery(q);
   }
 
   // -------------------- topics --------------------
@@ -235,6 +289,48 @@
   // -------------------- firebase (compat scripts) --------------------
   var LS_KEY = 'ww_firebase_config_v1';
 
+  function trimString(v) {
+    return String(v == null ? '' : v).replace(/^\s+|\s+$/g, '');
+  }
+
+  function normalizeDatabaseURL(input) {
+    var url = trimString(input);
+    if (!url) return '';
+    // Remove trailing slashes
+    while (url.length > 1 && url.charAt(url.length - 1) === '/') url = url.slice(0, -1);
+    return url;
+  }
+
+  function isValidDatabaseURL(url) {
+    var u = normalizeDatabaseURL(url);
+    if (!u) return false;
+    // Must be https://<host>(/...)
+    if (u.indexOf('https://') !== 0) return false;
+    var rest = u.slice('https://'.length);
+    var slash = rest.indexOf('/');
+    var host = slash >= 0 ? rest.slice(0, slash) : rest;
+    if (!host) return false;
+
+    // Realtime Database URLs (old + new)
+    // - https://<project>.firebaseio.com
+    // - https://<project>-default-rtdb.firebaseio.com
+    // - https://<project>-default-rtdb.<region>.firebasedatabase.app
+    var h = host.toLowerCase();
+    if (h.indexOf('firebaseio.com') >= 0 && h !== 'firebaseio.com') return true;
+    if (h.indexOf('firebasedatabase.app') >= 0 && h !== 'firebasedatabase.app') return true;
+    return false;
+  }
+
+  function ensureValidDatabaseURLOrThrow(url) {
+    var normalized = normalizeDatabaseURL(url);
+    if (!isValidDatabaseURL(normalized)) {
+      throw new Error(
+        'databaseURL の形式が正しくありません。Realtime Database のURLを https:// から貼り付けてください。\n例: https://<プロジェクト>.firebaseio.com\n例: https://<プロジェクト>-default-rtdb.<リージョン>.firebasedatabase.app'
+      );
+    }
+    return normalized;
+  }
+
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
       var s = document.createElement('script');
@@ -278,6 +374,9 @@
         if (!firebaseConfig.databaseURL) {
           throw new Error('Firebase設定に databaseURL がありません。');
         }
+
+        // Normalize & validate early to avoid confusing SDK errors.
+        firebaseConfig.databaseURL = ensureValidDatabaseURLOrThrow(firebaseConfig.databaseURL);
         return firebaseConfig;
       })
       .then(function (firebaseConfig) {
@@ -570,7 +669,7 @@
   function renderSetup(viewEl) {
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">セットアップ</div>\n      <div class="muted">Firebase（Realtime Database）のWeb設定を貼り付けて保存します（JSON でも firebaseConfig のサンプルコードでもOK）。</div>\n\n      <div class="field">\n        <label>Firebase config</label>\n        <textarea id="firebaseConfigJson" placeholder=\'{"apiKey":"...","authDomain":"...","databaseURL":"...","projectId":"...","appId":"..."}\n\nまたは\n\nconst firebaseConfig = { apiKey: "...", databaseURL: "..." }\'></textarea>\n        <div class="muted">※ databaseURL が入っていることを確認してください。</div>\n      </div>\n\n      <div class="row">\n        <button id="saveSetup" class="primary">保存</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">セットアップ</div>\n      <div class="muted">Firebase（Realtime Database）のWeb設定を貼り付けて保存します（JSON でも firebaseConfig のサンプルコードでもOK）。</div>\n\n      <div class="field">\n        <label>Firebase config</label>\n        <textarea id="firebaseConfigJson" placeholder=\'{"apiKey":"...","authDomain":"...","databaseURL":"...","projectId":"...","appId":"..."}\n\nまたは\n\nconst firebaseConfig = { apiKey: "...", databaseURL: "..." }\'></textarea>\n        <div class="muted">※ databaseURL は https:// から始まるRealtime DatabaseのURLです（firebaseio.com / firebasedatabase.app）。</div>\n      </div>\n\n      <div class="row">\n        <button id="saveSetup" class="primary">保存</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
     );
 
     var saved = loadFirebaseConfigFromLocalStorage();
@@ -689,6 +788,9 @@
     }
     if (!parsed || !parsed.apiKey) throw new Error('apiKey が見つかりません。');
     if (!parsed.databaseURL) throw new Error('databaseURL が見つかりません。');
+
+    // Normalize & validate databaseURL (Realtime Database)
+    parsed.databaseURL = ensureValidDatabaseURLOrThrow(parsed.databaseURL);
     return parsed;
   }
 
@@ -1363,12 +1465,16 @@
   try {
     viewEl = qs('#view');
     var buildInfoEl = document.querySelector('#buildInfo');
-    if (buildInfoEl) buildInfoEl.textContent = 'v0.6 (qr error + fallback visible)';
+    if (buildInfoEl) {
+      var assetV = getCacheBusterParam();
+      buildInfoEl.textContent = 'v0.7 (rtdb url validation)' + (assetV ? ' / assets ' + assetV : '');
+    }
 
     window.addEventListener('popstate', function () {
       route();
     });
 
+    ensureUrlHasCacheBuster();
     route();
   } catch (e) {
     var el = document.getElementById('view');

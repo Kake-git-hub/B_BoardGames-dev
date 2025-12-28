@@ -56,7 +56,7 @@ export function renderSetup(viewEl) {
       <div class="field">
         <label>Firebase config（JSON）</label>
         <textarea id="firebaseConfigJson" placeholder='{"apiKey":"...","authDomain":"...","databaseURL":"...","projectId":"...","appId":"..."}'></textarea>
-        <div class="muted">※ `databaseURL` が入っていることを確認してください。</div>
+        <div class="muted">※ `databaseURL` は https:// から始まるRealtime DatabaseのURLです（firebaseio.com / firebasedatabase.app）。</div>
       </div>
 
       <div class="row">
@@ -87,6 +87,21 @@ export function readSetupForm() {
   }
   if (!parsed || !parsed.apiKey) throw new Error('apiKey が見つかりません。');
   if (!parsed.databaseURL) throw new Error('databaseURL が見つかりません。');
+
+  // Validate RTDB databaseURL (accept firebaseio.com and firebasedatabase.app)
+  const url = String(parsed.databaseURL || '').trim().replace(/\/+$/, '');
+  const isHttps = url.startsWith('https://');
+  const host = isHttps ? url.slice('https://'.length).split('/')[0].toLowerCase() : '';
+  const okHost =
+    (host.includes('firebaseio.com') && host !== 'firebaseio.com') ||
+    (host.includes('firebasedatabase.app') && host !== 'firebasedatabase.app');
+  if (!isHttps || !okHost) {
+    throw new Error(
+      'databaseURL の形式が正しくありません。Realtime Database のURLを https:// から貼り付けてください。\n例: https://<プロジェクト>.firebaseio.com\n例: https://<プロジェクト>-default-rtdb.<リージョン>.firebasedatabase.app'
+    );
+  }
+
+  parsed.databaseURL = url;
   return parsed;
 }
 
