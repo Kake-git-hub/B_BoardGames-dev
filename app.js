@@ -68,6 +68,10 @@
     return Math.floor(Math.random() * max);
   }
 
+  // TEMP (testing): force discussion time to 10 seconds.
+  // Revert later by setting to 0 (or removing override).
+  var FORCE_TALK_SECONDS = 10;
+
   // Firebase server time correction (helps devices with clock drift / iOS timer lag)
   var _serverTimeOffsetMs = 0;
   function serverNowMs() {
@@ -685,6 +689,7 @@
       if (ids.length < 3) return room;
 
       var talkSeconds = room.settings && room.settings.talkSeconds != null ? room.settings.talkSeconds : 180;
+      if (FORCE_TALK_SECONDS > 0) talkSeconds = FORCE_TALK_SECONDS;
       var minorityCount = room.settings && room.settings.minorityCount != null ? room.settings.minorityCount : 1;
       minorityCount = clamp(minorityCount, 1, Math.max(1, ids.length - 1));
 
@@ -747,13 +752,63 @@
       if (room.phase !== 'voting') return room;
       if (!isVotingComplete(room)) return room;
 
-      var votedOutId = computeVotedOutId(room);
+      // Determine leaders; if tie => runoff revote among tied players.
+      var votesObj = (room && room.votes) || {};
+      var activeIds = listActivePlayerIds(room);
+      if (!activeIds.length) return room;
+
+      var candidateIds = null;
+      if (room.voting && room.voting.runoff && Array.isArray(room.voting.runoff.candidates) && room.voting.runoff.candidates.length) {
+        candidateIds = room.voting.runoff.candidates.slice();
+      }
+
+      var counts = {};
+      var baseIds = candidateIds || activeIds;
+      for (var bi = 0; bi < baseIds.length; bi++) counts[baseIds[bi]] = 0;
+
+      var voterIds = Object.keys(votesObj);
+      for (var vi = 0; vi < voterIds.length; vi++) {
+        var voterId = voterIds[vi];
+        var v = votesObj[voterId];
+        if (!v || !v.to) continue;
+        if (counts[v.to] == null) continue;
+        counts[v.to] = (counts[v.to] || 0) + 1;
+      }
+
+      var bestCount = -1;
+      for (var ci = 0; ci < baseIds.length; ci++) {
+        var pid = baseIds[ci];
+        var c = counts[pid] || 0;
+        if (c > bestCount) bestCount = c;
+      }
+
+      var leaders = [];
+      for (var li = 0; li < baseIds.length; li++) {
+        var pid2 = baseIds[li];
+        if ((counts[pid2] || 0) === bestCount) leaders.push(pid2);
+      }
+
+      if (leaders.length > 1) {
+        var prevRound = room.voting && room.voting.runoff && room.voting.runoff.round ? parseIntSafe(room.voting.runoff.round, 0) : 0;
+        return assign({}, room, {
+          phase: 'voting',
+          votes: {},
+          voting: {
+            startedAt: serverNowMs(),
+            revealedAt: 0,
+            runoff: { round: prevRound + 1, candidates: leaders }
+          },
+          reveal: { revealedAt: 0, votedOutId: '' }
+        });
+      }
+
+      var votedOutId = leaders[0] || computeVotedOutId(room);
       var votedOutRole = votedOutId && room.players && room.players[votedOutId] ? room.players[votedOutId].role : '';
       var reversal = !!(room.settings && room.settings.reversal);
 
       // Branch:
       // - voted-out is majority => minority wins immediately
-      // - voted-out is minority => if reversal enabled -> minority can guess, then GM decides; else majority wins
+      // - voted-out is minority => if reversal enabled -> minority can guess, then ゲームマスター decides; else majority wins
       if (votedOutRole === 'majority') {
         return assign({}, room, {
           phase: 'finished',
@@ -799,6 +854,18 @@
       var to = playersObj[toPlayerId];
       if (!voter || voter.role === 'spectator') return room;
       if (!to || to.role === 'spectator') return room;
+      if (String(voterId) === String(toPlayerId)) return room;
+
+      if (room.voting && room.voting.runoff && Array.isArray(room.voting.runoff.candidates) && room.voting.runoff.candidates.length) {
+        var allowed = false;
+        for (var i = 0; i < room.voting.runoff.candidates.length; i++) {
+          if (String(room.voting.runoff.candidates[i]) === String(toPlayerId)) {
+            allowed = true;
+            break;
+          }
+        }
+        if (!allowed) return room;
+      }
       var nextVotes = assign({}, room.votes || {});
       nextVotes[voterId] = { to: toPlayerId, at: serverNowMs() };
       return assign({}, room, { votes: nextVotes });
@@ -871,6 +938,7 @@
       var talkSeconds = settings && settings.talkSeconds != null ? settings.talkSeconds : 180;
       var minorityCount = settings && settings.minorityCount != null ? settings.minorityCount : 1;
       talkSeconds = clamp(parseIntSafe(talkSeconds, 180), 60, 5 * 60);
+      if (FORCE_TALK_SECONDS > 0) talkSeconds = FORCE_TALK_SECONDS;
       minorityCount = clamp(parseIntSafe(minorityCount, 1), 1, Math.max(1, ids.length - 1));
       var reversal = !!(settings && settings.reversal);
 
@@ -948,7 +1016,7 @@
 
       var nextPlayers = {};
       nextPlayers[hostId] = {
-        name: host.name || 'GM',
+        name: host.name || 'ゲームマスター',
         isHost: true,
         joinedAt: host.joinedAt || serverNowMs(),
         lastSeenAt: serverNowMs()
@@ -1025,7 +1093,7 @@
 
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">勝敗履歴</div>\n      <div class="muted">この端末（主にGM）に保存される簡易履歴です。</div>\n\n      <div class="stack">' +
+      '\n    <div class="stack">\n      <div class="big">勝敗履歴</div>\n      <div class="muted">この端末（主にゲームマスター）に保存される簡易履歴です。</div>\n\n      <div class="stack">' +
         rows +
         '</div>\n\n      <div class="row">\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
     );
@@ -1162,7 +1230,7 @@
   function renderCreate(viewEl) {
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">部屋を作成</div>\n\n      <div class="field">\n        <label>GMの名前（表示用）</label>\n        <input id="gmName" placeholder="例: たろう" />\n        <div class="muted">※ 待機中など一部の画面では「(ゲームマスター)」を付けて表示します。</div>\n      </div>\n\n      <div class="field">\n        <label>少数側の人数（最大5）</label>\n        <input id="minorityCount" type="range" min="1" max="5" step="1" value="1" />\n        <div class="kv"><span class="muted">現在</span><b id="minorityCountLabel">1</b></div>\n      </div>\n\n      <div class="field">\n        <label>トーク時間（分・最大5分）</label>\n        <input id="talkMinutes" type="range" min="1" max="5" step="1" value="3" />\n        <div class="kv"><span class="muted">現在</span><b id="talkMinutesLabel">3分</b></div>\n      </div>\n\n      <div class="field">\n        <label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>\n        <select id="reversal">\n          <option value="1" selected>あり</option>\n          <option value="0">なし</option>\n        </select>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>お題カテゴリ</label>\n        <select id="topicCategory"></select>\n        <div class="muted">※ 作成時点（QR表示時）にワードを確定してDBに保持します。画面には表示しません。</div>\n      </div>\n\n      <div class="row">\n        <button id="createRoom" class="primary">QRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">部屋を作成</div>\n\n      <div class="field">\n        <label>ゲームマスターの名前（表示用）</label>\n        <input id="gmName" placeholder="例: たろう" />\n        <div class="muted">※ 待機中など一部の画面では「(ゲームマスター)」を付けて表示します。</div>\n      </div>\n\n      <div class="field">\n        <label>少数側の人数（最大5）</label>\n        <input id="minorityCount" type="range" min="1" max="5" step="1" value="1" />\n        <div class="kv"><span class="muted">現在</span><b id="minorityCountLabel">1</b></div>\n      </div>\n\n      <div class="field">\n        <label>トーク時間（分・最大5分）</label>\n        <input id="talkMinutes" type="range" min="1" max="5" step="1" value="3" />\n        <div class="kv"><span class="muted">現在</span><b id="talkMinutesLabel">3分</b></div>\n      </div>\n\n      <div class="field">\n        <label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>\n        <select id="reversal">\n          <option value="1" selected>あり</option>\n          <option value="0">なし</option>\n        </select>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>お題カテゴリ</label>\n        <select id="topicCategory"></select>\n        <div class="muted">※ 作成時点（QR表示時）にワードを確定してDBに保持します。画面には表示しません。</div>\n      </div>\n\n      <div class="row">\n        <button id="createRoom" class="primary">QRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
     );
 
     var sel = document.getElementById('topicCategory');
@@ -1206,7 +1274,7 @@
 
     var topicCategoryId = String((tc && tc.value) || 'random');
 
-    if (!gmName) throw new Error('GMの名前を入力してください。');
+    if (!gmName) throw new Error('ゲームマスターの名前を入力してください。');
 
     return {
       gmName: gmName,
@@ -1252,7 +1320,7 @@
         escapeHtml(phase) +
         '</b></div>\n\n      <hr />\n\n      <div class="row">\n        ' +
         actionHtml +
-        '\n      </div>\n\n      <div class="muted">※ スタート後、GM端末もプレイヤー画面に移動します。</div>\n    </div>\n  '
+        '\n      </div>\n\n      <div class="muted">※ スタート後、ゲームマスター端末もプレイヤー画面に移動します。</div>\n    </div>\n  '
     );
   }
 
@@ -1306,15 +1374,25 @@
 
     var wordView = word;
 
+    var showRoleLabel = phase === 'voting' || phase === 'guess' || phase === 'judge' || phase === 'finished';
+    var roleLabel = '';
+    if (showRoleLabel) {
+      if (role === 'majority') roleLabel = '多人数側';
+      if (role === 'minority') roleLabel = '少人数側';
+    }
+    var wordHtml = roleLabel
+      ? '<div class="inline-row"><span class="badge">' + escapeHtml(roleLabel) + '</span><div class="big">' + escapeHtml(wordView || '（未配布）') + '</div></div>'
+      : '<div class="big">' + escapeHtml(wordView || '（未配布）') + '</div>';
+
     var endAt = room && room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
     var remain = phase === 'discussion' ? Math.max(0, Math.floor((endAt - serverNowMs()) / 1000)) : 0;
 
     var statusText = '';
-    if (phase === 'lobby') statusText = '待機中：GMがスタートするまでお待ちください。';
+    if (phase === 'lobby') statusText = '待機中：ゲームマスターがスタートするまでお待ちください。';
     else if (phase === 'discussion') statusText = 'トーク中：少数側を探しましょう。';
     else if (phase === 'voting') statusText = votedTo ? '待機中：全員の投票を待っています。' : '投票してください。';
     else if (phase === 'guess') statusText = role === 'minority' ? '少数側は多数側ワードを入力してください。' : '待機中：少数側の入力を待っています。';
-    else if (phase === 'judge') statusText = isHost ? '判定：勝敗を決定してください。' : '待機中：GMの判定を待っています。';
+    else if (phase === 'judge') statusText = isHost ? '判定：勝敗を決定してください。' : '待機中：ゲームマスターの判定を待っています。';
     else if (phase === 'finished') statusText = 'ゲーム終了：結果を確認してください。';
 
     var votedOutId = room && room.reveal && room.reveal.votedOutId ? room.reveal.votedOutId : '';
@@ -1323,6 +1401,11 @@
 
     var votingHtml = '';
     if (phase === 'voting') {
+      var candidates = null;
+      if (room && room.voting && room.voting.runoff && Array.isArray(room.voting.runoff.candidates) && room.voting.runoff.candidates.length) {
+        candidates = room.voting.runoff.candidates;
+      }
+
       var voteStatusRows = '';
       var votedCount = 0;
       for (var vsi = 0; vsi < activePlayers.length; vsi++) {
@@ -1360,6 +1443,16 @@
         for (var oi = 0; oi < activePlayers.length; oi++) {
           var ap2 = activePlayers[oi];
           if (ap2.id === playerId) continue;
+          if (candidates) {
+            var ok = false;
+            for (var ci = 0; ci < candidates.length; ci++) {
+              if (String(candidates[ci]) === String(ap2.id)) {
+                ok = true;
+                break;
+              }
+            }
+            if (!ok) continue;
+          }
           buttons +=
             '<button class="primary voteBtn" data-to="' +
             escapeHtml(ap2.id) +
@@ -1371,7 +1464,9 @@
         votingHtml =
           '<div class="stack">' +
           '<div class="big">投票</div>' +
-          '<div class="muted">少数側だと思う人をタップしてください。</div>' +
+          (candidates
+            ? '<div class="muted">同票のため再投票（対象者のみ）</div>'
+            : '<div class="muted">少数側だと思う人をタップしてください。</div>') +
           '<div class="stack" id="voteButtons">' +
           buttons +
           '</div>' +
@@ -1441,11 +1536,11 @@
         (lines || '<div class="muted">（まだありません）</div>') +
         '</div>' +
         (isHost
-          ? '<hr /><div class="muted">GMが勝敗を決定します。</div><div class="row">' +
+          ? '<hr /><div class="muted">ゲームマスターが勝敗を決定します。</div><div class="row">' +
             '<button id="decideMinority" class="primary">少数側の勝ち</button>' +
             '<button id="decideMajority" class="danger">多数側の勝ち</button>' +
             '</div>'
-          : '<div class="muted">待機中：GMの判定を待っています。</div>') +
+          : '<div class="muted">待機中：ゲームマスターの判定を待っています。</div>') +
         '</div>';
     }
 
@@ -1566,9 +1661,9 @@
       viewEl,
       '\n    <div class="stack">\n      <div class="big">' +
         escapeHtml(selfName) +
-        '</div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">あなたのワード</div>\n        <div class="big">' +
-        escapeHtml(wordView || '（未配布）') +
-        '</div>\n      </div>\n\n      ' +
+        '</div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">あなたのワード</div>\n        ' +
+        wordHtml +
+        '\n      </div>\n\n      ' +
         statusCardHtml +
         '\n\n      ' +
         votingHtml +
