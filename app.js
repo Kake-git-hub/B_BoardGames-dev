@@ -808,6 +808,79 @@
     });
   }
 
+  function restartGameWithSettings(roomId, settings) {
+    var base = roomPath(roomId);
+
+    var picked;
+    try {
+      if (settings.topicCategoryId === 'random') picked = pickRandomPairAny();
+      else picked = pickRandomPair(settings.topicCategoryId);
+    } catch (e) {
+      picked = pickRandomPairAny();
+    }
+
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'finished') return room;
+
+      var ids = listActivePlayerIds(room);
+      if (ids.length < 3) return room;
+
+      var talkSeconds = settings && settings.talkSeconds != null ? settings.talkSeconds : 180;
+      var minorityCount = settings && settings.minorityCount != null ? settings.minorityCount : 1;
+      talkSeconds = clamp(parseIntSafe(talkSeconds, 180), 60, 5 * 60);
+      minorityCount = clamp(parseIntSafe(minorityCount, 1), 1, Math.max(1, ids.length - 1));
+      var reversal = !!(settings && settings.reversal);
+
+      var shuffled = ids.slice();
+      for (var i = shuffled.length - 1; i > 0; i--) {
+        var j = Math.floor(Math.random() * (i + 1));
+        var tmp = shuffled[i];
+        shuffled[i] = shuffled[j];
+        shuffled[j] = tmp;
+      }
+
+      var minoritySet = {};
+      for (var k = 0; k < minorityCount; k++) minoritySet[shuffled[k]] = true;
+
+      var nextPlayers = assign({}, room.players || {});
+      for (var m = 0; m < ids.length; m++) {
+        var pid = ids[m];
+        var p = nextPlayers[pid] || {};
+        nextPlayers[pid] = assign({}, p, { role: minoritySet[pid] ? 'minority' : 'majority' });
+      }
+
+      var startedAt = nowMs();
+      return assign({}, room, {
+        phase: 'discussion',
+        settings: {
+          minorityCount: minorityCount,
+          talkSeconds: talkSeconds,
+          reversal: reversal
+        },
+        topic: {
+          categoryId: picked.category && picked.category.id ? picked.category.id : '',
+          categoryName: picked.category && picked.category.name ? picked.category.name : ''
+        },
+        words: {
+          majority: picked.majority,
+          minority: picked.minority
+        },
+        players: nextPlayers,
+        discussion: { startedAt: startedAt, endsAt: startedAt + talkSeconds * 1000 },
+        voting: { startedAt: 0, revealedAt: 0 },
+        votes: {},
+        reveal: { revealedAt: 0, votedOutId: '' },
+        guess: {
+          enabled: reversal,
+          submittedAt: 0,
+          guesses: {}
+        },
+        result: { winner: '', decidedAt: 0, decidedBy: '' }
+      });
+    });
+  }
+
   function subscribeRoom(roomId, cb) {
     return onValue(roomPath(roomId), cb);
   }
@@ -1108,6 +1181,8 @@
     var role = (player && player.role) || 'unknown';
     var phase = (room && room.phase) || 'lobby';
 
+    var ui = opts.ui || {};
+
     var players = (room && room.players) || {};
     var activePlayers = [];
     var playerKeys = Object.keys(players);
@@ -1158,6 +1233,10 @@
     else if (phase === 'guess') statusText = role === 'minority' ? '少数側は多数側ワードを入力してください。' : '待機中：少数側の入力を待っています。';
     else if (phase === 'judge') statusText = isHost ? '判定：勝敗を決定してください。' : '待機中：GMの判定を待っています。';
     else if (phase === 'finished') statusText = 'ゲーム終了：結果を確認してください。';
+
+    var votedOutId = room && room.reveal && room.reveal.votedOutId ? room.reveal.votedOutId : '';
+    var votedOutName = votedOutId && players && players[votedOutId] ? formatPlayerDisplayName(players[votedOutId]) : '';
+    var votedOutLine = votedOutId ? votedOutName || votedOutId : '';
 
     var votingHtml = '';
     if (phase === 'voting') {
@@ -1215,6 +1294,9 @@
       guessHtml =
         '<div class="stack">' +
         '<div class="big">推理</div>' +
+        (votedOutLine
+          ? '<div class="kv"><span class="muted">追放</span><b>' + escapeHtml(votedOutLine) + '</b></div>'
+          : '') +
         '<div class="muted">少数側が多数側ワードを予想します。</div>' +
         (role === 'minority'
           ? myGuess
@@ -1240,6 +1322,9 @@
       judgeHtml =
         '<div class="stack">' +
         '<div class="big">予想一覧</div>' +
+        (votedOutLine
+          ? '<div class="kv"><span class="muted">追放</span><b>' + escapeHtml(votedOutLine) + '</b></div>'
+          : '') +
         '<div class="muted">少数側が入力した予想です。</div>' +
         '<div class="stack">' +
         (lines || '<div class="muted">（まだありません）</div>') +
@@ -1272,12 +1357,56 @@
         '<div class="kv"><span class="muted">少数側</span><b>' +
         escapeHtml(minorityLine) +
         '</b></div>' +
+        (votedOutLine
+          ? '<div class="kv"><span class="muted">追放</span><b>' + escapeHtml(votedOutLine) + '</b></div>'
+          : '') +
         '<div class="kv"><span class="muted">多数側ワード</span><b>' +
         escapeHtml(mj) +
         '</b></div>' +
         '<div class="kv"><span class="muted">少数側ワード</span><b>' +
         escapeHtml(mn) +
         '</b></div>' +
+        (isHost
+          ? ui && ui.showContinueForm
+            ? '<hr />' +
+              '<div class="big">ゲーム継続</div>' +
+              '<div class="muted">同じメンバーで設定を変えてすぐ始めます。</div>' +
+              '<div class="field"><label>少数側の人数（最大5）</label>' +
+              '<input id="cMinorityCount" type="range" min="1" max="5" step="1" value="' +
+              escapeHtml(String((room && room.settings && room.settings.minorityCount) || 1)) +
+              '" />' +
+              '<div class="kv"><span class="muted">現在</span><b id="cMinorityCountLabel">' +
+              escapeHtml(String((room && room.settings && room.settings.minorityCount) || 1)) +
+              '</b></div></div>' +
+              '<div class="field"><label>トーク時間（分・最大5分）</label>' +
+              '<input id="cTalkMinutes" type="range" min="1" max="5" step="1" value="' +
+              escapeHtml(String(Math.max(1, Math.min(5, Math.round(((room && room.settings && room.settings.talkSeconds) || 180) / 60))))) +
+              '" />' +
+              '<div class="kv"><span class="muted">現在</span><b id="cTalkMinutesLabel">' +
+              escapeHtml(String(Math.max(1, Math.min(5, Math.round(((room && room.settings && room.settings.talkSeconds) || 180) / 60)))) + '分') +
+              '</b></div></div>' +
+              '<div class="field"><label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>' +
+              '<select id="cReversal">' +
+              '<option value="1"' +
+              ((room && room.settings && room.settings.reversal) ? ' selected' : '') +
+              '>あり</option>' +
+              '<option value="0"' +
+              (!(room && room.settings && room.settings.reversal) ? ' selected' : '') +
+              '>なし</option>' +
+              '</select></div>' +
+              '<div class="field"><label>お題カテゴリ</label>' +
+              '<select id="cTopicCategory"></select>' +
+              '<div class="muted">※ 開始時にワードを確定してDBに保持します。</div></div>' +
+              '<div class="row">' +
+              '<button id="startContinue" class="primary">この設定で開始</button>' +
+              '<button id="cancelContinue" class="ghost">キャンセル</button>' +
+              '</div>'
+            : '<hr />' +
+              '<div class="row">' +
+              '<button id="continueGame" class="primary">ゲーム継続</button>' +
+              '<button id="changePlayers" class="ghost">参加者変更</button>' +
+              '</div>'
+          : '') +
         voteResultHtml +
         '</div>';
       voteResultHtml = '';
@@ -1329,6 +1458,23 @@
   }
 
   var HISTORY_KEY = 'ww_history_v1';
+  var HISTORY_LAST_SAVED_KEY = 'ww_history_last_saved_v1';
+
+  function formatDateTime(ms) {
+    var d = new Date(ms);
+    var y = d.getFullYear();
+    var mo = pad2(d.getMonth() + 1);
+    var da = pad2(d.getDate());
+    var hh = pad2(d.getHours());
+    var mm = pad2(d.getMinutes());
+    return y + '-' + mo + '-' + da + ' ' + hh + ':' + mm;
+  }
+
+  function winnerLabelJa(winner) {
+    if (winner === 'minority') return '少数側';
+    if (winner === 'majority') return '多数側';
+    return '-';
+  }
 
   function loadHistory() {
     var raw = null;
@@ -1344,6 +1490,68 @@
     } catch (e2) {
       return [];
     }
+  }
+
+  function saveHistory(items) {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(items || []));
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  function loadLastSavedMap() {
+    try {
+      var raw = localStorage.getItem(HISTORY_LAST_SAVED_KEY);
+      if (!raw) return {};
+      var obj = JSON.parse(raw);
+      return obj && typeof obj === 'object' ? obj : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveLastSavedMap(map) {
+    try {
+      localStorage.setItem(HISTORY_LAST_SAVED_KEY, JSON.stringify(map || {}));
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  function maybeAppendHistory(roomId, room) {
+    if (!room || room.phase !== 'finished') return;
+    if (!room.result || !room.result.winner || !room.result.decidedAt) return;
+
+    var decidedAt = room.result.decidedAt;
+    var map = loadLastSavedMap();
+    if (map[roomId] && map[roomId] === decidedAt) return;
+
+    var items = loadHistory();
+
+    var minorityIds = listMinorityPlayerIds(room);
+    var names = [];
+    for (var i = 0; i < minorityIds.length; i++) {
+      var pid = minorityIds[i];
+      var p = room.players && room.players[pid];
+      if (!p) continue;
+      names.push(formatPlayerDisplayName(p));
+    }
+
+    var item = {
+      when: formatDateTime(decidedAt),
+      winner: winnerLabelJa(room.result.winner),
+      minorityNames: names.join(' / '),
+      words: (room.words && room.words.majority ? room.words.majority : '-') + ' / ' + (room.words && room.words.minority ? room.words.minority : '-')
+    };
+
+    items.unshift(item);
+    var MAX = 30;
+    if (items.length > MAX) items = items.slice(0, MAX);
+    saveHistory(items);
+
+    map[roomId] = decidedAt;
+    saveLastSavedMap(map);
   }
 
   function routeHistory() {
@@ -1596,6 +1804,7 @@
     var unsub = null;
     var timerHandle = null;
     var autoVoteRequested = false;
+    var ui = { showContinueForm: false };
 
     function rerenderTimer(room) {
       var el = document.getElementById('timer');
@@ -1614,7 +1823,11 @@
           }
 
           var player = room.players ? room.players[playerId] : null;
-          renderPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost });
+          renderPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui });
+
+          if (isHost) {
+            maybeAppendHistory(roomId, room);
+          }
 
           if ((room && room.phase) !== 'discussion') autoVoteRequested = false;
 
@@ -1679,6 +1892,91 @@
               revealAfterVoting(roomId).catch(function (e) {
                 alert((e && e.message) || '失敗');
               });
+            });
+          }
+
+          var continueBtn = document.getElementById('continueGame');
+          if (continueBtn) {
+            continueBtn.addEventListener('click', function () {
+              ui.showContinueForm = true;
+              renderPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui });
+
+              var sel = document.getElementById('cTopicCategory');
+              if (sel) {
+                var html = '<option value="random">ランダム</option>';
+                for (var i = 0; i < TOPIC_CATEGORIES.length; i++) {
+                  html += '<option value="' + escapeHtml(TOPIC_CATEGORIES[i].id) + '">' + escapeHtml(TOPIC_CATEGORIES[i].name) + '</option>';
+                }
+                sel.innerHTML = html;
+                var current = room && room.topic && room.topic.categoryId ? String(room.topic.categoryId) : 'random';
+                sel.value = current || 'random';
+              }
+
+              function updateLabels() {
+                var mc = document.getElementById('cMinorityCount');
+                var mcl = document.getElementById('cMinorityCountLabel');
+                if (mc && mcl) mcl.textContent = String(mc.value);
+                var tm = document.getElementById('cTalkMinutes');
+                var tml = document.getElementById('cTalkMinutesLabel');
+                if (tm && tml) tml.textContent = String(tm.value) + '分';
+              }
+
+              var mcEl = document.getElementById('cMinorityCount');
+              if (mcEl) mcEl.addEventListener('input', updateLabels);
+              var tmEl = document.getElementById('cTalkMinutes');
+              if (tmEl) tmEl.addEventListener('input', updateLabels);
+              updateLabels();
+
+              var cancelBtn = document.getElementById('cancelContinue');
+              if (cancelBtn) {
+                cancelBtn.addEventListener('click', function () {
+                  ui.showContinueForm = false;
+                  renderPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui });
+                });
+              }
+
+              var startBtn = document.getElementById('startContinue');
+              if (startBtn) {
+                startBtn.addEventListener('click', function () {
+                  var mc2 = document.getElementById('cMinorityCount');
+                  var tm2 = document.getElementById('cTalkMinutes');
+                  var rv2 = document.getElementById('cReversal');
+                  var tc2 = document.getElementById('cTopicCategory');
+                  var minorityCount = clamp(parseIntSafe(mc2 && mc2.value, 1), 1, 5);
+                  var talkMinutes = clamp(parseIntSafe(tm2 && tm2.value, 3), 1, 5);
+                  var talkSeconds = talkMinutes * 60;
+                  var reversal = ((rv2 && rv2.value) || '1') === '1';
+                  var topicCategoryId = String((tc2 && tc2.value) || 'random');
+
+                  startBtn.disabled = true;
+                  restartGameWithSettings(roomId, {
+                    minorityCount: minorityCount,
+                    talkSeconds: talkSeconds,
+                    reversal: reversal,
+                    topicCategoryId: topicCategoryId
+                  })
+                    .then(function () {
+                      ui.showContinueForm = false;
+                    })
+                    .catch(function (e) {
+                      alert((e && e.message) || '失敗');
+                    })
+                    .finally(function () {
+                      startBtn.disabled = false;
+                    });
+                });
+              }
+            });
+          }
+
+          var changePlayersBtn = document.getElementById('changePlayers');
+          if (changePlayersBtn) {
+            changePlayersBtn.addEventListener('click', function () {
+              var q = { screen: 'create' };
+              var v = getCacheBusterParam();
+              if (v) q.v = v;
+              setQuery(q);
+              route();
             });
           }
         });
