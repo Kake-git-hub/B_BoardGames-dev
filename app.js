@@ -501,12 +501,14 @@
     var path = playerPath(roomId, playerId);
     return runTxn(path, function (current) {
       var base = current || {};
-      return {
+      var out = {
         name: name,
         joinedAt: base.joinedAt || nowMs(),
-        lastSeenAt: nowMs(),
-        role: base.role
+        lastSeenAt: nowMs()
       };
+      // Realtime Database cannot store `undefined`.
+      if (base.role != null) out.role = base.role;
+      return out;
     });
   }
 
@@ -888,6 +890,8 @@
     var player = opts.player;
     var room = opts.room;
 
+    var isHost = !!opts.isHost;
+
     var role = (player && player.role) || 'unknown';
     var phase = (room && room.phase) || 'lobby';
 
@@ -923,13 +927,22 @@
     });
 
     var word = '';
-    if (role === 'minority') word = (room && room.words ? room.words.minority : '') || '';
-    if (role === 'majority') word = (room && room.words ? room.words.majority : '') || '';
+    if (!isHost) {
+      if (role === 'minority') word = (room && room.words ? room.words.minority : '') || '';
+      if (role === 'majority') word = (room && room.words ? room.words.majority : '') || '';
+    }
 
     var roleLabel = '未確定';
     if (role === 'minority') roleLabel = '少数側';
     if (role === 'majority') roleLabel = '多数側';
     if (role === 'spectator') roleLabel = '観戦';
+
+    var roleLabelView = roleLabel;
+    var wordView = word;
+    if (isHost) {
+      roleLabelView = '（非表示）';
+      wordView = '（非表示）';
+    }
 
     var endAt = room && room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
     var remain = Math.max(0, Math.floor((endAt - (Date.now ? Date.now() : new Date().getTime())) / 1000));
@@ -1026,9 +1039,9 @@
         '</div>\n        </div>\n        <div class="badge">' +
         escapeHtml(phase) +
         '</div>\n      </div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">あなたの役職</div>\n        <div class="big">' +
-        escapeHtml(roleLabel) +
+        escapeHtml(roleLabelView) +
         '</div>\n        <hr />\n        <div class="muted">あなたのワード</div>\n        <div class="big">' +
-        escapeHtml(word || '（未配布）') +
+        escapeHtml(wordView || '（未配布）') +
         '</div>\n      </div>\n\n      <div class="card center" style="padding:12px">\n        <div class="muted">残り時間</div>\n        <div class="timer" id="timer">' +
         escapeHtml(formatMMSS(remain)) +
         '</div>\n      </div>\n\n      ' +
