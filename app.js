@@ -217,17 +217,22 @@
   }
 
   function getCacheBusterParam() {
+    // Prefer the version baked into the currently-loaded script tag.
+    // This prevents old bookmarked URLs like ?v=20251228u from pinning the app to an old asset version.
+    var bundled = getBundledAssetVersion();
+    if (bundled) return String(bundled);
     var q = parseQuery();
     if (q.v) return String(q.v);
-    return getBundledAssetVersion();
+    return '';
   }
 
   function ensureUrlHasCacheBuster() {
     var q = parseQuery();
-    if (q.v) return;
-    var v = getCacheBusterParam();
-    if (!v) return;
-    q.v = v;
+    var bundled = getBundledAssetVersion();
+    if (!bundled) return;
+    // If missing or different, overwrite to the bundled asset version.
+    if (q.v && String(q.v) === String(bundled)) return;
+    q.v = String(bundled);
     setQuery(q);
   }
 
@@ -2849,7 +2854,7 @@
   function renderHome(viewEl) {
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">ゲーム一覧</div>\n      <div class="muted">最初に遊ぶゲームを選びます（今後ここに追加していきます）。</div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">ワードウルフ</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=create">ワードウルフ開始</a>\n          <a class="btn ghost" href="?screen=history">勝敗履歴</a>\n        </div>\n        <div class="muted">参加者はQRを読み取って参加します。</div>\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">コードネーム</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=codenames_create">コードネーム開始</a>\n        </div>\n        <div class="muted">各チームにスパイマスター1人＋当てる側で遊びます。</div>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">B_BoardGames</div>\n      <div class="muted">遊ぶゲームを選びます。</div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">ワードウルフ</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=create">ワードウルフ開始</a>\n          <a class="btn ghost" href="?screen=history">勝敗履歴</a>\n        </div>\n        <div class="muted">参加者はQRを読み取って参加します。</div>\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">コードネーム</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=codenames_create">コードネーム開始</a>\n        </div>\n        <div class="muted">各チームにスパイマスター1人＋当てる側で遊びます。</div>\n      </div>\n    </div>\n  '
     );
   }
 
@@ -4662,7 +4667,7 @@
     var buildInfoEl = document.querySelector('#buildInfo');
     if (buildInfoEl) {
       var assetV = getCacheBusterParam();
-      buildInfoEl.textContent = 'v0.10 (B_BoardGames + codenames)' + (assetV ? ' / assets ' + assetV : '');
+      buildInfoEl.textContent = 'v0.11 (B_BoardGames + codenames)' + (assetV ? ' / assets ' + assetV : '');
     }
 
     window.addEventListener('popstate', function () {
