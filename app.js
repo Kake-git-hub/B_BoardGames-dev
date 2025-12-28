@@ -497,13 +497,18 @@
         endsAt: 0
       },
       reveal: {
-        revealedAt: 0
+        revealedAt: 0,
+        votedOutId: ''
       },
       guess: {
         enabled: !!settings.reversal,
         submittedAt: 0,
-        guessText: '',
-        correct: null
+        guesses: {}
+      },
+      result: {
+        winner: '',
+        decidedAt: 0,
+        decidedBy: ''
       },
       voting: {
         startedAt: 0,
@@ -569,6 +574,65 @@
     return true;
   }
 
+  function computeVotedOutId(room) {
+    var ids = listActivePlayerIds(room);
+    if (!ids.length) return '';
+
+    var votesObj = (room && room.votes) || {};
+    var counts = {};
+    for (var i = 0; i < ids.length; i++) counts[ids[i]] = 0;
+
+    var voterIds = Object.keys(votesObj);
+    for (var j = 0; j < voterIds.length; j++) {
+      var voterId = voterIds[j];
+      var v = votesObj[voterId];
+      if (!v || !v.to) continue;
+      if (counts[v.to] == null) continue;
+      counts[v.to] = (counts[v.to] || 0) + 1;
+    }
+
+    var bestId = '';
+    var bestCount = -1;
+    // deterministic tie-break: lexicographically smaller id wins
+    for (var k = 0; k < ids.length; k++) {
+      var pid = ids[k];
+      var c = counts[pid] || 0;
+      if (c > bestCount) {
+        bestCount = c;
+        bestId = pid;
+      } else if (c === bestCount && bestId && pid < bestId) {
+        bestId = pid;
+      }
+    }
+    return bestId;
+  }
+
+  function listMinorityPlayerIds(room) {
+    var playersObj = (room && room.players) || {};
+    var keys = Object.keys(playersObj);
+    var out = [];
+    for (var i = 0; i < keys.length; i++) {
+      var id = keys[i];
+      var p = playersObj[id];
+      if (!p) continue;
+      if (p.role !== 'minority') continue;
+      out.push(id);
+    }
+    return out;
+  }
+
+  function areAllMinorityGuessesSubmitted(room) {
+    var ids = listMinorityPlayerIds(room);
+    if (!ids.length) return true;
+    var guessObj = (room && room.guess) || {};
+    var guesses = guessObj.guesses || {};
+    for (var i = 0; i < ids.length; i++) {
+      var pid = ids[i];
+      if (!guesses[pid] || !guesses[pid].text) return false;
+    }
+    return true;
+  }
+
   function startGame(roomId) {
     var base = roomPath(roomId);
     return runTxn(base, function (room) {
@@ -607,13 +671,13 @@
         discussion: { startedAt: startedAt, endsAt: startedAt + talkSeconds * 1000 },
         voting: { startedAt: 0, revealedAt: 0 },
         votes: {},
-        reveal: { revealedAt: 0 },
+        reveal: { revealedAt: 0, votedOutId: '' },
         guess: {
           enabled: !!(room.settings && room.settings.reversal),
           submittedAt: 0,
-          guessText: '',
-          correct: null
-        }
+          guesses: {}
+        },
+        result: { winner: '', decidedAt: 0, decidedBy: '' }
       });
     });
   }
@@ -640,10 +704,45 @@
       if (!room) return room;
       if (room.phase !== 'voting') return room;
       if (!isVotingComplete(room)) return room;
+
+      var votedOutId = computeVotedOutId(room);
+      var votedOutRole = votedOutId && room.players && room.players[votedOutId] ? room.players[votedOutId].role : '';
       var reversal = !!(room.settings && room.settings.reversal);
+
+      // Branch:
+      // - voted-out is majority => minority wins immediately
+      // - voted-out is minority => if reversal enabled -> minority can guess, then GM decides; else majority wins
+      if (votedOutRole === 'majority') {
+        return assign({}, room, {
+          phase: 'finished',
+          reveal: { revealedAt: nowMs(), votedOutId: votedOutId },
+          result: { winner: 'minority', decidedAt: nowMs(), decidedBy: 'auto' }
+        });
+      }
+
+      if (votedOutRole === 'minority' && reversal) {
+        var nextGuess = assign(
+          {
+            enabled: true,
+            submittedAt: 0,
+            guesses: {}
+          },
+          room.guess || {}
+        );
+        if (!nextGuess.guesses) nextGuess.guesses = {};
+        return assign({}, room, {
+          phase: 'guess',
+          reveal: { revealedAt: nowMs(), votedOutId: votedOutId },
+          guess: nextGuess,
+          result: { winner: '', decidedAt: 0, decidedBy: '' }
+        });
+      }
+
+      // default: majority wins
       return assign({}, room, {
-        phase: reversal ? 'guess' : 'finished',
-        reveal: { revealedAt: nowMs() }
+        phase: 'finished',
+        reveal: { revealedAt: nowMs(), votedOutId: votedOutId },
+        result: { winner: 'majority', decidedAt: nowMs(), decidedBy: 'auto' }
       });
     });
   }
@@ -672,12 +771,39 @@
       var playersObj = room.players || {};
       var me = playersObj[playerId];
       if (!me || me.role !== 'minority') return room;
-      var majorityWord = String((room.words && room.words.majority) || '').trim();
       var gt = String(guessText || '').trim();
-      var correct = gt.length > 0 && majorityWord.length > 0 && gt === majorityWord;
+
+      var nextGuess = assign(
+        {
+          enabled: true,
+          submittedAt: 0,
+          guesses: {}
+        },
+        room.guess || {}
+      );
+      var guesses = assign({}, nextGuess.guesses || {});
+      if (gt) guesses[playerId] = { text: gt, at: nowMs() };
+      nextGuess.guesses = guesses;
+      nextGuess.submittedAt = nowMs();
+
+      var nextRoom = assign({}, room, { guess: nextGuess });
+
+      if (areAllMinorityGuessesSubmitted(nextRoom)) {
+        return assign({}, nextRoom, { phase: 'judge' });
+      }
+      return nextRoom;
+    });
+  }
+
+  function decideWinner(roomId, winner) {
+    var base = roomPath(roomId);
+    var w = winner === 'minority' ? 'minority' : 'majority';
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'judge') return room;
       return assign({}, room, {
         phase: 'finished',
-        guess: assign({}, room.guess || {}, { submittedAt: nowMs(), guessText: gt, correct: correct })
+        result: { winner: w, decidedAt: nowMs(), decidedBy: 'gm' }
       });
     });
   }
@@ -1030,6 +1156,7 @@
     else if (phase === 'discussion') statusText = 'トーク中：少数側を探しましょう。';
     else if (phase === 'voting') statusText = votedTo ? '待機中：全員の投票を待っています。' : '投票してください。';
     else if (phase === 'guess') statusText = role === 'minority' ? '少数側は多数側ワードを入力してください。' : '待機中：少数側の入力を待っています。';
+    else if (phase === 'judge') statusText = isHost ? '判定：勝敗を決定してください。' : '待機中：GMの判定を待っています。';
     else if (phase === 'finished') statusText = 'ゲーム終了：結果を確認してください。';
 
     var votingHtml = '';
@@ -1038,27 +1165,28 @@
         votingHtml =
           '<div class="stack">' +
           '<div class="big">投票</div>' +
-          '<div class="muted">投票済み。結果開示を待ってください。</div>' +
+          '<div class="muted">投票済み。待機中です。</div>' +
           '</div>';
       } else {
-        var options = '';
+        var buttons = '';
         for (var oi = 0; oi < activePlayers.length; oi++) {
           var ap2 = activePlayers[oi];
           if (ap2.id === playerId) continue;
-          options += '<option value="' + escapeHtml(ap2.id) + '">' + escapeHtml(ap2.name) + '</option>';
+          buttons +=
+            '<button class="primary voteBtn" data-to="' +
+            escapeHtml(ap2.id) +
+            '" style="width:100%">' +
+            escapeHtml(ap2.name) +
+            '</button>';
         }
 
         votingHtml =
           '<div class="stack">' +
           '<div class="big">投票</div>' +
-          '<div class="muted">少数側だと思う人を選んで投票します。</div>' +
-          '<div class="row">' +
-          '<select id="voteTo"><option value="">選択…</option>' +
-          options +
-          '</select>' +
-          '<button id="submitVote" class="primary">投票</button>' +
+          '<div class="muted">少数側だと思う人をタップしてください。</div>' +
+          '<div class="stack" id="voteButtons">' +
+          buttons +
           '</div>' +
-          '<div class="muted">未投票</div>' +
           '</div>';
       }
     }
@@ -1083,18 +1211,45 @@
 
     var guessHtml = '';
     if (phase === 'guess') {
+      var myGuess = room && room.guess && room.guess.guesses && room.guess.guesses[playerId] ? room.guess.guesses[playerId].text : '';
       guessHtml =
         '<div class="stack">' +
-        '<div class="big">開示</div>' +
-        '<div class="kv"><span class="muted">少数側</span><b>' +
-        escapeHtml(minorityLine) +
-        '</b></div>' +
-        '<hr />' +
-        '<div class="muted">逆転あり: 少数側は多数側ワードを入力</div>' +
+        '<div class="big">推理</div>' +
+        '<div class="muted">少数側が多数側ワードを予想します。</div>' +
         (role === 'minority'
-          ? '<div class="row"><input id="guessText" placeholder="多数側ワード" />' +
-            '<button id="submitGuess" class="primary">確定</button></div>'
-          : '<div class="muted">少数側の入力を待っています…</div>') +
+          ? myGuess
+            ? '<div class="muted">送信済み：' + escapeHtml(myGuess) + '</div>'
+            : '<div class="stack"><input id="guessText" placeholder="多数側ワード" />' +
+              '<button id="submitGuess" class="primary">送信</button></div>'
+          : '<div class="muted">待機中：少数側の送信を待っています。</div>') +
+        '</div>';
+    }
+
+    var judgeHtml = '';
+    if (phase === 'judge') {
+      var guessesObj = (room && room.guess && room.guess.guesses) || {};
+      var gKeys = Object.keys(guessesObj);
+      var lines = '';
+      for (var gi = 0; gi < gKeys.length; gi++) {
+        var gpid = gKeys[gi];
+        var entry = guessesObj[gpid];
+        var pname = room && room.players && room.players[gpid] ? formatPlayerDisplayName(room.players[gpid]) : gpid;
+        lines += '<div class="kv"><span class="muted">' + escapeHtml(pname) + '</span><b>' + escapeHtml((entry && entry.text) || '') + '</b></div>';
+      }
+
+      judgeHtml =
+        '<div class="stack">' +
+        '<div class="big">予想一覧</div>' +
+        '<div class="muted">少数側が入力した予想です。</div>' +
+        '<div class="stack">' +
+        (lines || '<div class="muted">（まだありません）</div>') +
+        '</div>' +
+        (isHost
+          ? '<hr /><div class="muted">GMが勝敗を決定します。</div><div class="row">' +
+            '<button id="decideMinority" class="primary">少数側の勝ち</button>' +
+            '<button id="decideMajority" class="danger">多数側の勝ち</button>' +
+            '</div>'
+          : '<div class="muted">待機中：GMの判定を待っています。</div>') +
         '</div>';
     }
 
@@ -1102,17 +1257,18 @@
     if (phase === 'finished') {
       var mj = (room && room.words && room.words.majority) || '';
       var mn = (room && room.words && room.words.minority) || '';
-      var reversal = room && room.settings && room.settings.reversal;
-      var guessText = (room && room.guess && room.guess.guessText) || '（未回答）';
-      var correct = room && room.guess ? room.guess.correct : null;
-
-      var correctness = '未確定';
-      if (correct === true) correctness = '正解（少数側勝ち）';
-      if (correct === false) correctness = '不正解（多数側勝ち）';
+      var winner = (room && room.result && room.result.winner) || '';
+      var winnerLabel = winner === 'minority' ? '少数側の勝ち' : winner === 'majority' ? '多数側の勝ち' : '未確定';
 
       finishedHtml =
         '<div class="stack">' +
         '<div class="big">結果</div>' +
+        '<div class="card" style="padding:12px">' +
+        '<div class="muted">勝者</div>' +
+        '<div class="big">' +
+        escapeHtml(winnerLabel) +
+        '</div>' +
+        '</div>' +
         '<div class="kv"><span class="muted">少数側</span><b>' +
         escapeHtml(minorityLine) +
         '</b></div>' +
@@ -1122,13 +1278,6 @@
         '<div class="kv"><span class="muted">少数側ワード</span><b>' +
         escapeHtml(mn) +
         '</b></div>' +
-        (reversal
-          ? '<hr /><div class="kv"><span class="muted">少数側の回答</span><b>' +
-            escapeHtml(guessText) +
-            '</b></div><div class="kv"><span class="muted">正誤</span><b>' +
-            escapeHtml(correctness) +
-            '</b></div>'
-          : '') +
         voteResultHtml +
         '</div>';
       voteResultHtml = '';
@@ -1147,6 +1296,7 @@
         '</div>\n      </div>\n\n      ' +
         votingHtml +
         guessHtml +
+        judgeHtml +
         finishedHtml +
         '\n\n      <div class="row">' +
         (isHost && phase === 'voting' && isVotingComplete(room) ? '<button id="revealNext" class="primary">結果発表</button>' : '') +
@@ -1492,13 +1642,32 @@
             });
           }
 
-          var voteBtn = document.getElementById('submitVote');
-          if (voteBtn) {
-            voteBtn.addEventListener('click', function () {
-              var el2 = document.getElementById('voteTo');
-              var toPlayerId = String((el2 && el2.value) || '').trim();
-              if (!toPlayerId) return;
-              submitVote(roomId, playerId, toPlayerId).catch(function (e) {
+          var voteBtns = document.querySelectorAll('.voteBtn');
+          for (var i = 0; i < voteBtns.length; i++) {
+            (function (btn) {
+              btn.addEventListener('click', function () {
+                var toPlayerId = String(btn.getAttribute('data-to') || '').trim();
+                if (!toPlayerId) return;
+                submitVote(roomId, playerId, toPlayerId).catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                });
+              });
+            })(voteBtns[i]);
+          }
+
+          var decideMinorityBtn = document.getElementById('decideMinority');
+          if (decideMinorityBtn) {
+            decideMinorityBtn.addEventListener('click', function () {
+              decideWinner(roomId, 'minority').catch(function (e) {
+                alert((e && e.message) || '失敗');
+              });
+            });
+          }
+
+          var decideMajorityBtn = document.getElementById('decideMajority');
+          if (decideMajorityBtn) {
+            decideMajorityBtn.addEventListener('click', function () {
+              decideWinner(roomId, 'majority').catch(function (e) {
                 alert((e && e.message) || '失敗');
               });
             });
