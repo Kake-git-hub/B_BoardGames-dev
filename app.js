@@ -1454,10 +1454,16 @@
     // (Finished always reveals.)
     var shouldRevealBothWords = phase === 'judge' || phase === 'finished';
 
-    var wordView = word;
-    if (shouldRevealBothWords && (majorityWord || minorityWord)) {
-      wordView = '多数側：' + (majorityWord || '-') + '\n少数側：' + (minorityWord || '-');
-    }
+    var singleWordHtml = '<div class="big">' + escapeHtml(word || '（未配布）') + '</div>';
+    var bothWordsHtml =
+      '<div class="stack">' +
+      '<div><div class="muted">多数側</div><div class="big">' +
+      escapeHtml(majorityWord || '（未配布）') +
+      '</div></div>' +
+      '<div><div class="muted">少数側</div><div class="big">' +
+      escapeHtml(minorityWord || '（未配布）') +
+      '</div></div>' +
+      '</div>';
 
     // Role label is hidden during voting; show only after reveal (guess/judge/finished).
     var showRoleLabel = phase === 'guess' || phase === 'judge' || phase === 'finished';
@@ -1466,9 +1472,10 @@
       if (role === 'majority') roleLabel = '多人数側';
       if (role === 'minority') roleLabel = '少人数側';
     }
+    var wordMainHtml = shouldRevealBothWords ? bothWordsHtml : singleWordHtml;
     var wordHtml = roleLabel
-      ? '<div class="inline-row"><span class="badge">' + escapeHtml(roleLabel) + '</span><div class="big">' + escapeHtml(wordView || '（未配布）') + '</div></div>'
-      : '<div class="big">' + escapeHtml(wordView || '（未配布）') + '</div>';
+      ? '<div class="stack"><div class="inline-row"><span class="badge">' + escapeHtml(roleLabel) + '</span></div>' + wordMainHtml + '</div>'
+      : wordMainHtml;
 
     var endAt = room && room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
     var remain = phase === 'discussion' ? Math.max(0, Math.floor((endAt - serverNowMs()) / 1000)) : 0;
