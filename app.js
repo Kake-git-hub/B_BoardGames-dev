@@ -1249,6 +1249,7 @@
         html += '<option value="' + escapeHtml(c.id) + '">' + escapeHtml(c.name) + '</option>';
       }
       sel.innerHTML = html;
+      sel.value = 'random';
     }
 
     function updateLabels() {
