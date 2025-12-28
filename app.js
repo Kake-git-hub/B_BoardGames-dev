@@ -48,6 +48,26 @@
     return Date.now ? Date.now() : new Date().getTime();
   }
 
+  function randomInt(maxExclusive) {
+    var max = Math.floor(Math.abs(maxExclusive || 0));
+    if (!max) return 0;
+    try {
+      if (typeof crypto !== 'undefined' && crypto.getRandomValues && typeof Uint32Array !== 'undefined') {
+        // Rejection sampling to avoid modulo bias
+        var limit = Math.floor(4294967296 / max) * max;
+        var buf = new Uint32Array(1);
+        while (true) {
+          crypto.getRandomValues(buf);
+          var x = buf[0] >>> 0;
+          if (x < limit) return x % max;
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+    return Math.floor(Math.random() * max);
+  }
+
   // Firebase server time correction (helps devices with clock drift / iOS timer lag)
   var _serverTimeOffsetMs = 0;
   function serverNowMs() {
@@ -670,7 +690,7 @@
 
       var shuffled = ids.slice();
       for (var i = shuffled.length - 1; i > 0; i--) {
-        var j = Math.floor(Math.random() * (i + 1));
+        var j = randomInt(i + 1);
         var tmp = shuffled[i];
         shuffled[i] = shuffled[j];
         shuffled[j] = tmp;
@@ -856,7 +876,7 @@
 
       var shuffled = ids.slice();
       for (var i = shuffled.length - 1; i > 0; i--) {
-        var j = Math.floor(Math.random() * (i + 1));
+        var j = randomInt(i + 1);
         var tmp = shuffled[i];
         shuffled[i] = shuffled[j];
         shuffled[j] = tmp;
@@ -1281,13 +1301,10 @@
     });
 
     var word = '';
-    if (!isHost) {
-      if (role === 'minority') word = (room && room.words ? room.words.minority : '') || '';
-      if (role === 'majority') word = (room && room.words ? room.words.majority : '') || '';
-    }
+    if (role === 'minority') word = (room && room.words ? room.words.minority : '') || '';
+    if (role === 'majority') word = (room && room.words ? room.words.majority : '') || '';
 
     var wordView = word;
-    if (isHost) wordView = '（非表示）';
 
     var endAt = room && room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
     var remain = phase === 'discussion' ? Math.max(0, Math.floor((endAt - serverNowMs()) / 1000)) : 0;
@@ -1306,11 +1323,37 @@
 
     var votingHtml = '';
     if (phase === 'voting') {
+      var voteStatusRows = '';
+      var votedCount = 0;
+      for (var vsi = 0; vsi < activePlayers.length; vsi++) {
+        var apv = activePlayers[vsi];
+        var hasVoted = !!(votesObj && votesObj[apv.id] && votesObj[apv.id].to);
+        if (hasVoted) votedCount++;
+        voteStatusRows +=
+          '<div class="kv"><span class="muted">' +
+          escapeHtml(apv.name) +
+          '</span><b>' +
+          (hasVoted ? '投票済' : '未投票') +
+          '</b></div>';
+      }
+      var voteStatusHtml =
+        '<div class="stack">' +
+        '<div class="muted">投票状況 ' +
+        votedCount +
+        '/' +
+        activePlayers.length +
+        '</div>' +
+        '<div class="stack">' +
+        voteStatusRows +
+        '</div>' +
+        '</div>';
+
       if (votedTo) {
         votingHtml =
           '<div class="stack">' +
           '<div class="big">投票</div>' +
           '<div class="muted">投票済み。待機中です。</div>' +
+          voteStatusHtml +
           '</div>';
       } else {
         var buttons = '';
@@ -1332,6 +1375,7 @@
           '<div class="stack" id="voteButtons">' +
           buttons +
           '</div>' +
+          voteStatusHtml +
           '</div>';
       }
     }
@@ -1500,6 +1544,22 @@
         escapeHtml(statusText) +
         '</div>' +
         '</div>';
+    }
+
+    // Winner/loser background on finished (winner=red, loser=blue)
+    try {
+      if (viewEl && viewEl.classList) {
+        viewEl.classList.remove('result-win');
+        viewEl.classList.remove('result-lose');
+        if (phase === 'finished') {
+          var w = room && room.result && room.result.winner ? String(room.result.winner) : '';
+          if ((role === 'minority' || role === 'majority') && (w === 'minority' || w === 'majority')) {
+            viewEl.classList.add(role === w ? 'result-win' : 'result-lose');
+          }
+        }
+      }
+    } catch (e) {
+      // ignore
     }
 
     render(
@@ -2065,8 +2125,7 @@
               changePlayersBtn.disabled = true;
               resetRoomForPlayerChange(roomId, playerId)
                 .then(function () {
-                  var q = { screen: 'join', room: roomId };
-                  if (isHost) q.host = '1';
+                  var q = {};
                   var v = getCacheBusterParam();
                   if (v) q.v = v;
                   setQuery(q);
