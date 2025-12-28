@@ -1480,7 +1480,7 @@
     var buildInfoEl = document.querySelector('#buildInfo');
     if (buildInfoEl) {
       var assetV = getCacheBusterParam();
-      buildInfoEl.textContent = 'v0.7 (rtdb url validation)' + (assetV ? ' / assets ' + assetV : '');
+      buildInfoEl.textContent = 'v0.8 (txn fix + GM hidden)' + (assetV ? ' / assets ' + assetV : '');
     }
 
     window.addEventListener('popstate', function () {
