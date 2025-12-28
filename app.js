@@ -1505,13 +1505,45 @@
       route();
     });
 
-    ensureUrlHasCacheBuster();
-    route();
+    try {
+      ensureUrlHasCacheBuster();
+    } catch (e1) {
+      // Some environments can throw on history.pushState; ignore and continue.
+      try {
+        if (typeof console !== 'undefined' && console && console.warn) console.warn('ensureUrlHasCacheBuster failed', e1);
+      } catch (e2) {
+        // ignore
+      }
+    }
+
+    try {
+      route();
+    } catch (e3) {
+      try {
+        if (typeof console !== 'undefined' && console && console.error) console.error('route failed', e3);
+      } catch (e4) {
+        // ignore
+      }
+      var v2 = document.getElementById('view');
+      if (v2) {
+        v2.innerHTML =
+          '<div class="stack"><div class="badge">エラー</div><div class="big">起動できません</div><div class="muted">詳細: ' +
+          escapeHtml((e3 && e3.message) || String(e3)) +
+          '</div></div>';
+      }
+    }
   } catch (e) {
+    try {
+      if (typeof console !== 'undefined' && console && console.error) console.error('boot failed', e);
+    } catch (e5) {
+      // ignore
+    }
     var el = document.getElementById('view');
     if (el) {
       el.innerHTML =
-        '<div class="stack"><div class="badge">エラー</div><div class="big">起動できません</div><div class="muted">この端末のブラウザが古い可能性があります。</div></div>';
+        '<div class="stack"><div class="badge">エラー</div><div class="big">起動できません</div><div class="muted">この端末のブラウザが古い可能性があります。</div><div class="muted">詳細: ' +
+        escapeHtml((e && e.message) || String(e)) +
+        '</div></div>';
     }
   }
 })();
