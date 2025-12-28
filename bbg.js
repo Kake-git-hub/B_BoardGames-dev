@@ -2287,7 +2287,8 @@
           team: room.firstTeam || (room.turn && room.turn.team) || 'red',
           status: 'awaiting_clue',
           guessesLeft: 0,
-          clue: { word: '', number: 0, by: '', at: 0 }
+          clue: { word: '', number: 0, by: '', at: 0 },
+          pending: {}
         }),
         result: { winner: '', finishedAt: 0, reason: '' }
       });
@@ -2314,9 +2315,42 @@
           team: room.turn.team,
           status: 'guessing',
           guessesLeft: n + 1,
-          clue: { word: w, number: n, by: playerId, at: serverNowMs() }
+          clue: { word: w, number: n, by: playerId, at: serverNowMs() },
+          pending: {}
         }
       });
+    });
+  }
+
+  function toggleCodenamesPending(roomId, playerId, index) {
+    var base = codenamesRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'playing') return room;
+      if (!room.board || !room.board.words || !room.board.revealed) return room;
+      if (!room.turn || room.turn.status !== 'guessing') return room;
+
+      var idx = parseIntSafe(index, -1);
+      if (idx < 0 || idx >= room.board.words.length) return room;
+      if (room.board.revealed[idx]) return room;
+
+      var player = room.players && room.players[playerId] ? room.players[playerId] : null;
+      if (!player || player.role !== 'operative') return room;
+      if (player.team !== room.turn.team) return room;
+
+      var pending = assign({}, (room.turn && room.turn.pending) || {});
+      var k = String(idx);
+      if (pending[k]) {
+        try {
+          delete pending[k];
+        } catch (e) {
+          pending[k] = null;
+        }
+      } else {
+        pending[k] = { by: playerId, at: serverNowMs() };
+      }
+
+      return assign({}, room, { turn: assign({}, room.turn, { pending: pending }) });
     });
   }
 
@@ -2332,7 +2366,8 @@
           team: nextTeam,
           status: 'awaiting_clue',
           guessesLeft: 0,
-          clue: { word: '', number: 0, by: '', at: 0 }
+          clue: { word: '', number: 0, by: '', at: 0 },
+          pending: {}
         }
       });
     });
@@ -2385,6 +2420,7 @@
       if (winner) {
         nextRoom.phase = 'finished';
         nextRoom.result = { winner: winner, finishedAt: serverNowMs(), reason: reason };
+        nextRoom.turn = assign({}, room.turn || {}, { pending: {} });
         return nextRoom;
       }
 
@@ -2399,7 +2435,8 @@
           team: nextTeam,
           status: 'awaiting_clue',
           guessesLeft: 0,
-          clue: { word: '', number: 0, by: '', at: 0 }
+          clue: { word: '', number: 0, by: '', at: 0 },
+          pending: {}
         };
         return nextRoom;
       }
@@ -2411,12 +2448,13 @@
           team: nt,
           status: 'awaiting_clue',
           guessesLeft: 0,
-          clue: { word: '', number: 0, by: '', at: 0 }
+          clue: { word: '', number: 0, by: '', at: 0 },
+          pending: {}
         };
         return nextRoom;
       }
 
-      nextRoom.turn = assign({}, room.turn, { guessesLeft: left });
+      nextRoom.turn = assign({}, room.turn, { guessesLeft: left, pending: {} });
       return nextRoom;
     });
   }
@@ -3153,12 +3191,12 @@
     var room = opts.room;
     var player = opts.player;
     var isHost = !!opts.isHost;
-    var ui = opts.ui || {};
-    var pendingIdx = ui && ui.pendingIdx != null ? ui.pendingIdx : null;
 
     var phase = (room && room.phase) || 'lobby';
     var myTeam = player && player.team ? player.team : '';
     var myRole = player && player.role ? player.role : '';
+
+    var pendingObj = (room && room.turn && room.turn.pending) || {};
 
     var board = room && room.board ? room.board : null;
     var size = board && board.size ? board.size : 5;
@@ -3188,6 +3226,38 @@
 
     var lobbyHtml = '';
     if (phase === 'lobby') {
+      var playersHtml = '';
+      try {
+        var ps = (room && room.players) || {};
+        var pkeys = Object.keys(ps);
+        if (pkeys.length) {
+          pkeys.sort(function (a, b) {
+            var pa = ps[a] || {};
+            var pb = ps[b] || {};
+            var aa = pa.joinedAt || 0;
+            var bb = pb.joinedAt || 0;
+            return aa - bb;
+          });
+          for (var pi = 0; pi < pkeys.length; pi++) {
+            var id = pkeys[pi];
+            var p = ps[id] || {};
+            var nm = escapeHtml(formatPlayerDisplayName(p) || '-');
+            var t = p.team === 'red' ? '赤' : p.team === 'blue' ? '青' : '未選択';
+            var r = p.role === 'spymaster' ? 'スパイマスター' : p.role === 'operative' ? '諜報員' : '未選択';
+            var hostMark = p.isHost ? ' <span class="badge">GM</span>' : '';
+            playersHtml += '<div class="kv"><span class="muted">' + nm + hostMark + '</span><b>' + escapeHtml(t + ' / ' + r) + '</b></div>';
+          }
+        } else {
+          playersHtml = '<div class="muted">まだ参加者がいません。</div>';
+        }
+      } catch (e) {
+        playersHtml = '<div class="muted">参加者一覧を表示できませんでした。</div>';
+      }
+
+      var counts = countCodenamesRoles(room);
+      var canStart = counts.redSpymaster === 1 && counts.blueSpymaster === 1 && counts.redOperative >= 1 && counts.blueOperative >= 1;
+      var isGm = !!(player && player.isHost);
+
       lobbyHtml =
         '<div class="stack">' +
         '<div class="big">待機中</div>' +
@@ -3197,7 +3267,24 @@
         '<div class="field"><label>役職</label>' +
         '<select id="cnRole"><option value="">未選択</option><option value="spymaster">スパイマスター</option><option value="operative">諜報員</option></select></div>' +
         '<button id="cnSavePrefs" class="primary">保存</button>' +
-        (isHost ? '<div class="muted">※ スタートはQR配布画面（ホスト）から行います。</div>' : '') +
+        (isGm
+          ? '<hr />' +
+            '<div class="muted">準備: 赤/青それぞれスパイマスター1人＋諜報員1人以上</div>' +
+            '<div class="kv"><span class="muted">赤</span><b>スパイマスター ' +
+            counts.redSpymaster +
+            ' / 諜報員 ' +
+            counts.redOperative +
+            '</b></div>' +
+            '<div class="kv"><span class="muted">青</span><b>スパイマスター ' +
+            counts.blueSpymaster +
+            ' / 諜報員 ' +
+            counts.blueOperative +
+            '</b></div>' +
+            (canStart ? '<button id="cnStartFromPlayer" class="primary">スタート</button>' : '<button class="primary" disabled>スタート</button>')
+          : (isHost ? '<div class="muted">※ スタートはGMが行います。</div>' : '')) +
+        '<hr />' +
+        '<div class="big">参加者（登録状況）</div>' +
+        playersHtml +
         '</div>';
     }
 
@@ -3240,7 +3327,7 @@
         var isRev = !!revealed[i];
         var k = key[i];
         var cls = codenamesCellClass(k, isRev || (showKey && phase === 'playing'));
-        if (!isRev && pendingIdx != null && String(pendingIdx) === String(i)) cls += ' cn-pending';
+        if (!isRev && pendingObj && pendingObj[String(i)]) cls += ' cn-pending';
         var disabled = phase !== 'playing' || isRev || myRole !== 'operative' || !myTeam || !room.turn || room.turn.team !== myTeam || room.turn.status !== 'guessing';
         var tagStart = disabled ? '<button class="' + cls + '" disabled>' : '<button class="' + cls + ' cnPick" data-idx="' + i + '">';
         cells += tagStart + '<span class="cn-word">' + escapeHtml(word) + '</span></button>';
@@ -4808,7 +4895,6 @@
   function routeCodenamesPlayer(roomId, isHost) {
     var playerId = getOrCreateCodenamesPlayerId(roomId);
     var unsub = null;
-    var ui = { pendingIdx: null };
 
     firebaseReady()
       .then(function () {
@@ -4819,7 +4905,7 @@
           }
 
           var player = room.players ? room.players[playerId] : null;
-          renderCodenamesPlayer(viewEl, { roomId: roomId, playerId: playerId, room: room, player: player, isHost: isHost, ui: ui });
+          renderCodenamesPlayer(viewEl, { roomId: roomId, playerId: playerId, room: room, player: player, isHost: isHost });
 
           var saveBtn = document.getElementById('cnSavePrefs');
           if (saveBtn && !saveBtn.__cn_bound) {
@@ -4835,11 +4921,20 @@
             });
           }
 
+          var startFromPlayerBtn = document.getElementById('cnStartFromPlayer');
+          if (startFromPlayerBtn && !startFromPlayerBtn.__cn_bound) {
+            startFromPlayerBtn.__cn_bound = true;
+            startFromPlayerBtn.addEventListener('click', function () {
+              startCodenamesGame(roomId).catch(function (e) {
+                alert((e && e.message) || '失敗');
+              });
+            });
+          }
+
           var contBtn = document.getElementById('cnContinue');
           if (contBtn && !contBtn.__cn_bound) {
             contBtn.__cn_bound = true;
             contBtn.addEventListener('click', function () {
-              ui.pendingIdx = null;
               resetCodenamesToLobby(roomId).catch(function (e) {
                 alert((e && e.message) || '失敗');
               });
@@ -4850,7 +4945,6 @@
           if (changeBtn && !changeBtn.__cn_bound) {
             changeBtn.__cn_bound = true;
             changeBtn.addEventListener('click', function () {
-              ui.pendingIdx = null;
               resetCodenamesForNewPlayers(roomId, playerId)
                 .then(function () {
                   var q = {};
@@ -4892,33 +4986,8 @@
             });
           }
 
-          function syncPendingClasses() {
-            var btns = document.querySelectorAll('.cnPick');
-            for (var bi = 0; bi < btns.length; bi++) {
-              var bb = btns[bi];
-              if (!bb || !bb.classList) continue;
-              bb.classList.remove('cn-pending');
-            }
-            if (ui.pendingIdx == null) return;
-            var sel = '.cnPick[data-idx="' + String(ui.pendingIdx) + '"]';
-            var p = null;
-            try {
-              p = document.querySelector(sel);
-            } catch (e) {
-              p = null;
-            }
-            if (p && p.classList) p.classList.add('cn-pending');
-          }
-
-          function togglePending(idx) {
-            if (idx == null) return;
-            ui.pendingIdx = String(ui.pendingIdx) === String(idx) ? null : idx;
-            syncPendingClasses();
-          }
-
           function confirmPick(idx) {
             if (idx == null) return;
-            ui.pendingIdx = null;
             revealCodenamesCard(roomId, playerId, idx).catch(function (e) {
               alert((e && e.message) || '失敗');
             });
@@ -4958,7 +5027,9 @@
                 }
                 if (ev && ev.preventDefault) ev.preventDefault();
                 var idx = getIdxFromEvent(ev);
-                togglePending(idx);
+                toggleCodenamesPending(roomId, playerId, idx).catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                });
               });
 
               if (typeof PointerEvent !== 'undefined') {
@@ -5014,7 +5085,6 @@
             })(b);
           }
 
-          syncPendingClasses();
         });
       })
       .then(function (u) {
