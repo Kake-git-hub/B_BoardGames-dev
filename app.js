@@ -1853,7 +1853,7 @@
             var playerId = getOrCreatePlayerId(roomId);
             return joinPlayerInRoom(roomId, playerId, settings.gmName, true).then(function (room) {
               if (!room || !room.players || !room.players[playerId]) {
-                throw new Error('GMの参加に失敗しました');
+                throw new Error('ゲームマスターの参加に失敗しました');
               }
               return room;
             });
