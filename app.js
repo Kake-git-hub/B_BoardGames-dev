@@ -465,7 +465,6 @@
       createdAt: nowMs(),
       phase: 'lobby',
       settings: {
-        playerLimit: settings.playerLimit,
         minorityCount: settings.minorityCount,
         talkSeconds: settings.talkSeconds,
         reversal: settings.reversal
@@ -497,35 +496,64 @@
     return setValue(base, room);
   }
 
-  function upsertPlayer(roomId, playerId, name) {
-    var path = playerPath(roomId, playerId);
-    return runTxn(path, function (current) {
-      var base = current || {};
-      var out = {
-        name: name,
-        joinedAt: base.joinedAt || nowMs(),
-        lastSeenAt: nowMs()
-      };
-      // Realtime Database cannot store `undefined`.
-      if (base.role != null) out.role = base.role;
-      return out;
-    });
-  }
-
-  function startGameAssignRoles(roomId) {
+  function joinPlayerInRoom(roomId, playerId, name) {
     var base = roomPath(roomId);
     return runTxn(base, function (room) {
       if (!room) return room;
       if (room.phase !== 'lobby') return room;
 
-      var playersObj = room.players || {};
-      var playerIds = Object.keys(playersObj);
-      var limit = room.settings && room.settings.playerLimit ? room.settings.playerLimit : 0;
-      var minorityCount = room.settings && room.settings.minorityCount ? room.settings.minorityCount : 1;
+      var players = assign({}, room.players || {});
+      var prev = players[playerId] || {};
+      players[playerId] = assign({}, prev, {
+        name: name,
+        joinedAt: prev.joinedAt || nowMs(),
+        lastSeenAt: nowMs()
+      });
 
-      if (limit <= 0 || playerIds.length < limit) return room;
+      return assign({}, room, { players: players });
+    });
+  }
 
-      var shuffled = playerIds.slice();
+  function listActivePlayerIds(room) {
+    var playersObj = (room && room.players) || {};
+    var keys = Object.keys(playersObj);
+    var out = [];
+    for (var i = 0; i < keys.length; i++) {
+      var id = keys[i];
+      var p = playersObj[id];
+      if (!p) continue;
+      if (p.role === 'spectator') continue;
+      out.push(id);
+    }
+    return out;
+  }
+
+  function isVotingComplete(room) {
+    var ids = listActivePlayerIds(room);
+    if (!ids.length) return false;
+    var votes = (room && room.votes) || {};
+    for (var i = 0; i < ids.length; i++) {
+      var voterId = ids[i];
+      var v = votes[voterId];
+      if (!v || !v.to) return false;
+    }
+    return true;
+  }
+
+  function startGame(roomId) {
+    var base = roomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'lobby') return room;
+
+      var ids = listActivePlayerIds(room);
+      if (ids.length < 3) return room;
+
+      var talkSeconds = room.settings && room.settings.talkSeconds != null ? room.settings.talkSeconds : 180;
+      var minorityCount = room.settings && room.settings.minorityCount != null ? room.settings.minorityCount : 1;
+      minorityCount = clamp(minorityCount, 1, Math.max(1, ids.length - 1));
+
+      var shuffled = ids.slice();
       for (var i = shuffled.length - 1; i > 0; i--) {
         var j = Math.floor(Math.random() * (i + 1));
         var tmp = shuffled[i];
@@ -533,49 +561,60 @@
         shuffled[j] = tmp;
       }
 
-      var ids = shuffled.slice(0, limit);
       var minoritySet = {};
-      for (var k = 0; k < minorityCount; k++) minoritySet[ids[k]] = true;
+      for (var k = 0; k < minorityCount; k++) minoritySet[shuffled[k]] = true;
 
-      var nextPlayers = assign({}, playersObj);
-      var keys = Object.keys(nextPlayers);
-      for (var m = 0; m < keys.length; m++) {
-        var id = keys[m];
-        var p = nextPlayers[id] || {};
-        if (ids.indexOf(id) === -1) {
-          nextPlayers[id] = assign({}, p, { role: 'spectator' });
-        } else {
-          nextPlayers[id] = assign({}, p, { role: minoritySet[id] ? 'minority' : 'majority' });
-        }
+      var nextPlayers = assign({}, room.players || {});
+      for (var m = 0; m < ids.length; m++) {
+        var pid = ids[m];
+        var p = nextPlayers[pid] || {};
+        nextPlayers[pid] = assign({}, p, { role: minoritySet[pid] ? 'minority' : 'majority' });
       }
 
-      return assign({}, room, { phase: 'assigned', players: nextPlayers });
-    });
-  }
-
-  function startDiscussion(roomId) {
-    var base = roomPath(roomId);
-    return runTxn(base, function (room) {
-      if (!room) return room;
-      if (room.phase !== 'assigned') return room;
-      var talkSeconds = room.settings && room.settings.talkSeconds != null ? room.settings.talkSeconds : 180;
       var startedAt = nowMs();
       return assign({}, room, {
         phase: 'discussion',
-        discussion: { startedAt: startedAt, endsAt: startedAt + talkSeconds * 1000 }
+        players: nextPlayers,
+        discussion: { startedAt: startedAt, endsAt: startedAt + talkSeconds * 1000 },
+        voting: { startedAt: 0, revealedAt: 0 },
+        votes: {},
+        reveal: { revealedAt: 0 },
+        guess: {
+          enabled: !!(room.settings && room.settings.reversal),
+          submittedAt: 0,
+          guessText: '',
+          correct: null
+        }
       });
     });
   }
 
-  function startVoting(roomId) {
+  function autoStartVotingIfEnded(roomId) {
     var base = roomPath(roomId);
     return runTxn(base, function (room) {
       if (!room) return room;
       if (room.phase !== 'discussion') return room;
+      var endAt = room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
+      if (!endAt) return room;
+      if (nowMs() < endAt) return room;
       return assign({}, room, {
         phase: 'voting',
         voting: { startedAt: nowMs(), revealedAt: 0 },
         votes: {}
+      });
+    });
+  }
+
+  function revealAfterVoting(roomId) {
+    var base = roomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'voting') return room;
+      if (!isVotingComplete(room)) return room;
+      var reversal = !!(room.settings && room.settings.reversal);
+      return assign({}, room, {
+        phase: reversal ? 'guess' : 'finished',
+        reveal: { revealedAt: nowMs() }
       });
     });
   }
@@ -596,33 +635,14 @@
     });
   }
 
-  function revealVoteResult(roomId) {
-    var base = roomPath(roomId);
-    return runTxn(base, function (room) {
-      if (!room) return room;
-      if (room.phase !== 'voting') return room;
-      var voting = assign({}, room.voting || {}, { revealedAt: nowMs() });
-      return assign({}, room, { phase: 'voteResult', voting: voting });
-    });
-  }
-
-  function reveal(roomId) {
-    var base = roomPath(roomId);
-    return runTxn(base, function (room) {
-      if (!room) return room;
-      if (room.phase !== 'discussion' && room.phase !== 'assigned' && room.phase !== 'voteResult') return room;
-      return assign({}, room, {
-        phase: room.settings && room.settings.reversal ? 'guess' : 'finished',
-        reveal: { revealedAt: nowMs() }
-      });
-    });
-  }
-
-  function submitGuess(roomId, guessText) {
+  function submitGuess(roomId, playerId, guessText) {
     var base = roomPath(roomId);
     return runTxn(base, function (room) {
       if (!room) return room;
       if (room.phase !== 'guess') return room;
+      var playersObj = room.players || {};
+      var me = playersObj[playerId];
+      if (!me || me.role !== 'minority') return room;
       var majorityWord = String((room.words && room.words.majority) || '').trim();
       var gt = String(guessText || '').trim();
       var correct = gt.length > 0 && majorityWord.length > 0 && gt === majorityWord;
@@ -799,7 +819,7 @@
   function renderCreate(viewEl) {
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">部屋を作成</div>\n\n      <div class="field">\n        <label>参加人数（ゲームマスター含む）</label>\n        <input id="playerLimit" type="number" min="3" max="30" value="6" />\n      </div>\n\n      <div class="field">\n        <label>少数側の人数</label>\n        <input id="minorityCount" type="number" min="1" max="10" value="1" />\n      </div>\n\n      <div class="field">\n        <label>トーク時間（秒）</label>\n        <input id="talkSeconds" type="number" min="30" max="1800" value="180" />\n      </div>\n\n      <div class="field">\n        <label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>\n        <select id="reversal">\n          <option value="1" selected>あり</option>\n          <option value="0">なし</option>\n        </select>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>お題カテゴリ（ランダム出題）</label>\n        <div class="row">\n          <select id="topicCategory"></select>\n          <button id="pickRandom" class="ghost">ランダム出題</button>\n        </div>\n        <div class="muted">※ 手入力でもOKです。</div>\n      </div>\n\n      <div class="field">\n        <label>多数側ワード</label>\n        <input id="majorityWord" placeholder="例: カレー" />\n      </div>\n\n      <div class="field">\n        <label>少数側ワード</label>\n        <input id="minorityWord" placeholder="例: シチュー" />\n      </div>\n\n      <hr />\n\n      <div class="row">\n        <button id="createRoom" class="primary">作成してQRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">部屋を作成</div>\n\n      <div class="field">\n        <label>GMの名前（表示用）</label>\n        <input id="gmName" placeholder="例: たろう" />\n      </div>\n\n      <div class="field">\n        <label>少数側の人数</label>\n        <input id="minorityCount" type="number" min="1" max="10" value="1" />\n      </div>\n\n      <div class="field">\n        <label>トーク時間（秒）</label>\n        <input id="talkSeconds" type="number" min="30" max="1800" value="180" />\n      </div>\n\n      <div class="field">\n        <label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>\n        <select id="reversal">\n          <option value="1" selected>あり</option>\n          <option value="0">なし</option>\n        </select>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>お題カテゴリ（ランダム出題）</label>\n        <div class="row">\n          <select id="topicCategory"></select>\n          <button id="pickRandom" class="ghost">ランダム出題</button>\n        </div>\n        <div class="muted">※ 手入力でもOKです。</div>\n      </div>\n\n      <div class="field">\n        <label>多数側ワード</label>\n        <input id="majorityWord" placeholder="例: カレー" />\n      </div>\n\n      <div class="field">\n        <label>少数側ワード</label>\n        <input id="minorityWord" placeholder="例: シチュー" />\n      </div>\n\n      <hr />\n\n      <div class="row">\n        <button id="createRoom" class="primary">作成してQRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
     );
 
     var sel = document.getElementById('topicCategory');
@@ -814,14 +834,14 @@
   }
 
   function readCreateForm() {
-    var pl = document.getElementById('playerLimit');
+    var gn = document.getElementById('gmName');
     var mc = document.getElementById('minorityCount');
     var ts = document.getElementById('talkSeconds');
     var rv = document.getElementById('reversal');
     var mj = document.getElementById('majorityWord');
     var mn = document.getElementById('minorityWord');
 
-    var playerLimit = clamp(parseIntSafe(pl && pl.value, 6), 3, 30);
+    var gmName = String((gn && gn.value) || '').trim();
     var minorityCount = clamp(parseIntSafe(mc && mc.value, 1), 1, 10);
     var talkSeconds = clamp(parseIntSafe(ts && ts.value, 180), 30, 1800);
     var reversal = ((rv && rv.value) || '1') === '1';
@@ -829,12 +849,12 @@
     var majorityWord = String((mj && mj.value) || '').trim();
     var minorityWord = String((mn && mn.value) || '').trim();
 
-    if (minorityCount >= playerLimit) throw new Error('少数側人数は参加人数より小さくしてください。');
+    if (!gmName) throw new Error('GMの名前を入力してください。');
     if (!majorityWord) throw new Error('多数側ワードを入力してください。');
     if (!minorityWord) throw new Error('少数側ワードを入力してください。');
 
     return {
-      playerLimit: playerLimit,
+      gmName: gmName,
       minorityCount: minorityCount,
       talkSeconds: talkSeconds,
       reversal: reversal,
@@ -866,7 +886,11 @@
     var room = opts.room;
 
     var playerCount = room && room.players ? Object.keys(room.players).length : 0;
-    var limit = room && room.settings && room.settings.playerLimit != null ? room.settings.playerLimit : 0;
+    var phase = (room && room.phase) || '-';
+
+    var actionHtml = '';
+    if (phase === 'lobby') actionHtml = '<button id="startGame" class="primary">スタート（トーク開始）</button>';
+    if (phase === 'voting') actionHtml = '<button id="revealNext" class="primary">次へ進む（結果開示）</button>';
 
     render(
       viewEl,
@@ -874,13 +898,13 @@
         escapeHtml(joinUrl) +
         '</div>\n      </div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
         playerCount +
-        ' / ' +
-        limit +
         '</b></div>\n      <div class="kv"><span class="muted">フェーズ</span><b>' +
-        escapeHtml((room && room.phase) || '-') +
+        escapeHtml(phase) +
         '</b></div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="row">\n          <button id="copyJoin" class="ghost">URLコピー</button>\n          <a class="badge" href="' +
         escapeHtml(hostUrl) +
-        '">この端末をGMモードで開く</a>\n        </div>\n\n        <div class="row">\n          <button id="hostJoin" class="primary">GMも参加（名前入力へ）</button>\n          <button id="startAssign" class="ghost">役職配布（全員揃ったら）</button>\n        </div>\n\n        <div class="row">\n          <button id="startDiscussion" class="ghost">トーク開始</button>\n          <button id="reveal" class="danger">開示（少数側発表）</button>\n        </div>\n\n        <div class="row">\n          <button id="startVoting" class="ghost">投票開始</button>\n          <button id="revealVotes" class="ghost">集計して開示</button>\n        </div>\n      </div>\n\n      <div class="muted">※ 役職配布→トーク開始→投票→集計→開示 の順に進めます。</div>\n    </div>\n  '
+        '">この端末をGMモードで開く</a>\n        </div>\n\n        <div class="row">\n          ' +
+        actionHtml +
+        '\n        </div>\n      </div>\n\n      <div class="muted">※ スタートでトーク開始。時間終了で全員が投票へ進みます。投票完了後、GMが次へ進むで結果開示。</div>\n    </div>\n  '
     );
   }
 
@@ -949,36 +973,37 @@
 
     var votingHtml = '';
     if (phase === 'voting') {
-      var options = '';
-      for (var oi = 0; oi < activePlayers.length; oi++) {
-        var ap2 = activePlayers[oi];
-        if (ap2.id === playerId) continue;
-        options +=
-          '<option value="' +
-          escapeHtml(ap2.id) +
-          '" ' +
-          (ap2.id === votedTo ? 'selected' : '') +
-          '>' +
-          escapeHtml(ap2.name) +
-          '</option>';
-      }
+      if (votedTo) {
+        votingHtml =
+          '<div class="stack">' +
+          '<div class="big">投票</div>' +
+          '<div class="muted">投票済み。結果開示を待ってください。</div>' +
+          '</div>';
+      } else {
+        var options = '';
+        for (var oi = 0; oi < activePlayers.length; oi++) {
+          var ap2 = activePlayers[oi];
+          if (ap2.id === playerId) continue;
+          options += '<option value="' + escapeHtml(ap2.id) + '">' + escapeHtml(ap2.name) + '</option>';
+        }
 
-      votingHtml =
-        '<div class="stack">' +
-        '<div class="big">投票</div>' +
-        '<div class="muted">少数側だと思う人を選んで投票します。</div>' +
-        '<div class="row">' +
-        '<select id="voteTo"><option value="">選択…</option>' +
-        options +
-        '</select>' +
-        '<button id="submitVote" class="primary">投票</button>' +
-        '</div>' +
-        (votedTo ? '<div class="muted">投票済み</div>' : '<div class="muted">未投票</div>') +
-        '</div>';
+        votingHtml =
+          '<div class="stack">' +
+          '<div class="big">投票</div>' +
+          '<div class="muted">少数側だと思う人を選んで投票します。</div>' +
+          '<div class="row">' +
+          '<select id="voteTo"><option value="">選択…</option>' +
+          options +
+          '</select>' +
+          '<button id="submitVote" class="primary">投票</button>' +
+          '</div>' +
+          '<div class="muted">未投票</div>' +
+          '</div>';
+      }
     }
 
     var voteResultHtml = '';
-    if (phase === 'voteResult' || phase === 'finished') {
+    if (phase === 'finished') {
       var rows = '';
       for (var ti = 0; ti < tally.length; ti++) {
         var r = tally[ti];
@@ -987,13 +1012,28 @@
       voteResultHtml = '<hr /><div class="muted">投票結果（得票数）</div><div class="stack">' + rows + '</div>';
     }
 
+    var minorityNames = [];
+    for (var mi = 0; mi < activePlayers.length; mi++) {
+      var apm = activePlayers[mi];
+      var pr = players[apm.id] && players[apm.id].role;
+      if (pr === 'minority') minorityNames.push(apm.name);
+    }
+    var minorityLine = minorityNames.length ? minorityNames.join(' / ') : '（未確定）';
+
     var guessHtml = '';
     if (phase === 'guess') {
       guessHtml =
         '<div class="stack">' +
+        '<div class="big">開示</div>' +
+        '<div class="kv"><span class="muted">少数側</span><b>' +
+        escapeHtml(minorityLine) +
+        '</b></div>' +
+        '<hr />' +
         '<div class="muted">逆転あり: 少数側は多数側ワードを入力</div>' +
-        '<div class="row"><input id="guessText" placeholder="多数側ワード" />' +
-        '<button id="submitGuess" class="primary">確定</button></div>' +
+        (role === 'minority'
+          ? '<div class="row"><input id="guessText" placeholder="多数側ワード" />' +
+            '<button id="submitGuess" class="primary">確定</button></div>'
+          : '<div class="muted">少数側の入力を待っています…</div>') +
         '</div>';
     }
 
@@ -1012,6 +1052,9 @@
       finishedHtml =
         '<div class="stack">' +
         '<div class="big">結果</div>' +
+        '<div class="kv"><span class="muted">少数側</span><b>' +
+        escapeHtml(minorityLine) +
+        '</b></div>' +
         '<div class="kv"><span class="muted">多数側ワード</span><b>' +
         escapeHtml(mj) +
         '</b></div>' +
@@ -1046,18 +1089,10 @@
         escapeHtml(formatMMSS(remain)) +
         '</div>\n      </div>\n\n      ' +
         votingHtml +
-        (phase === 'voteResult' ? '<div class="stack"><div class="big">投票結果</div>' + voteResultHtml + '</div>' : '') +
         guessHtml +
         finishedHtml +
-        (phase !== 'finished' ? voteResultHtml : '') +
         '\n\n      <div class="row">\n        <a class="btn ghost" href="./">ホームへ</a>\n      </div>\n    </div>\n  '
     );
-  }
-
-  // -------------------- main (router) --------------------
-  var viewEl = null;
-
-  function makeJoinUrl(roomId) {
     var q = {};
     var v = getCacheBusterParam();
     if (v) q.v = v;
@@ -1157,6 +1192,15 @@
             return createRoom(roomId, settings);
           })
           .then(function () {
+            var playerId = getOrCreatePlayerId(roomId);
+            return joinPlayerInRoom(roomId, playerId, settings.gmName).then(function (room) {
+              if (!room || !room.players || !room.players[playerId]) {
+                throw new Error('GMの参加に失敗しました');
+              }
+              return room;
+            });
+          })
+          .then(function () {
             var q = {};
             var v = getCacheBusterParam();
             if (v) q.v = v;
@@ -1189,7 +1233,10 @@
       firebaseReady()
         .then(function () {
           var playerId = getOrCreatePlayerId(roomId);
-          return upsertPlayer(roomId, playerId, form.name).then(function () {
+          return joinPlayerInRoom(roomId, playerId, form.name).then(function (room) {
+            if (!room || !room.players || !room.players[playerId]) {
+              throw new Error('参加できません（ゲームが開始済みです）');
+            }
             return playerId;
           });
         })
@@ -1297,57 +1344,18 @@
       renderHostQr(viewEl, { roomId: roomId, joinUrl: joinUrl, hostUrl: hostUrl, room: room });
       drawQr();
 
-      var hostJoin = document.getElementById('hostJoin');
-      if (hostJoin)
-        hostJoin.addEventListener('click', function () {
-          var q = {};
-          var v = getCacheBusterParam();
-          if (v) q.v = v;
-          q.room = roomId;
-          q.host = '1';
-          q.screen = 'join';
-          setQuery(q);
-          if (unsub) unsub();
-          route();
-        });
-
-      var startAssign = document.getElementById('startAssign');
-      if (startAssign)
-        startAssign.addEventListener('click', function () {
-          startGameAssignRoles(roomId).catch(function (e) {
+      var startGameBtn = document.getElementById('startGame');
+      if (startGameBtn)
+        startGameBtn.addEventListener('click', function () {
+          startGame(roomId).catch(function (e) {
             alert((e && e.message) || '失敗');
           });
         });
 
-      var startDiscussionBtn = document.getElementById('startDiscussion');
-      if (startDiscussionBtn)
-        startDiscussionBtn.addEventListener('click', function () {
-          startDiscussion(roomId).catch(function (e) {
-            alert((e && e.message) || '失敗');
-          });
-        });
-
-      var startVotingBtn = document.getElementById('startVoting');
-      if (startVotingBtn)
-        startVotingBtn.addEventListener('click', function () {
-          startVoting(roomId).catch(function (e) {
-            alert((e && e.message) || '失敗');
-          });
-        });
-
-      var revealVotesBtn = document.getElementById('revealVotes');
-      if (revealVotesBtn)
-        revealVotesBtn.addEventListener('click', function () {
-          revealVoteResult(roomId).catch(function (e) {
-            alert((e && e.message) || '失敗');
-          });
-        });
-
-      var revealBtn = document.getElementById('reveal');
-      if (revealBtn)
-        revealBtn.addEventListener('click', function () {
-          if (!confirm('少数側を開示します。よいですか？')) return;
-          reveal(roomId).catch(function (e) {
+      var revealNextBtn = document.getElementById('revealNext');
+      if (revealNextBtn)
+        revealNextBtn.addEventListener('click', function () {
+          revealAfterVoting(roomId).catch(function (e) {
             alert((e && e.message) || '失敗');
           });
         });
@@ -1391,6 +1399,7 @@
     var playerId = getOrCreatePlayerId(roomId);
     var unsub = null;
     var timerHandle = null;
+    var autoVoteRequested = false;
 
     function rerenderTimer(room) {
       var el = document.getElementById('timer');
@@ -1411,9 +1420,18 @@
           var player = room.players ? room.players[playerId] : null;
           renderPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost });
 
+          if ((room && room.phase) !== 'discussion') autoVoteRequested = false;
+
           if (timerHandle) clearInterval(timerHandle);
           timerHandle = setInterval(function () {
             rerenderTimer(room);
+            if (!autoVoteRequested && room && room.phase === 'discussion') {
+              var endAt = room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
+              if (endAt && nowMs() >= endAt) {
+                autoVoteRequested = true;
+                autoStartVotingIfEnded(roomId);
+              }
+            }
           }, 250);
 
           var submitGuessBtn = document.getElementById('submitGuess');
@@ -1422,7 +1440,7 @@
               var el = document.getElementById('guessText');
               var guessText = String((el && el.value) || '').trim();
               if (!guessText) return;
-              submitGuess(roomId, guessText).catch(function (e) {
+              submitGuess(roomId, playerId, guessText).catch(function (e) {
                 alert((e && e.message) || '失敗');
               });
             });
@@ -1480,7 +1498,7 @@
     var buildInfoEl = document.querySelector('#buildInfo');
     if (buildInfoEl) {
       var assetV = getCacheBusterParam();
-      buildInfoEl.textContent = 'v0.8 (txn fix + GM hidden)' + (assetV ? ' / assets ' + assetV : '');
+      buildInfoEl.textContent = 'v0.9 (gm-first + auto vote + reveal flow)' + (assetV ? ' / assets ' + assetV : '');
     }
 
     window.addEventListener('popstate', function () {
