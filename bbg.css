@@ -76,6 +76,10 @@ hr{border:none;border-top:1px solid var(--line);margin:12px 0}
   background:var(--card);
   color:var(--text);
   min-height:44px;
+  -webkit-touch-callout:none;
+  -webkit-user-select:none;
+  user-select:none;
+  touch-action:manipulation;
 }
 .cn-card:disabled{opacity:1}
 .cn-word{display:block;font-weight:800;font-size:12px;word-break:break-word;line-height:1.1}

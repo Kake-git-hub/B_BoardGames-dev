@@ -116,7 +116,7 @@
 
   // Codenames: long-press duration (ms) to confirm a card pick.
   // Short tap = pending toggle.
-  var CN_LONG_PRESS_MS = 600;
+  var CN_LONG_PRESS_MS = 700;
 
   // Firebase server time correction (helps devices with clock drift / iOS timer lag)
   var _serverTimeOffsetMs = 0;
@@ -2164,6 +2164,91 @@
     });
   }
 
+  function setCodenamesPlayerProfile(roomId, playerId, name, team, role) {
+    var path = codenamesPlayerPath(roomId, playerId);
+    return runTxn(path, function (p) {
+      if (!p) return p;
+      var nm = String(name == null ? '' : name).trim();
+      var t = team === 'red' || team === 'blue' ? team : '';
+      var r = role === 'spymaster' || role === 'operative' ? role : '';
+      return assign({}, p, { name: nm || p.name || '', team: t, role: r, lastSeenAt: serverNowMs() });
+    });
+  }
+
+  function resetCodenamesToLobby(roomId) {
+    var base = codenamesRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+
+      var players = assign({}, room.players || {});
+      var keys = Object.keys(players);
+      for (var i = 0; i < keys.length; i++) {
+        var id = keys[i];
+        var p = players[id];
+        if (!p) continue;
+        players[id] = assign({}, p, { team: '', role: '' });
+      }
+
+      var size = room && room.board && room.board.size ? room.board.size : (room.settings && room.settings.size ? room.settings.size : 5);
+      var total = size * size;
+      var revealed = [];
+      for (var ri = 0; ri < total; ri++) revealed.push(false);
+
+      var key = (room && room.board && room.board.key) || [];
+      var remainRed = 0;
+      var remainBlue = 0;
+      for (var k = 0; k < key.length; k++) {
+        if (key[k] === 'R') remainRed++;
+        if (key[k] === 'B') remainBlue++;
+      }
+
+      return assign({}, room, {
+        phase: 'lobby',
+        players: players,
+        turn: assign({}, room.turn || {}, { status: 'awaiting_clue', guessesLeft: 0, clue: { word: '', number: 0, by: '', at: 0 } }),
+        progress: { redRemaining: remainRed, blueRemaining: remainBlue },
+        result: { winner: '', finishedAt: 0, reason: '' },
+        board: assign({}, room.board || {}, { revealed: revealed })
+      });
+    });
+  }
+
+  function resetCodenamesForNewPlayers(roomId, hostPlayerId) {
+    var base = codenamesRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+
+      var players = assign({}, room.players || {});
+      var host = hostPlayerId ? players[hostPlayerId] : null;
+      var nextPlayers = {};
+      if (host) {
+        nextPlayers[hostPlayerId] = assign({}, host, { team: '', role: '' });
+      }
+
+      var size = room && room.board && room.board.size ? room.board.size : (room.settings && room.settings.size ? room.settings.size : 5);
+      var total = size * size;
+      var revealed = [];
+      for (var ri = 0; ri < total; ri++) revealed.push(false);
+
+      var key = (room && room.board && room.board.key) || [];
+      var remainRed = 0;
+      var remainBlue = 0;
+      for (var k = 0; k < key.length; k++) {
+        if (key[k] === 'R') remainRed++;
+        if (key[k] === 'B') remainBlue++;
+      }
+
+      return assign({}, room, {
+        phase: 'lobby',
+        players: nextPlayers,
+        turn: assign({}, room.turn || {}, { status: 'awaiting_clue', guessesLeft: 0, clue: { word: '', number: 0, by: '', at: 0 } }),
+        progress: { redRemaining: remainRed, blueRemaining: remainBlue },
+        result: { winner: '', finishedAt: 0, reason: '' },
+        board: assign({}, room.board || {}, { revealed: revealed })
+      });
+    });
+  }
+
   function countCodenamesRoles(room) {
     var players = (room && room.players) || {};
     var keys = Object.keys(players);
@@ -2903,7 +2988,7 @@
   function renderHome(viewEl) {
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">B_BoardGames</div>\n      <div class="muted">遊ぶゲームを選びます。</div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">ワードウルフ</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=create">ワードウルフ開始</a>\n          <a class="btn ghost" href="?screen=history">勝敗履歴</a>\n        </div>\n        <div class="muted">参加者はQRを読み取って参加します。</div>\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">コードネーム</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=codenames_create">コードネーム開始</a>\n        </div>\n        <div class="muted">各チームにスパイマスター1人＋当てる側で遊びます。</div>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">B_BoardGames</div>\n      <div class="muted">遊ぶゲームを選びます。</div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">ワードウルフ</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=create">ワードウルフ開始</a>\n          <a class="btn ghost" href="?screen=history">勝敗履歴</a>\n        </div>\n        <div class="muted">参加者はQRを読み取って参加します。</div>\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">コードネーム</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=codenames_create">コードネーム開始</a>\n        </div>\n        <div class="muted">各チームにスパイマスター1人＋諜報員で遊びます。</div>\n      </div>\n    </div>\n  '
     );
   }
 
@@ -2952,6 +3037,8 @@
     var roomId = opts.roomId;
     var joinUrl = opts.joinUrl;
     var room = opts.room;
+    var hostPlayerId = opts.hostPlayerId;
+    var hostPlayer = (room && room.players && hostPlayerId && room.players[hostPlayerId]) || null;
 
     var playerCount = room && room.players ? Object.keys(room.players).length : 0;
     var phase = (room && room.phase) || '-';
@@ -2962,20 +3049,66 @@
     if (phase === 'lobby') {
       actionHtml =
         '<div class="stack">' +
-        '<div class="muted">準備: 赤/青それぞれスパイマスター1人＋当てる側1人以上</div>' +
-        '<div class="kv"><span class="muted">赤</span><b>SM ' +
+        '<div class="muted">準備: 赤/青それぞれスパイマスター1人＋諜報員1人以上</div>' +
+        '<div class="kv"><span class="muted">赤</span><b>スパイマスター ' +
         counts.redSpymaster +
-        ' / OP ' +
+        ' / 諜報員 ' +
         counts.redOperative +
         '</b></div>' +
-        '<div class="kv"><span class="muted">青</span><b>SM ' +
+        '<div class="kv"><span class="muted">青</span><b>スパイマスター ' +
         counts.blueSpymaster +
-        ' / OP ' +
+        ' / 諜報員 ' +
         counts.blueOperative +
         '</b></div>' +
         (canStart ? '<button id="cnStart" class="primary">スタート</button>' : '<button class="primary" disabled>スタート</button>') +
         '</div>';
     }
+
+    var playersHtml = '';
+    try {
+      var ps = (room && room.players) || {};
+      var pkeys = Object.keys(ps);
+      if (pkeys.length) {
+        pkeys.sort(function (a, b) {
+          var pa = ps[a] || {};
+          var pb = ps[b] || {};
+          var aa = pa.joinedAt || 0;
+          var bb = pb.joinedAt || 0;
+          return aa - bb;
+        });
+        for (var pi = 0; pi < pkeys.length; pi++) {
+          var id = pkeys[pi];
+          var p = ps[id] || {};
+          var nm = escapeHtml(formatPlayerDisplayName(p) || '-');
+          var t = p.team === 'red' ? '赤' : p.team === 'blue' ? '青' : '未選択';
+          var r = p.role === 'spymaster' ? 'スパイマスター' : p.role === 'operative' ? '諜報員' : '未選択';
+          var hostMark = p.isHost ? ' <span class="badge">GM</span>' : '';
+          playersHtml += '<div class="kv"><span class="muted">' + nm + hostMark + '</span><b>' + escapeHtml(t + ' / ' + r) + '</b></div>';
+        }
+      } else {
+        playersHtml = '<div class="muted">まだ参加者がいません。</div>';
+      }
+    } catch (e) {
+      playersHtml = '<div class="muted">参加者一覧を表示できませんでした。</div>';
+    }
+
+    var gmName = hostPlayer ? String(hostPlayer.name || '') : '';
+    var gmTeam = hostPlayer ? String(hostPlayer.team || '') : '';
+    var gmRole = hostPlayer ? String(hostPlayer.role || '') : '';
+    var gmHtml =
+      '<hr />' +
+      '<div class="stack">' +
+      '<div class="big">GM（この端末）</div>' +
+      '<div class="field"><label>名前（表示用）</label><input id="cnGmName" placeholder="例: たろう" value="' +
+      escapeHtml(gmName) +
+      '" /></div>' +
+      '<div class="field"><label>チーム</label><select id="cnGmTeam">' +
+      '<option value="">未選択</option><option value="red">赤</option><option value="blue">青</option></select></div>' +
+      '<div class="field"><label>役職</label><select id="cnGmRole">' +
+      '<option value="">未選択</option><option value="spymaster">スパイマスター</option><option value="operative">諜報員</option></select></div>' +
+      '<div class="row"><button id="cnGmSave" class="ghost">保存</button><div class="muted" id="cnGmStatus"></div></div>' +
+      '<div class="muted">※ GMもプレイヤーとして参加します（ここで設定できます）。</div>' +
+      '</div>';
 
     render(
       viewEl,
@@ -2987,10 +3120,23 @@
         playerCount +
         '</b></div>\n      <div class="kv"><span class="muted">フェーズ</span><b>' +
         escapeHtml(phase) +
-        '</b></div>\n\n      <hr />\n\n      ' +
+        '</b></div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="big">参加者（保存状況）</div>\n        ' +
+        playersHtml +
+        '\n      </div>\n\n      ' +
+        gmHtml +
+        '\n\n      <hr />\n\n      ' +
         actionHtml +
         '\n\n      <div class="muted">※ 参加後は各自の画面でチーム/役職を選びます。</div>\n    </div>\n  '
     );
+
+    try {
+      var tsel = document.getElementById('cnGmTeam');
+      if (tsel) tsel.value = gmTeam || '';
+      var rsel = document.getElementById('cnGmRole');
+      if (rsel) rsel.value = gmRole || '';
+    } catch (e) {
+      // ignore
+    }
   }
 
   function codenamesCellClass(key, revealed) {
@@ -3021,7 +3167,7 @@
     var revealed = board && board.revealed ? board.revealed : [];
 
     var nameText = escapeHtml(formatPlayerDisplayName(player));
-    var roleText = myTeam || myRole ? escapeHtml((myTeam === 'red' ? '赤' : myTeam === 'blue' ? '青' : '-') + ' / ' + (myRole === 'spymaster' ? 'スパイマスター' : myRole === 'operative' ? '当てる側' : '-')) : '-';
+    var roleText = myTeam || myRole ? escapeHtml((myTeam === 'red' ? '赤' : myTeam === 'blue' ? '青' : '-') + ' / ' + (myRole === 'spymaster' ? 'スパイマスター' : myRole === 'operative' ? '諜報員' : '-')) : '-';
     var turnTeam = phase === 'playing' && room && room.turn ? room.turn.team : '';
     var turnLabel = turnTeam === 'red' ? '赤' : turnTeam === 'blue' ? '青' : '-';
     var turnCls = 'cn-turn' + (turnTeam === 'red' ? ' cn-turn-red' : turnTeam === 'blue' ? ' cn-turn-blue' : '') + (myTeam && turnTeam && myTeam === turnTeam ? ' cn-turn-active' : '');
@@ -3049,7 +3195,7 @@
         '<div class="field"><label>チーム</label>' +
         '<select id="cnTeam"><option value="">未選択</option><option value="red">赤</option><option value="blue">青</option></select></div>' +
         '<div class="field"><label>役職</label>' +
-        '<select id="cnRole"><option value="">未選択</option><option value="spymaster">スパイマスター</option><option value="operative">当てる側</option></select></div>' +
+        '<select id="cnRole"><option value="">未選択</option><option value="spymaster">スパイマスター</option><option value="operative">諜報員</option></select></div>' +
         '<button id="cnSavePrefs" class="primary">保存</button>' +
         (isHost ? '<div class="muted">※ スタートはQR配布画面（ホスト）から行います。</div>' : '') +
         '</div>';
@@ -3123,13 +3269,16 @@
     if (phase === 'finished') {
       var winner = room && room.result ? room.result.winner : '';
       var wLabel = winner === 'red' ? '赤の勝ち' : winner === 'blue' ? '青の勝ち' : '-';
+      var amHost = !!isHost || !!(player && player.isHost);
       finishedHtml =
         '<div class="stack">' +
         '<div class="big">結果</div>' +
         '<div class="kv"><span class="muted">勝者</span><b>' +
         escapeHtml(wLabel) +
         '</b></div>' +
-        (isHost ? '<div class="row"><a class="btn primary" href="./">次ゲームへ</a></div>' : '') +
+        (amHost
+          ? '<div class="row"><button id="cnContinue" class="primary">継続</button><button id="cnChangePlayers" class="ghost">参加者変更</button></div>'
+          : '') +
         '</div>';
     }
 
@@ -4491,6 +4640,7 @@
   function routeCodenamesHost(roomId) {
     var unsub = null;
     var joinUrl = makeCodenamesJoinUrl(roomId);
+    var hostPlayerId = getOrCreateCodenamesPlayerId(roomId);
 
     function drawQr() {
       return new Promise(function (resolve) {
@@ -4569,7 +4719,7 @@
     }
 
     function renderWithRoom(room) {
-      renderCodenamesHost(viewEl, { roomId: roomId, joinUrl: joinUrl, room: room });
+      renderCodenamesHost(viewEl, { roomId: roomId, joinUrl: joinUrl, room: room, hostPlayerId: hostPlayerId });
       drawQr();
 
       var copyBtn = document.getElementById('copyJoinUrl');
@@ -4604,6 +4754,29 @@
               route();
             })
             .catch(function (e) {
+              alert((e && e.message) || '失敗');
+            });
+        });
+      }
+
+      var gmSave = document.getElementById('cnGmSave');
+      if (gmSave && !gmSave.__cn_bound) {
+        gmSave.__cn_bound = true;
+        gmSave.addEventListener('click', function () {
+          var st = document.getElementById('cnGmStatus');
+          if (st) st.textContent = '保存中...';
+          var nameEl = document.getElementById('cnGmName');
+          var teamEl = document.getElementById('cnGmTeam');
+          var roleEl = document.getElementById('cnGmRole');
+          var nm = String((nameEl && nameEl.value) || '').trim();
+          var tm = String((teamEl && teamEl.value) || '');
+          var rl = String((roleEl && roleEl.value) || '');
+          setCodenamesPlayerProfile(roomId, hostPlayerId, nm, tm, rl)
+            .then(function () {
+              if (st) st.textContent = '保存しました';
+            })
+            .catch(function (e) {
+              if (st) st.textContent = '保存できませんでした';
               alert((e && e.message) || '失敗');
             });
         });
@@ -4659,6 +4832,39 @@
               setCodenamesPlayerPrefs(roomId, playerId, team, role).catch(function (e) {
                 alert((e && e.message) || '失敗');
               });
+            });
+          }
+
+          var contBtn = document.getElementById('cnContinue');
+          if (contBtn && !contBtn.__cn_bound) {
+            contBtn.__cn_bound = true;
+            contBtn.addEventListener('click', function () {
+              ui.pendingIdx = null;
+              resetCodenamesToLobby(roomId).catch(function (e) {
+                alert((e && e.message) || '失敗');
+              });
+            });
+          }
+
+          var changeBtn = document.getElementById('cnChangePlayers');
+          if (changeBtn && !changeBtn.__cn_bound) {
+            changeBtn.__cn_bound = true;
+            changeBtn.addEventListener('click', function () {
+              ui.pendingIdx = null;
+              resetCodenamesForNewPlayers(roomId, playerId)
+                .then(function () {
+                  var q = {};
+                  var v = getCacheBusterParam();
+                  if (v) q.v = v;
+                  q.room = roomId;
+                  q.host = '1';
+                  q.screen = 'codenames_host';
+                  setQuery(q);
+                  route();
+                })
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                });
             });
           }
 
@@ -4759,6 +4965,7 @@
                 btn.addEventListener('pointerdown', function (ev) {
                   // Only primary button / touch
                   if (ev && ev.button != null && ev.button !== 0) return;
+                  if (ev && ev.preventDefault) ev.preventDefault();
                   clearTimer();
                   longFired = false;
                   var idx = getIdxFromEvent(ev);
@@ -4773,6 +4980,7 @@
                 btn.addEventListener('pointerleave', clearTimer);
               } else {
                 btn.addEventListener('touchstart', function (ev) {
+                  if (ev && ev.preventDefault) ev.preventDefault();
                   clearTimer();
                   longFired = false;
                   var idx = getIdxFromEvent(ev);
@@ -4799,6 +5007,10 @@
                 btn.addEventListener('mouseup', clearTimer);
                 btn.addEventListener('mouseleave', clearTimer);
               }
+
+              btn.addEventListener('contextmenu', function (ev) {
+                if (ev && ev.preventDefault) ev.preventDefault();
+              });
             })(b);
           }
 
@@ -4835,10 +5047,10 @@
         var cl = [];
         cl.push('【コードネーム ルール】');
         cl.push('1) 部屋を作成 → QRで参加');
-        cl.push('2) 各自でチーム（赤/青）と役職（スパイマスター/当てる側）を選ぶ');
-        cl.push('3) 各チーム「スパイマスター1人 + 当てる側1人以上」が揃ったらスタート');
+        cl.push('2) 各自でチーム（赤/青）と役職（スパイマスター/諜報員）を選ぶ');
+        cl.push('3) 各チーム「スパイマスター1人 + 諜報員1人以上」が揃ったらスタート');
         cl.push('4) 手番チームのスパイマスターがヒント（単語・数）を出す');
-        cl.push('5) 当てる側がカードをめくる（自分の色なら続行、違う色/中立なら手番交代）');
+        cl.push('5) 諜報員がカードをめくる（自分の色なら続行、違う色/中立なら手番交代）');
         cl.push('6) 暗殺者をめくると、そのチームの負け');
         cl.push('7) 自分の色を全てめくったチームの勝ち');
         alert(cl.join('\n'));
@@ -4866,7 +5078,7 @@
     var buildInfoEl = document.querySelector('#buildInfo');
     if (buildInfoEl) {
       var assetV = getCacheBusterParam();
-      buildInfoEl.textContent = 'v0.11 (B_BoardGames + codenames)' + (assetV ? ' / assets ' + assetV : '');
+      buildInfoEl.textContent = 'v0.12 (B_BoardGames + codenames)' + (assetV ? ' / assets ' + assetV : '');
     }
 
     window.addEventListener('popstate', function () {
