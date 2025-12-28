@@ -290,29 +290,30 @@
         ['野球', 'ソフトボール'],
         ['肉まん', 'ピザまん'],
         ['ポカリスエット', 'アクエリアス'],
-      ['サッカー', 'ラグビー'],
-      ['パンツ', '財布'],
-      ['１億円', '１０００万円'],
-      ['炎', '赤'],
-      ['桃太郎', '鬼滅の刃'],
-      ['時間', 'お金'],
-      ['痴漢', '鬼ごっこ'],
-      ['赤ちゃん', 'ハムスター'],
-      ['ウォータースライダー', '流しそうめん'],
-      ['母乳', '青汁（もしくは、豆乳か牛乳）'],
-      ['恋人', 'おおきなぬいぐるみ'],
-      ['荷物検査', '職務質問'],
-      ['お好み焼き', 'ピザ'],
-      ['リコーダー', 'ペロペロキャンディ'],
-      ['アクリルスタンド', '将棋の駒'],
-      ['残業', '転売'],
-      ['ロボット', '幽霊'],
-      ['ピアノ', 'パソコン'],
-      ['サンタクロース', '忍者'],
-      ['自転車', '冷蔵庫'],
-      ['トランプ', 'スマホ'],
-      ['コンビニ', '自動販売機'],
-      ['プリン', '温泉卵']
+        ['サッカー', 'ラグビー'],
+        ['パンツ', '財布'],
+        ['１億円', '１０００万円'],
+        ['炎', '赤'],
+        ['桃太郎', '鬼滅の刃'],
+        ['時間', 'お金'],
+        ['痴漢', '鬼ごっこ'],
+        ['赤ちゃん', 'ハムスター'],
+        ['ウォータースライダー', '流しそうめん'],
+        ['母乳', '青汁（もしくは、豆乳か牛乳）'],
+        ['恋人', 'おおきなぬいぐるみ'],
+        ['荷物検査', '職務質問'],
+        ['お好み焼き', 'ピザ'],
+        ['リコーダー', 'ペロペロキャンディ'],
+        ['アクリルスタンド', '将棋の駒'],
+        ['残業', '転売'],
+        ['ロボット', '幽霊'],
+        ['ピアノ', 'パソコン'],
+        ['サンタクロース', '忍者'],
+        ['自転車', '冷蔵庫'],
+        ['トランプ', 'スマホ'],
+        ['コンビニ', '自動販売機'],
+        ['プリン', '温泉卵']
+
 
       ]
     },
@@ -617,6 +618,1668 @@
 
   function playerPath(roomId, playerId) {
     return 'rooms/' + roomId + '/players/' + playerId;
+  }
+
+  // -------------------- codenames (state) --------------------
+  function getOrCreateCodenamesPlayerId(roomId) {
+    var key = 'cn_player_' + roomId;
+    var id = localStorage.getItem(key);
+    if (!id) {
+      id = randomId(12);
+      localStorage.setItem(key, id);
+    }
+    return id;
+  }
+
+  function codenamesRoomPath(roomId) {
+    return 'codenamesRooms/' + roomId;
+  }
+
+  function codenamesPlayerPath(roomId, playerId) {
+    return codenamesRoomPath(roomId) + '/players/' + playerId;
+  }
+
+  function subscribeCodenamesRoom(roomId, cb) {
+    return onValue(codenamesRoomPath(roomId), cb);
+  }
+
+  function parseWordListText(text) {
+    var s = String(text || '');
+    s = s.replace(/\r\n/g, '\n');
+    s = s.replace(/\r/g, '\n');
+    // accept newline / comma / Japanese comma / tab
+    var parts = s.split(/[\n,、\t]+/);
+    var out = [];
+    var seen = {};
+    for (var i = 0; i < parts.length; i++) {
+      var w = String(parts[i] || '').trim();
+      if (!w) continue;
+      if (seen[w]) continue;
+      seen[w] = true;
+      out.push(w);
+    }
+    return out;
+  }
+
+  // Built-in word pool for Codenames (no in-app word registration).
+  var CODENAMES_WORDS = [
+    '会議',
+    '麻痺',
+    '消しゴム',
+    '筆',
+    'たいあたり',
+    'なめくじ',
+    '熱帯夜',
+    'えんぴつ',
+    '鉛',
+    '賢者',
+    '霊',
+    '気球',
+    'エルフ',
+    'たんぽぽ',
+    '乗客',
+    'ごはん',
+    '焼き肉',
+    'トランクス',
+    '虫歯',
+    '入れ歯',
+    '写真',
+    'ウエハース',
+    'モーニング',
+    'ミッション',
+    'リュック',
+    'マジック',
+    'サプリメント',
+    '箸',
+    '電気',
+    '北朝鮮',
+    'アウェイ',
+    '老眼',
+    '視力',
+    '反省会',
+    '魔法使い',
+    '僧侶',
+    '戦士',
+    '武闘家',
+    '舞台',
+    'マッスル',
+    '筋肉',
+    '咳',
+    'サウナ',
+    '麻薬',
+    '税金',
+    '女優',
+    '歌手',
+    'タレント',
+    'お洒落',
+    '砂漠',
+    '原始人',
+    'バンザイ',
+    'エコ',
+    '発表会',
+    'ＡＩ',
+    '運動会',
+    '遠足',
+    'スマホ',
+    'テレビ',
+    '電話',
+    'リモコン',
+    'リモート',
+    'キックボード',
+    '原付',
+    'カッター',
+    'ハサミ',
+    '羊',
+    '扇風機',
+    '肩凝り',
+    '約束',
+    '頭痛',
+    'オンライン',
+    'カーテン',
+    'カードゲーム',
+    '消毒',
+    'アルコール',
+    'ゴキブリ',
+    'カブトムシ',
+    'カタツムリ',
+    'クワガタ',
+    'セミ',
+    'おじいちゃん',
+    'カマキリ',
+    '幼虫',
+    '封筒',
+    '納豆',
+    'ネギ',
+    '缶詰',
+    '抽選',
+    '宝くじ',
+    'コンプレックス',
+    '負債',
+    '悩み',
+    '肩車',
+    'コンテスト',
+    '魔法陣',
+    '召喚',
+    '悪魔',
+    'ブラシ',
+    '下水',
+    '北海道',
+    'ハッタリ',
+    'はまぐり',
+    'イチゴ',
+    '宿題',
+    'アウトドア',
+    '七五三',
+    '袴',
+    'ボージョレ・ヌーボー',
+    '辞典',
+    '掲示板',
+    'やまんば',
+    '魔法少女',
+    '無制限',
+    'ウクレレ',
+    'フラダンス',
+    'ステーキ',
+    'パニック',
+    '習い事',
+    'レンタカー',
+    '電光石火',
+    'ショック',
+    '運転手',
+    'パイオニア',
+    '迷路',
+    'メデューサ',
+    '防水',
+    '回覧板',
+    'お地蔵様',
+    'コンパクト',
+    '努力',
+    '渡り鳥',
+    '権利',
+    '肥料',
+    '神社',
+    '神殿',
+    'プリンター',
+    'ものまね',
+    '占い',
+    '漫画家',
+    'アスリート',
+    'エンジニア',
+    'アシスタント',
+    'UFO',
+    '博士',
+    'ギャグ',
+    '画家',
+    '無双',
+    '気圧',
+    '映え',
+    '暇つぶし',
+    'おうち時間',
+    'ドライブレコーダー',
+    'オーディション',
+    'クラウドファンディング',
+    '不倫',
+    '防災グッズ',
+    'ちゃぶ台',
+    '矯正',
+    '経営',
+    '絶縁',
+    '小判',
+    '懸賞',
+    '個人情報',
+    'おみくじ',
+    'タピオカ',
+    'テレポート',
+    'DNA',
+    '暗黒',
+    '血液',
+    'モニター',
+    '蛍光',
+    'ホタル',
+    'スキル',
+    '派閥',
+    'デラックス',
+    '投資',
+    'フリー',
+    '出張',
+    'お年玉',
+    'おせち',
+    '年賀状',
+    'だるま落とし',
+    '習字',
+    'コマ',
+    'けん玉',
+    'ダーツ',
+    'ボーリング',
+    'ビリヤード',
+    'ハンガー',
+    '仮面',
+    '注射',
+    'エレベーター',
+    '給食',
+    'レポート',
+    'どんぐり',
+    '紅葉',
+    '栗',
+    '新生活',
+    '入学',
+    '双子',
+    '親戚',
+    'ホッカイロ',
+    '赤ちゃん',
+    '父',
+    '飢餓',
+    '湿度',
+    'カビ',
+    '温度',
+    '熱',
+    '型',
+    'トリガー',
+    'インプット',
+    '抹茶',
+    'モンブラン',
+    'コーラ',
+    '電子決済',
+    'クレジットカード',
+    'シフト',
+    'ダイナマイト',
+    'バカンス',
+    '沖縄',
+    'もずく',
+    'ダイビング',
+    'スノボー',
+    'リフト',
+    'ハイキング',
+    '変装',
+    '試験',
+    '拳銃',
+    '妨害',
+    'タイマー',
+    '黒幕',
+    '術',
+    '異世界',
+    'ラブコメ',
+    '恋人',
+    '告白',
+    'ラブレター',
+    'デリバリー',
+    '地上',
+    '空',
+    '敏感',
+    '鈍感',
+    '反射',
+    'センサー',
+    '怪物',
+    'タヌキ',
+    '心',
+    '精神',
+    '欠陥',
+    'カウントダウン',
+    'シャンパン',
+    'シェアハウス',
+    'カウンター',
+    '出会い',
+    'ヒロイン',
+    '心理戦',
+    'デザイン',
+    'タクシー',
+    'オバケ',
+    '輪ゴム',
+    '輪投げ',
+    '鉄棒',
+    'ヨーヨー',
+    'ヒヨコ',
+    '明太子',
+    '支配人',
+    '尻',
+    '腰',
+    'かかと',
+    '肘',
+    '膝',
+    '天狗',
+    '団子',
+    'ワンピース',
+    'アプリ',
+    'アイテム',
+    '脳トレ',
+    'サーフィン',
+    'ビーチ',
+    'ショッピング',
+    '不動産',
+    'お絵描き',
+    '蛾',
+    'フリスビー',
+    'チアリーダー',
+    '応援歌',
+    '詩',
+    '偽善者',
+    '発射',
+    'ビンタ',
+    'メリケンサック',
+    'リーゼント',
+    'エスカレーター',
+    '耳鼻科',
+    'ソーラーパネル',
+    '神出鬼没',
+    'ミミズ',
+    '市民',
+    '摩擦',
+    'マインド',
+    'イラスト',
+    'パントマイム',
+    'コピー',
+    'コント',
+    '小説',
+    'デザイナー',
+    '農業',
+    '声優',
+    '埋蔵金',
+    '通訳',
+    'ダイエット',
+    '影武者',
+    'トイレ',
+    'ディナー',
+    'モテ期',
+    'ヨガ',
+    '商店街',
+    'ドッキリ',
+    'カリスマ',
+    'マンガ喫茶',
+    'じゃんけん',
+    'グルメ',
+    'スキャンダル',
+    'ゴール',
+    'ダミー',
+    '姿勢',
+    'フランチャイズ',
+    'クリエイター',
+    'ご褒美',
+    '民泊',
+    'キャッシュバック',
+    'ゾロ目',
+    'カロリー',
+    'タイムマシン',
+    'ネッシー',
+    '武将',
+    'カヌー',
+    'かさぶた',
+    '波',
+    'クッション',
+    'CM',
+    '王子',
+    'ドーパミン',
+    'ハーバリウム',
+    'カステラ',
+    'ほうき',
+    'ちりとり',
+    'スコップ',
+    '帽子',
+    '竹',
+    '自販機',
+    'お茶漬け',
+    'かき',
+    'カタログ',
+    'ギフト',
+    'ゼリー',
+    '塩辛',
+    '花札',
+    '雛人形',
+    'ブーメラン',
+    '高速道路',
+    'パーマ',
+    'リゾット',
+    'おかゆ',
+    'タバコ',
+    '矢印',
+    '目玉',
+    '織姫',
+    'きのこ',
+    'セミナー',
+    '餅',
+    'モップ',
+    'こたつ',
+    'マッサージ',
+    '流れ星',
+    '通り魔',
+    '事件',
+    '花壇',
+    '木彫り',
+    '介護士',
+    'パパラッチ',
+    'パパイヤ',
+    'パンケーキ',
+    'パイナップル',
+    '薬局',
+    'アンテナ',
+    'カーナビ',
+    'スパム',
+    'ロコモコ',
+    'ボランティア',
+    '団体',
+    '湿布',
+    'スチュワーデス',
+    '社長',
+    '監督',
+    'スピーカー',
+    'スピーチ',
+    'ファラオ',
+    'ドラキュラ',
+    '執事',
+    'メイド',
+    '喫茶店',
+    'オムライス',
+    'ポスター',
+    'ラジオ体操',
+    '網',
+    'プラモデル',
+    'キツネ',
+    '絨毯',
+    'バレリーナ',
+    '跳び箱',
+    'リズム',
+    '葉巻',
+    'ドラマ',
+    'ペットボトル',
+    '駐車場',
+    'テーブル',
+    'ねじ',
+    'プロレス',
+    'プロフェッショナル',
+    'プリン',
+    'フラミンゴ',
+    'メロディー',
+    '珊瑚礁',
+    'マグロ',
+    '数珠',
+    'キャラメル',
+    'アーモンド',
+    'ポテトサラダ',
+    'おにぎり',
+    'ツナ',
+    'ガスバーナー',
+    'バッシング',
+    'ふりかけ',
+    '指紋',
+    '入れ墨',
+    '銭湯',
+    'コロシアム',
+    'バジル',
+    '脂肪',
+    'おなか',
+    '背中',
+    '内蔵',
+    'ウコン',
+    'エキス',
+    'ライセンス',
+    'コンクリート',
+    '倉庫',
+    '補聴器',
+    '墓地',
+    'ぼったくり',
+    '水泳',
+    'シロップ',
+    'モアイ',
+    'グッズ',
+    'ペンダント',
+    '懐中電灯',
+    '競馬',
+    '定規',
+    'コンパス',
+    'スキップ',
+    '水筒',
+    '上司',
+    '部下',
+    '新入社員',
+    '地平線',
+    'フランケンシュタイン',
+    '噂話',
+    'スキンシップ',
+    '東京タワー',
+    '心臓',
+    '防弾チョッキ',
+    'ご当地キャラ',
+    'シークヮーサー',
+    'ハイビスカス',
+    'K-POP',
+    'コスメ',
+    '万里の長城',
+    'チャイナドレス',
+    '小籠包',
+    'エアーズロック',
+    'ハンター',
+    '旅行',
+    '職業',
+    '怪談',
+    '湯気',
+    'サンドイッチ',
+    'ハプニング',
+    '俳句',
+    'テーマパーク',
+    '天体観測',
+    '事故',
+    '大暴落',
+    '賞金',
+    '寄生虫',
+    '自作',
+    '炎上',
+    'スイーツ',
+    '深夜',
+    'オーロラ',
+    'あやとり',
+    'オマケ',
+    'ベストセラー',
+    '日焼け止め',
+    '叫び声',
+    '傷',
+    'めだか',
+    'ダンベル',
+    'トレーニング',
+    'ウェア',
+    'ブランド',
+    '口紅',
+    '指輪',
+    'ネックレス',
+    '研究',
+    'テーマ',
+    '実験',
+    '法律',
+    '平原',
+    'ダニ',
+    'ストーブ',
+    'コウモリ',
+    '将棋',
+    '囲碁',
+    '未来予知',
+    'オセロ',
+    'トランプ',
+    'かるた',
+    '通帳',
+    'タイピング',
+    'ソフト',
+    '罰',
+    '唐辛子',
+    'ハンバーグ',
+    '弁当',
+    '箱',
+    '屋台',
+    '飴',
+    'グミ',
+    'エリア',
+    'トラウマ',
+    'ハッスル',
+    'サビ',
+    'たんこぶ',
+    '甘酒',
+    '饅頭',
+    '鼻水',
+    'にきび',
+    'リサイクル',
+    'パートナー',
+    'フレンド',
+    'マスター',
+    'パズル',
+    '煮干し',
+    '出汁',
+    'こんぶ',
+    '水鉄砲',
+    'ピーマン',
+    'フライパン',
+    'ブラック企業',
+    '転職',
+    'ヘッドハンティング',
+    '体温計',
+    'マイナスイオン',
+    '積み木',
+    'やかん',
+    'ハイボール',
+    '麻酔',
+    'ココナッツ',
+    'コインランドリー',
+    'テレパシー',
+    '保険',
+    '朝市',
+    'ハト',
+    'バザー',
+    'セール',
+    '接待',
+    '朝帰り',
+    '四国',
+    'ムエタイ',
+    '空手',
+    '柔道',
+    '道着',
+    '深呼吸',
+    'チェリー',
+    'うに',
+    '礼儀',
+    'エクササイズ',
+    '終電',
+    '梅干し',
+    '酢',
+    '三輪車',
+    'シャボン玉',
+    'ビジネス',
+    'チャット',
+    '花火',
+    'ろうそく',
+    'ラクダ',
+    'ワニ',
+    'にんじん',
+    '信号',
+    'アザラシ',
+    'カレンダー',
+    'ボンベ',
+    'ヒマワリ',
+    'チューリップ',
+    'レンズ',
+    '水着',
+    '露天風呂',
+    '泡',
+    '兜',
+    'レントゲン',
+    'スマイル',
+    'プレイヤー',
+    '誕生日',
+    'サプライズ',
+    '年金',
+    '粘土',
+    '腱鞘炎',
+    'インターネット',
+    'インタビュー',
+    '常連',
+    'いたずら',
+    '貯金',
+    'アレルギー',
+    '空き家',
+    '職人',
+    '火事',
+    'ショートカット',
+    '卒業',
+    'お盆',
+    'フェス',
+    'コアラ',
+    '変身',
+    'ステッキ',
+    'ミリオンヒット',
+    'ちんすこう',
+    '泡盛',
+    'シーサー',
+    'サーターアンダギー',
+    '韓流',
+    'サムギョプサル',
+    'ビビンバ',
+    'チヂミ',
+    '冷麺',
+    '三国志',
+    'ハンドメイド',
+    '料理家',
+    '棋士',
+    '給料日',
+    '恩返し',
+    '婚活',
+    '交番',
+    'VR',
+    'ニート',
+    'チャック',
+    'メッセージ',
+    '予言',
+    '沈没船',
+    'カメラ',
+    'ラジカセ',
+    'ターゲット',
+    '思い出',
+    'キャッシュレス',
+    'くじ引き',
+    '家庭菜園',
+    '残像',
+    'レシート',
+    '大人買い',
+    '別荘',
+    '保湿',
+    '冷房',
+    '暖房',
+    '空気清浄機',
+    '蔵',
+    '串',
+    '枯れ葉',
+    '傘',
+    '誘拐',
+    'コンビニ',
+    '新幹線',
+    '換気扇',
+    'クイズ',
+    'ヒール',
+    '睡眠薬',
+    'オーダー',
+    'レンタル',
+    'ファミレス',
+    'チェーン',
+    '神様',
+    '大仏',
+    '細胞',
+    'パフェ',
+    'かき氷',
+    'サングラス',
+    '磁石',
+    'マント',
+    'パソコン',
+    'カラオケ',
+    'マイク',
+    'はてな',
+    'ノスタルジー',
+    '代表',
+    '覗き',
+    '目隠し',
+    '魔王',
+    '親衛隊',
+    'ポケベル',
+    '経験値',
+    'ガムテープ',
+    '段ボール',
+    '切手',
+    'たこ焼き',
+    'お好み焼き',
+    'キムチ',
+    'うなぎ',
+    'マンション',
+    '暗号',
+    'タオル',
+    'サンダル',
+    '新作',
+    '税理士',
+    'コントロール',
+    'ひつまぶし',
+    '割り勘',
+    'おごり',
+    'ジェル',
+    '焚き火',
+    '薪',
+    'カスタマイズ',
+    'ゴーヤ',
+    'すき焼き',
+    'スイートルーム',
+    '天むす',
+    'きしめん',
+    'ういろう',
+    '手羽先',
+    'おでん',
+    'みかん',
+    'ドーム',
+    '寝癖',
+    'コンタクト',
+    'シールド',
+    'ヨット',
+    '雲',
+    'わた菓子',
+    'フランクフルト',
+    '焼きそば',
+    '味噌',
+    'ヨーグルト',
+    '乙女',
+    'セメント',
+    '金髪',
+    '白髪',
+    '忠誠',
+    '中古',
+    '闇鍋',
+    'ミキサー',
+    '餃子',
+    'しゃぶしゃぶ',
+    '乳酸菌',
+    'ループ',
+    '力士',
+    '木材',
+    '接着剤',
+    '溶接',
+    '工事',
+    'コイン',
+    'クレヨン',
+    'リコーダー',
+    'ランドセル',
+    '甲子園',
+    '祭り',
+    '人魚',
+    'イカ',
+    '大気圏',
+    '隕石',
+    '賄賂',
+    '家紋',
+    '花粉',
+    '通路',
+    'スライディング',
+    'ハンドル',
+    '原子力',
+    '奴隷',
+    '競り',
+    'オークション',
+    '無人',
+    '卓球',
+    'ダウンロード',
+    'コンテンツ',
+    'アウトプット',
+    '仙人',
+    '哺乳瓶',
+    'おむつ',
+    'ポーチ',
+    'マフラー',
+    'タンバリン',
+    '手品',
+    'ハンカチ',
+    'ティッシュ',
+    'ボックス',
+    'ガチャ',
+    'ブログ',
+    'リメイク',
+    '雑踏',
+    'ザリガニ',
+    'エビ',
+    '暖炉',
+    'ゲリラ',
+    '発泡スチロール',
+    '金属',
+    '肝試し',
+    '放火',
+    '歯車',
+    '副業',
+    'フリーター',
+    '布団',
+    'ふるさと納税',
+    'お祝い',
+    '化石',
+    'アカウント',
+    '人気者',
+    '家事',
+    '和尚',
+    '妖怪',
+    'ノーベル賞',
+    'CD',
+    'アタック',
+    'ストッパー',
+    'トレーナー',
+    'リフレッシュ',
+    '模様替え',
+    '移住',
+    '形見',
+    'フォロワー',
+    '世界一周',
+    'ワンオペ',
+    '唐揚げ',
+    'いかだ',
+    'トランシーバー',
+    '毛布',
+    'ジャングルジム',
+    'ブランコ',
+    '滑り台',
+    '絆創膏',
+    'ストッキング',
+    'リップ',
+    'マシュマロ',
+    '電子書籍',
+    'マッチング',
+    '基地',
+    'アルバイト',
+    'マヨネーズ',
+    '怪盗',
+    '殺人鬼',
+    '脅迫',
+    '念力',
+    '移籍',
+    '電池',
+    'ノイズ',
+    '畑',
+    'ニュース',
+    'ワクチン',
+    'ウイルス',
+    '配信',
+    'キャンセル',
+    'ポリシー',
+    '都市',
+    'ラーメン',
+    'しょうが',
+    'ニンニク',
+    'うどん',
+    'パスタ',
+    '腐敗',
+    '研修',
+    '被害',
+    '交渉',
+    '更新',
+    '感染',
+    'パーフェクト',
+    'トップ',
+    '帰省',
+    '健康診断',
+    '充電',
+    'エネルギー',
+    '濃厚',
+    '入院',
+    'サーキット',
+    'サーキュレーター',
+    'ドーピング',
+    'ドッペルゲンガー',
+    '怪力',
+    '呼吸',
+    '酸素',
+    '独裁者',
+    '総理大臣',
+    '大統領',
+    '選挙',
+    '出勤',
+    'パジャマ',
+    '空港',
+    'ゴミ',
+    'アイス',
+    '包丁',
+    '攻撃',
+    '防御',
+    '議論',
+    '休暇',
+    '映画',
+    'ランニング',
+    '散歩',
+    '筋トレ',
+    'プロテイン',
+    '水分',
+    '雨音',
+    '眩暈',
+    '海',
+    '浮き輪',
+    'ゴーグル',
+    '地下',
+    '人混み',
+    'ブーム',
+    '天然',
+    'ストレス',
+    '骨',
+    '自宅',
+    '異端',
+    'サブカル',
+    'ヤンデレ',
+    'クソリプ',
+    '焼き鳥',
+    '八ツ橋',
+    '金閣寺',
+    '舞妓',
+    '科学',
+    'サブスク',
+    'アパレル',
+    '素材',
+    '課金',
+    'シャツ',
+    'シャッフル',
+    '落書き',
+    '生命',
+    '大阪',
+    'メロン',
+    'ジンギスカン',
+    '通販',
+    'アナウンス',
+    '施設',
+    '動物園',
+    '水族館',
+    '災害',
+    '派遣',
+    '台風',
+    '自衛隊',
+    'サラリーマン',
+    '戦略',
+    '安全',
+    '避難',
+    'カフェイン',
+    'くぎ',
+    'オリジナル',
+    '透明',
+    'エアコン',
+    '冷蔵庫',
+    '転生',
+    '体質',
+    '滝',
+    '修行',
+    'クーポン',
+    '営業',
+    '芸人',
+    'スロット',
+    '群れ',
+    'バトル',
+    '融合',
+    '滑舌',
+    'ひな祭り',
+    'エイプリルフール',
+    'ホワイト',
+    '競合',
+    '迷子',
+    '爆笑',
+    '倍返し',
+    'ボーナス',
+    '寝坊',
+    'ファッション',
+    'インドア',
+    'ログイン',
+    'おひとり様',
+    'ビーム',
+    '坊主',
+    'アンバサダー',
+    'アドレス',
+    'DVD',
+    '無料',
+    'どんでん返し',
+    '破局',
+    '登山',
+    '縁起物',
+    '発明品',
+    '悪夢',
+    'ビンゴ',
+    'クーリングオフ',
+    'やんちゃ',
+    '幻覚',
+    'ATM',
+    'なると',
+    '七光り',
+    '刺身',
+    '継承',
+    '品種改良',
+    'シングル',
+    'ライフ',
+    'サポーター',
+    'ファイナル',
+    '馬車',
+    'ステッカー',
+    'ワッペン',
+    'スクランブル',
+    'スランプ',
+    '後遺症',
+    '更衣室',
+    '好感度',
+    '高所恐怖症',
+    '突然変異',
+    '景品',
+    '電卓',
+    '資格',
+    'マニア',
+    '免許証',
+    'わびさび',
+    'おもてなし',
+    'スクープ',
+    'ストイック',
+    'フライング',
+    '修羅場',
+    'タブー',
+    '観覧車',
+    'ジェットコースター',
+    'メリーゴーランド',
+    'バンジージャンプ',
+    'タスク',
+    'オパール',
+    'グアム',
+    'ツアー',
+    'ツーリング',
+    '欲望',
+    '嘘',
+    'よいしょ',
+    '幼稚園',
+    '進化',
+    '折り紙',
+    '中学校',
+    '小学校',
+    '高校',
+    '抜け殻',
+    '冬眠',
+    'おやじ',
+    'プライド',
+    '説教',
+    'セーブ',
+    'レア',
+    '専門家',
+    'カラコン',
+    'ホームセンター',
+    'カンニング',
+    '転売',
+    'ごぼう',
+    '接続',
+    'ハッキング',
+    'たらこ',
+    'たいやき',
+    '出産',
+    '育児',
+    '教育',
+    '再生',
+    'たばこ',
+    '疲労',
+    'ハイブリッド',
+    '復讐',
+    'ハイスペック',
+    '鬼ごっこ',
+    'かくれんぼ',
+    '縄跳び',
+    'ドッジボール',
+    'サッカー',
+    'リフティング',
+    'ドリブル',
+    'ハンドボール',
+    'アイスホッケー',
+    'フェンシング',
+    '勉強',
+    '一夜漬け',
+    '暗記',
+    'ヒトデ',
+    '手裏剣',
+    '煙幕',
+    'ピンチ',
+    'パンチ',
+    '放課後',
+    '星座',
+    '家庭教師',
+    'ハンモック',
+    '新鮮',
+    'マウント',
+    '首輪',
+    '知育',
+    '絵本',
+    '解約',
+    '基本',
+    '装填',
+    '寝言',
+    'うまい棒',
+    'ファミチキ',
+    'ハーゲンダッツ',
+    'ガリガリ君',
+    'ポッキー',
+    'UNO',
+    '柿の種',
+    'ヤクルト',
+    '雪見だいふく',
+    'ハッピーターン',
+    'じゃがりこ',
+    'コアラのマーチ',
+    'かっぱえびせん',
+    'どん兵衛',
+    'ファブリーズ',
+    'ファンタ',
+    'フリスク',
+    'ブラックサンダー',
+    'ベビースターラーメン',
+    'ジョージア',
+    'カルピス',
+    'ポカリスエット',
+    'ハイチュウ',
+    'シーチキン',
+    'G-SHOCK',
+    '氷結',
+    '午後の紅茶',
+    '綾鷹',
+    'ラ王',
+    'ウォークマン',
+    'iPhone',
+    'バブ',
+    'カラムーチョ',
+    'リポビタンD',
+    'レッドブル',
+    'ダイソン',
+    'ルンバ',
+    'プッチンプリン',
+    'チロルチョコ',
+    'きのこの山',
+    'たけのこの里',
+    'からあげクン',
+    'フルグラ',
+    'カロリーメイト',
+    'レゴ',
+    'サンデー',
+    'マガジン',
+    '野菜生活',
+    'キットカット',
+    'カップヌードル',
+    'スターバックス',
+    '任天堂',
+    '楽天',
+    'Google',
+    'NIKE',
+    'Yahoo',
+    'マクドナルド',
+    '吉野家',
+    'ユニクロ',
+    'トイザらス',
+    'エルメス',
+    'ゴディバ',
+    'ケンタッキーフライドチキン',
+    'ソフトバンク',
+    'ドコモ',
+    'au',
+    '花王',
+    'ドトール',
+    'アサヒ',
+    'サントリー',
+    'ヤマハ',
+    '無印良品',
+    'モスバーガー',
+    'コストコ',
+    'ニトリ',
+    'ダイソー',
+    'ドン・キホーテ',
+    'ヨドバシカメラ',
+    'ヤマダ電機',
+    'イオン',
+    'セブンイレブン',
+    'ファミマ',
+    'ローソン',
+    'ミニストップ',
+    'CoCo壱番屋',
+    'ガスト',
+    'サイゼリヤ',
+    '高島屋',
+    '生協',
+    'ヤマト運輸',
+    '東急ハンズ',
+    'ディズニーランド',
+    'ユニバーサルスタジオ',
+    'ANA',
+    'JAL',
+    'カルビー',
+    'ソニー',
+    'キャノン',
+    'Netflix',
+    '松屋',
+    '丸亀製麺',
+    'パナソニック',
+    'ブックオフ',
+    'すき家',
+    'ミスタードーナツ',
+    'IKEA',
+    'ロッテリア',
+    'Wikipedia',
+    'Skype',
+    'Twitter',
+    'ニコニコ動画',
+    'YouTube',
+    'Facebook',
+    'Instagram',
+    'LINE',
+    '食べログ',
+    'ウーバーイーツ',
+    'Zoom',
+    'PayPay',
+    'ホットペッパー',
+    'メルカリ',
+    'ドラクエ',
+    'ポケモン',
+    'カービィ',
+    'マリオ',
+    'ルイージ',
+    'クッパ',
+    'キノピオ',
+    'ピカチュウ',
+    'ヨッシー',
+    'パックマン',
+    'テトリス',
+    'ぷよぷよ',
+    'Switch',
+    'プレイステーション',
+    'マインクラフト',
+    '一寸法師',
+    'シンデレラ',
+    '浦島太郎',
+    'かぐや姫',
+    '白雪姫',
+    'ピーターパン',
+    '赤ずきん',
+    '三匹の子豚',
+    'マッチ売りの少女',
+    '3びきの子ぶた',
+    'パトラッシュ',
+    '一休さん',
+    'ウルトラマン',
+    '孫悟空',
+    'ドラえもん',
+    'アンパンマン',
+    'サザエさん',
+    'バイキンマン',
+    'ミッキーマウス',
+    'キティーちゃん',
+    '仮面ライダー',
+    'トトロ',
+    'ちびまる子ちゃん',
+    'コナン',
+    '機関車トーマス',
+    'のび太',
+    'ルパン三世',
+    'ゴジラ',
+    'ゲゲゲの鬼太郎',
+    'スヌーピー',
+    'くまのプーさん',
+    'ガンダム',
+    'エヴァンゲリオン',
+    'フック船長',
+    'ジャイアン',
+    'スネ夫',
+    'ドラゴンボール',
+    '鬼滅の刃',
+    '天空の城ラピュタ',
+    'ムスカ',
+    '魔女の宅急便',
+    'もののけ姫',
+    'モンスターボール',
+    'アトム',
+    'くまモン',
+    'スター・ウォーズ',
+    'ハリー・ポッター',
+    'スパイダーマン',
+    'ターミネーター',
+    'リラックマ',
+    'ムーミン',
+    'ミッフィ―',
+    '風の谷のナウシカ',
+    '貞子'
+  ];
+
+  function getCodenamesWordPool() {
+    // dedupe while keeping insertion order
+    var seen = {};
+    var out = [];
+    for (var i = 0; i < CODENAMES_WORDS.length; i++) {
+      var w = String(CODENAMES_WORDS[i] || '').trim();
+      if (!w) continue;
+      if (seen[w]) continue;
+      seen[w] = true;
+      out.push(w);
+    }
+    return out;
+  }
+
+  function buildCodenamesKey(total, firstTeam) {
+    var assassin = 1;
+    var base = Math.floor((total - assassin) / 3);
+    var first = base + 1;
+    var second = base;
+    var neutral = total - assassin - first - second;
+
+    var arr = [];
+    var i;
+    if (firstTeam === 'blue') {
+      for (i = 0; i < first; i++) arr.push('B');
+      for (i = 0; i < second; i++) arr.push('R');
+    } else {
+      for (i = 0; i < first; i++) arr.push('R');
+      for (i = 0; i < second; i++) arr.push('B');
+    }
+    for (i = 0; i < neutral; i++) arr.push('N');
+    for (i = 0; i < assassin; i++) arr.push('A');
+
+    for (var k = arr.length - 1; k > 0; k--) {
+      var j = randomInt(k + 1);
+      var tmp = arr[k];
+      arr[k] = arr[j];
+      arr[j] = tmp;
+    }
+    return arr;
+  }
+
+  function pickCodenamesWords(pool, total) {
+    var p = Array.isArray(pool) ? pool.slice() : [];
+    for (var i = p.length - 1; i > 0; i--) {
+      var j = randomInt(i + 1);
+      var tmp = p[i];
+      p[i] = p[j];
+      p[j] = tmp;
+    }
+    return p.slice(0, total);
+  }
+
+  function createCodenamesRoom(roomId, settings) {
+    var base = codenamesRoomPath(roomId);
+    var size = clamp(parseIntSafe(settings && settings.size, 5), 3, 8);
+    var total = size * size;
+
+    var firstTeam = randomInt(2) === 0 ? 'red' : 'blue';
+
+    var pool = getCodenamesWordPool();
+    if (!pool || pool.length < total) {
+      throw new Error('ワードが足りません（最低 ' + total + ' 個必要）。');
+    }
+
+    var words = pickCodenamesWords(pool, total);
+    if (!words || words.length < total) {
+      throw new Error('ワードが足りません（最低 ' + total + ' 個必要）。');
+    }
+
+    var key = buildCodenamesKey(total, firstTeam);
+    var revealed = [];
+    for (var i = 0; i < total; i++) revealed.push(false);
+
+    var remainRed = 0;
+    var remainBlue = 0;
+    for (var k = 0; k < key.length; k++) {
+      if (key[k] === 'R') remainRed++;
+      if (key[k] === 'B') remainBlue++;
+    }
+
+    var room = {
+      createdAt: serverNowMs(),
+      phase: 'lobby',
+      settings: { size: size },
+      board: {
+        size: size,
+        words: words,
+        key: key,
+        revealed: revealed
+      },
+      firstTeam: firstTeam,
+      turn: {
+        team: firstTeam,
+        status: 'awaiting_clue',
+        guessesLeft: 0,
+        clue: { word: '', number: 0, by: '', at: 0 }
+      },
+      progress: {
+        redRemaining: remainRed,
+        blueRemaining: remainBlue
+      },
+      result: { winner: '', finishedAt: 0, reason: '' },
+      players: {}
+    };
+    return setValue(base, room);
+  }
+
+  function joinPlayerInCodenamesRoom(roomId, playerId, name, isHostPlayer) {
+    var base = codenamesRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'lobby') return room;
+
+      var players = assign({}, room.players || {});
+      var prev = players[playerId] || {};
+      var next = assign({}, prev, {
+        name: name,
+        joinedAt: prev.joinedAt || serverNowMs(),
+        lastSeenAt: serverNowMs(),
+        team: prev.team || '',
+        role: prev.role || ''
+      });
+      if (isHostPlayer) next.isHost = true;
+      players[playerId] = next;
+      return assign({}, room, { players: players });
+    });
+  }
+
+  function setCodenamesPlayerPrefs(roomId, playerId, team, role) {
+    var path = codenamesPlayerPath(roomId, playerId);
+    return runTxn(path, function (p) {
+      if (!p) return p;
+      var t = team === 'red' || team === 'blue' ? team : '';
+      var r = role === 'spymaster' || role === 'operative' ? role : '';
+      return assign({}, p, { team: t, role: r, lastSeenAt: serverNowMs() });
+    });
+  }
+
+  function countCodenamesRoles(room) {
+    var players = (room && room.players) || {};
+    var keys = Object.keys(players);
+    var out = {
+      redSpymaster: 0,
+      blueSpymaster: 0,
+      redOperative: 0,
+      blueOperative: 0,
+      total: 0
+    };
+    for (var i = 0; i < keys.length; i++) {
+      var p = players[keys[i]];
+      if (!p) continue;
+      out.total++;
+      if (p.team === 'red' && p.role === 'spymaster') out.redSpymaster++;
+      if (p.team === 'blue' && p.role === 'spymaster') out.blueSpymaster++;
+      if (p.team === 'red' && p.role === 'operative') out.redOperative++;
+      if (p.team === 'blue' && p.role === 'operative') out.blueOperative++;
+    }
+    return out;
+  }
+
+  function startCodenamesGame(roomId) {
+    var base = codenamesRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'lobby') return room;
+
+      var counts = countCodenamesRoles(room);
+      if (counts.redSpymaster !== 1 || counts.blueSpymaster !== 1) return room;
+      if (counts.redOperative < 1 || counts.blueOperative < 1) return room;
+
+      return assign({}, room, {
+        phase: 'playing',
+        turn: assign({}, room.turn || {}, {
+          team: room.firstTeam || (room.turn && room.turn.team) || 'red',
+          status: 'awaiting_clue',
+          guessesLeft: 0,
+          clue: { word: '', number: 0, by: '', at: 0 }
+        }),
+        result: { winner: '', finishedAt: 0, reason: '' }
+      });
+    });
+  }
+
+  function submitCodenamesClue(roomId, playerId, clueWord, clueNumber) {
+    var base = codenamesRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'playing') return room;
+      if (!room.turn || room.turn.status !== 'awaiting_clue') return room;
+
+      var player = room.players && room.players[playerId] ? room.players[playerId] : null;
+      if (!player || player.role !== 'spymaster') return room;
+      if (player.team !== room.turn.team) return room;
+
+      var w = String(clueWord || '').trim();
+      var n = clamp(parseIntSafe(clueNumber, 0), 0, 20);
+      if (!w) return room;
+
+      return assign({}, room, {
+        turn: {
+          team: room.turn.team,
+          status: 'guessing',
+          guessesLeft: n + 1,
+          clue: { word: w, number: n, by: playerId, at: serverNowMs() }
+        }
+      });
+    });
+  }
+
+  function endCodenamesTurn(roomId) {
+    var base = codenamesRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'playing') return room;
+      var team = room.turn && room.turn.team ? room.turn.team : 'red';
+      var nextTeam = team === 'red' ? 'blue' : 'red';
+      return assign({}, room, {
+        turn: {
+          team: nextTeam,
+          status: 'awaiting_clue',
+          guessesLeft: 0,
+          clue: { word: '', number: 0, by: '', at: 0 }
+        }
+      });
+    });
+  }
+
+  function revealCodenamesCard(roomId, playerId, index) {
+    var base = codenamesRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'playing') return room;
+      if (!room.board || !room.board.words || !room.board.key || !room.board.revealed) return room;
+      if (!room.turn || room.turn.status !== 'guessing') return room;
+      var idx = parseIntSafe(index, -1);
+      if (idx < 0 || idx >= room.board.words.length) return room;
+      if (room.board.revealed[idx]) return room;
+
+      var player = room.players && room.players[playerId] ? room.players[playerId] : null;
+      if (!player || player.role !== 'operative') return room;
+      if (player.team !== room.turn.team) return room;
+
+      var key = room.board.key[idx];
+      var nextRevealed = room.board.revealed.slice();
+      nextRevealed[idx] = true;
+
+      var nextProgress = assign({}, room.progress || {});
+      if (key === 'R') nextProgress.redRemaining = Math.max(0, (nextProgress.redRemaining || 0) - 1);
+      if (key === 'B') nextProgress.blueRemaining = Math.max(0, (nextProgress.blueRemaining || 0) - 1);
+
+      var winner = '';
+      var reason = '';
+      if (key === 'A') {
+        winner = room.turn.team === 'red' ? 'blue' : 'red';
+        reason = 'assassin';
+      } else {
+        if ((nextProgress.redRemaining || 0) === 0) {
+          winner = 'red';
+          reason = 'all-red';
+        }
+        if ((nextProgress.blueRemaining || 0) === 0) {
+          winner = 'blue';
+          reason = 'all-blue';
+        }
+      }
+
+      var nextRoom = assign({}, room, {
+        board: assign({}, room.board, { revealed: nextRevealed }),
+        progress: nextProgress
+      });
+
+      if (winner) {
+        nextRoom.phase = 'finished';
+        nextRoom.result = { winner: winner, finishedAt: serverNowMs(), reason: reason };
+        return nextRoom;
+      }
+
+      var shouldSwitch = false;
+      if (key !== (room.turn.team === 'red' ? 'R' : 'B')) {
+        shouldSwitch = true;
+      }
+
+      if (shouldSwitch) {
+        var nextTeam = room.turn.team === 'red' ? 'blue' : 'red';
+        nextRoom.turn = {
+          team: nextTeam,
+          status: 'awaiting_clue',
+          guessesLeft: 0,
+          clue: { word: '', number: 0, by: '', at: 0 }
+        };
+        return nextRoom;
+      }
+
+      var left = Math.max(0, (room.turn.guessesLeft || 0) - 1);
+      if (left === 0) {
+        var nt = room.turn.team === 'red' ? 'blue' : 'red';
+        nextRoom.turn = {
+          team: nt,
+          status: 'awaiting_clue',
+          guessesLeft: 0,
+          clue: { word: '', number: 0, by: '', at: 0 }
+        };
+        return nextRoom;
+      }
+
+      nextRoom.turn = assign({}, room.turn, { guessesLeft: left });
+      return nextRoom;
+    });
   }
 
   function createRoom(roomId, settings) {
@@ -1186,8 +2849,245 @@
   function renderHome(viewEl) {
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">ゲーム一覧</div>\n      <div class="muted">最初に遊ぶゲームを選びます（今後ここに追加していきます）。</div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">ワードウルフ</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=create">ワードウルフ開始</a>\n          <a class="btn ghost" href="?screen=history">勝敗履歴</a>\n        </div>\n        <div class="muted">参加者はQRを読み取って参加します。</div>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">ゲーム一覧</div>\n      <div class="muted">最初に遊ぶゲームを選びます（今後ここに追加していきます）。</div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">ワードウルフ</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=create">ワードウルフ開始</a>\n          <a class="btn ghost" href="?screen=history">勝敗履歴</a>\n        </div>\n        <div class="muted">参加者はQRを読み取って参加します。</div>\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">コードネーム</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=codenames_create">コードネーム開始</a>\n        </div>\n        <div class="muted">各チームにスパイマスター1人＋当てる側で遊びます。</div>\n      </div>\n    </div>\n  '
     );
+  }
+
+  function renderCodenamesCreate(viewEl) {
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">コードネーム：部屋を作成</div>\n\n      <div class="field">\n        <label>あなたの名前（表示用）</label>\n        <input id="cnHostName" placeholder="例: たろう" />\n      </div>\n\n      <div class="field">\n        <label>ボードサイズ（デフォルト 5x5）</label>\n        <input id="cnSize" type="number" min="3" max="8" value="5" />\n        <div class="muted">※ NxN（最大8）</div>\n      </div>\n\n      <div class="row">\n        <button id="cnCreateRoom" class="primary">QRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+    );
+  }
+
+  function readCodenamesCreateForm() {
+    var n = document.getElementById('cnHostName');
+    var s = document.getElementById('cnSize');
+    var name = String((n && n.value) || '').trim();
+    var size = clamp(parseIntSafe(s && s.value, 5), 3, 8);
+    if (!name) throw new Error('名前を入力してください。');
+    return { name: name, size: size };
+  }
+
+  function renderCodenamesJoin(viewEl, roomId) {
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">コードネーム：参加</div>\n      <div class="kv"><span class="muted">ルームID</span><b>' +
+        escapeHtml(roomId) +
+        '</b></div>\n\n      <div class="field">\n        <label>名前（表示用）</label>\n        <input id="cnPlayerName" placeholder="例: たろう" />\n      </div>\n\n      <div class="row">\n        <button id="cnJoin" class="primary">参加する</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+    );
+  }
+
+  function readCodenamesJoinForm() {
+    var el = document.getElementById('cnPlayerName');
+    var name = String((el && el.value) || '').trim();
+    if (!name) throw new Error('名前を入力してください。');
+    return { name: name };
+  }
+
+  function makeCodenamesJoinUrl(roomId) {
+    var q = {};
+    var v = getCacheBusterParam();
+    if (v) q.v = v;
+    q.room = roomId;
+    q.screen = 'codenames_join';
+    return baseUrl() + '?' + buildQuery(q);
+  }
+
+  function renderCodenamesHost(viewEl, opts) {
+    var roomId = opts.roomId;
+    var joinUrl = opts.joinUrl;
+    var room = opts.room;
+
+    var playerCount = room && room.players ? Object.keys(room.players).length : 0;
+    var phase = (room && room.phase) || '-';
+    var counts = countCodenamesRoles(room);
+
+    var canStart = phase === 'lobby' && counts.redSpymaster === 1 && counts.blueSpymaster === 1 && counts.redOperative >= 1 && counts.blueOperative >= 1;
+    var actionHtml = '';
+    if (phase === 'lobby') {
+      actionHtml =
+        '<div class="stack">' +
+        '<div class="muted">準備: 赤/青それぞれスパイマスター1人＋当てる側1人以上</div>' +
+        '<div class="kv"><span class="muted">赤</span><b>SM ' +
+        counts.redSpymaster +
+        ' / OP ' +
+        counts.redOperative +
+        '</b></div>' +
+        '<div class="kv"><span class="muted">青</span><b>SM ' +
+        counts.blueSpymaster +
+        ' / OP ' +
+        counts.blueOperative +
+        '</b></div>' +
+        (canStart ? '<button id="cnStart" class="primary">スタート</button>' : '<button class="primary" disabled>スタート</button>') +
+        '</div>';
+    }
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">コードネーム：QR配布</div>\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
+        playerCount +
+        '</b></div>\n      <div class="kv"><span class="muted">フェーズ</span><b>' +
+        escapeHtml(phase) +
+        '</b></div>\n\n      <hr />\n\n      ' +
+        actionHtml +
+        '\n\n      <div class="muted">※ 参加後は各自の画面でチーム/役職を選びます。</div>\n    </div>\n  '
+    );
+  }
+
+  function codenamesCellClass(key, revealed) {
+    if (!revealed) return 'cn-card';
+    if (key === 'R') return 'cn-card cn-revealed cn-red';
+    if (key === 'B') return 'cn-card cn-revealed cn-blue';
+    if (key === 'A') return 'cn-card cn-revealed cn-assassin';
+    return 'cn-card cn-revealed cn-neutral';
+  }
+
+  function renderCodenamesPlayer(viewEl, opts) {
+    var roomId = opts.roomId;
+    var playerId = opts.playerId;
+    var room = opts.room;
+    var player = opts.player;
+    var isHost = !!opts.isHost;
+
+    var phase = (room && room.phase) || 'lobby';
+    var myTeam = player && player.team ? player.team : '';
+    var myRole = player && player.role ? player.role : '';
+
+    var board = room && room.board ? room.board : null;
+    var size = board && board.size ? board.size : 5;
+    var total = board && board.words ? board.words.length : 0;
+    var key = board && board.key ? board.key : [];
+    var revealed = board && board.revealed ? board.revealed : [];
+
+    var title = '<div class="big">コードネーム</div>';
+    var meLine = '<div class="kv"><span class="muted">あなた</span><b>' + escapeHtml(formatPlayerDisplayName(player)) + '</b></div>';
+
+    var lobbyHtml = '';
+    if (phase === 'lobby') {
+      lobbyHtml =
+        '<div class="stack">' +
+        '<div class="big">待機中</div>' +
+        '<div class="muted">チームと役職を選んでください。</div>' +
+        '<div class="field"><label>チーム</label>' +
+        '<select id="cnTeam"><option value="">未選択</option><option value="red">赤</option><option value="blue">青</option></select></div>' +
+        '<div class="field"><label>役職</label>' +
+        '<select id="cnRole"><option value="">未選択</option><option value="spymaster">スパイマスター</option><option value="operative">当てる側</option></select></div>' +
+        '<button id="cnSavePrefs" class="primary">保存</button>' +
+        (isHost ? '<div class="muted">※ スタートはQR配布画面（ホスト）から行います。</div>' : '') +
+        '</div>';
+    }
+
+    var statusHtml = '';
+    if (phase === 'playing') {
+      var t = room.turn || {};
+      var team = t.team || 'red';
+      var teamLabel = team === 'red' ? '赤' : '青';
+      var clue = t.clue || { word: '', number: 0 };
+      var clueLine = clue.word ? escapeHtml(clue.word) + ' / ' + escapeHtml(String(clue.number || 0)) : '（未提示）';
+      statusHtml =
+        '<div class="stack">' +
+        '<div class="kv"><span class="muted">手番</span><b>' +
+        teamLabel +
+        '</b></div>' +
+        '<div class="kv"><span class="muted">ヒント</span><b>' +
+        clueLine +
+        '</b></div>' +
+        '<div class="kv"><span class="muted">残り</span><b>' +
+        escapeHtml(String(t.guessesLeft || 0)) +
+        '</b></div>' +
+        '</div>';
+    }
+
+    var clueFormHtml = '';
+    if (phase === 'playing') {
+      var tt = room.turn || {};
+      var canClue = myRole === 'spymaster' && myTeam && tt.team === myTeam && tt.status === 'awaiting_clue';
+      if (canClue) {
+        clueFormHtml =
+          '<hr /><div class="stack">' +
+          '<div class="big">ヒントを出す</div>' +
+          '<div class="field"><label>単語</label><input id="cnClueWord" placeholder="例: 動物" /></div>' +
+          '<div class="field"><label>数</label><input id="cnClueNum" type="number" min="0" max="20" value="1" /></div>' +
+          '<button id="cnSubmitClue" class="primary">送信</button>' +
+          '</div>';
+      }
+    }
+
+    var boardHtml = '';
+    if (phase === 'playing' || phase === 'finished') {
+      var cells = '';
+      var showKey = myRole === 'spymaster';
+      for (var i = 0; i < total; i++) {
+        var word = board && board.words ? board.words[i] : '';
+        var isRev = !!revealed[i];
+        var k = key[i];
+        var cls = codenamesCellClass(k, isRev || (showKey && phase === 'playing'));
+        var disabled = phase !== 'playing' || isRev || myRole !== 'operative' || !myTeam || !room.turn || room.turn.team !== myTeam || room.turn.status !== 'guessing';
+        var tagStart = disabled ? '<button class="' + cls + '" disabled>' : '<button class="' + cls + ' cnPick" data-idx="' + i + '">';
+        cells += tagStart + '<span class="cn-word">' + escapeHtml(word) + '</span></button>';
+      }
+
+      boardHtml =
+        '<hr /><div class="stack">' +
+        '<div class="big">ボード</div>' +
+        '<div class="cn-board" style="grid-template-columns: repeat(' +
+        escapeHtml(String(size)) +
+        ', 1fr);">' +
+        cells +
+        '</div>' +
+        '</div>';
+    }
+
+    var actionsHtml = '';
+    if (phase === 'playing') {
+      var ttt = room.turn || {};
+      var myTurn = myTeam && ttt.team === myTeam;
+      if (myTurn && ttt.status === 'guessing') {
+        actionsHtml = '<hr /><div class="row"><button id="cnEndTurn" class="ghost">ターン終了</button></div>';
+      }
+    }
+
+    var finishedHtml = '';
+    if (phase === 'finished') {
+      var winner = room && room.result ? room.result.winner : '';
+      var wLabel = winner === 'red' ? '赤の勝ち' : winner === 'blue' ? '青の勝ち' : '-';
+      finishedHtml =
+        '<div class="stack">' +
+        '<div class="big">結果</div>' +
+        '<div class="kv"><span class="muted">勝者</span><b>' +
+        escapeHtml(wLabel) +
+        '</b></div>' +
+        '</div>';
+    }
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      ' +
+        title +
+        '\n      ' +
+        meLine +
+        (myTeam || myRole
+          ? '<div class="kv"><span class="muted">役職</span><b>' +
+            escapeHtml((myTeam === 'red' ? '赤' : myTeam === 'blue' ? '青' : '-') + ' / ' + (myRole === 'spymaster' ? 'スパイマスター' : myRole === 'operative' ? '当てる側' : '-')) +
+            '</b></div>'
+          : '') +
+        '\n\n      ' +
+        (phase === 'lobby' ? lobbyHtml : '') +
+        (phase === 'playing' ? statusHtml : '') +
+        (phase === 'playing' ? clueFormHtml : '') +
+        (phase === 'playing' ? actionsHtml : '') +
+        (phase === 'finished' ? finishedHtml : '') +
+        boardHtml +
+        '\n\n      <div class="row">\n        <a class="btn ghost" href="./">ホーム</a>\n      </div>\n    </div>\n  '
+    );
+
+    if (phase === 'lobby') {
+      var teamSel = document.getElementById('cnTeam');
+      if (teamSel) teamSel.value = myTeam || '';
+      var roleSel = document.getElementById('cnRole');
+      if (roleSel) roleSel.value = myRole || '';
+    }
   }
 
   function renderHistory(viewEl, items) {
@@ -2398,9 +4298,24 @@
     var isHost = st.isHost;
     var isPlayer = q.player === '1';
 
+    if (screen === 'codenames_create') return routeCodenamesCreate();
+
     if (screen === 'setup') return routeSetup();
     if (screen === 'history') return routeHistory();
     if (screen === 'create') return routeCreate();
+
+    if (screen === 'codenames_join') {
+      if (!roomId) return routeHome();
+      return routeCodenamesJoin(roomId, isHost);
+    }
+    if (screen === 'codenames_host') {
+      if (!roomId) return routeHome();
+      return routeCodenamesHost(roomId);
+    }
+    if (screen === 'codenames_player') {
+      if (!roomId) return routeHome();
+      return routeCodenamesPlayer(roomId, isHost);
+    }
 
     if (!roomId) return routeHome();
 
@@ -2409,6 +4324,293 @@
     if (isHost) return routeHost(roomId);
 
     return routeJoin(roomId, false);
+  }
+
+  function routeCodenamesCreate() {
+    renderCodenamesCreate(viewEl);
+    var btn = document.getElementById('cnCreateRoom');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var settings;
+      try {
+        settings = readCodenamesCreateForm();
+      } catch (e) {
+        renderError(viewEl, (e && e.message) || '作成に失敗しました');
+        return;
+      }
+
+      var roomId = makeRoomId();
+      firebaseReady()
+        .then(function () {
+          return createCodenamesRoom(roomId, settings);
+        })
+        .then(function () {
+          var playerId = getOrCreateCodenamesPlayerId(roomId);
+          return joinPlayerInCodenamesRoom(roomId, playerId, settings.name, true);
+        })
+        .then(function () {
+          var q = {};
+          var v = getCacheBusterParam();
+          if (v) q.v = v;
+          q.room = roomId;
+          q.host = '1';
+          q.screen = 'codenames_host';
+          setQuery(q);
+          route();
+        })
+        .catch(function (e) {
+          renderError(viewEl, (e && e.message) || '作成に失敗しました');
+        });
+    });
+  }
+
+  function routeCodenamesJoin(roomId, isHost) {
+    renderCodenamesJoin(viewEl, roomId);
+    var btn = document.getElementById('cnJoin');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var form;
+      try {
+        form = readCodenamesJoinForm();
+      } catch (e) {
+        renderError(viewEl, (e && e.message) || '参加に失敗しました');
+        return;
+      }
+
+      firebaseReady()
+        .then(function () {
+          var playerId = getOrCreateCodenamesPlayerId(roomId);
+          return joinPlayerInCodenamesRoom(roomId, playerId, form.name, false).then(function (room) {
+            if (!room || !room.players || !room.players[playerId]) {
+              throw new Error('参加できません（ゲームが開始済みです）');
+            }
+            return playerId;
+          });
+        })
+        .then(function () {
+          var q = {};
+          var v = getCacheBusterParam();
+          if (v) q.v = v;
+          q.room = roomId;
+          q.screen = 'codenames_player';
+          q.player = '1';
+          if (isHost) q.host = '1';
+          setQuery(q);
+          route();
+        })
+        .catch(function (e) {
+          renderError(viewEl, (e && e.message) || '参加に失敗しました');
+        });
+    });
+  }
+
+  function routeCodenamesHost(roomId) {
+    var unsub = null;
+    var joinUrl = makeCodenamesJoinUrl(roomId);
+
+    function drawQr() {
+      return new Promise(function (resolve) {
+        var canvas = document.getElementById('qr');
+        var errEl = document.getElementById('qrError');
+        var wrapEl = document.getElementById('qrWrap');
+        if (errEl) errEl.textContent = '';
+        if (!canvas) {
+          if (errEl) errEl.textContent = 'QR表示領域が見つかりません。';
+          return resolve();
+        }
+        var qr = window.QRCode || window.qrcode || window.QR;
+        if (!qr || !qr.toCanvas) {
+          if (errEl) errEl.textContent = 'QRの生成に失敗しました（ライブラリ未読込）。';
+          return resolve();
+        }
+
+        function showAsImage() {
+          if (!qr.toDataURL || !wrapEl) return;
+          try {
+            qr.toDataURL(joinUrl, { margin: 1, width: 240 }, function (err, url) {
+              if (err || !url) {
+                if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+                return resolve();
+              }
+              wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />';
+              if (errEl) errEl.textContent = '（QRは画像で表示しています）';
+              return resolve();
+            });
+          } catch (e) {
+            if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+            return resolve();
+          }
+        }
+
+        function looksBlank(c) {
+          try {
+            var ctx = c.getContext && c.getContext('2d');
+            if (!ctx) return true;
+            var w = c.width || 0;
+            var h = c.height || 0;
+            if (!w || !h) return true;
+            var img = ctx.getImageData(0, 0, Math.min(16, w), Math.min(16, h)).data;
+            var allZero = true;
+            var allWhite = true;
+            for (var i = 0; i < img.length; i += 4) {
+              var r = img[i], g = img[i + 1], b = img[i + 2], a = img[i + 3];
+              if (a !== 0) allZero = false;
+              if (!(a !== 0 && r > 240 && g > 240 && b > 240)) allWhite = false;
+              if (!allZero && !allWhite) return false;
+            }
+            return allZero || allWhite;
+          } catch (e) {
+            return false;
+          }
+        }
+
+        try {
+          qr.toCanvas(canvas, joinUrl, { margin: 1, width: 240 }, function (err) {
+            if (err) {
+              if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+              showAsImage();
+              return;
+            }
+            if (looksBlank(canvas)) {
+              showAsImage();
+              return;
+            }
+            resolve();
+          });
+        } catch (e) {
+          if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+          showAsImage();
+        }
+      });
+    }
+
+    function renderWithRoom(room) {
+      renderCodenamesHost(viewEl, { roomId: roomId, joinUrl: joinUrl, room: room });
+      drawQr();
+
+      var startBtn = document.getElementById('cnStart');
+      if (startBtn) {
+        startBtn.addEventListener('click', function () {
+          startCodenamesGame(roomId)
+            .then(function () {
+              var q = {};
+              var v = getCacheBusterParam();
+              if (v) q.v = v;
+              q.room = roomId;
+              q.host = '1';
+              q.player = '1';
+              q.screen = 'codenames_player';
+              setQuery(q);
+              route();
+            })
+            .catch(function (e) {
+              alert((e && e.message) || '失敗');
+            });
+        });
+      }
+    }
+
+    firebaseReady()
+      .then(function () {
+        return subscribeCodenamesRoom(roomId, function (room) {
+          if (!room) {
+            renderError(viewEl, '部屋が見つかりません');
+            return;
+          }
+          renderWithRoom(room);
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+    });
+  }
+
+  function routeCodenamesPlayer(roomId, isHost) {
+    var playerId = getOrCreateCodenamesPlayerId(roomId);
+    var unsub = null;
+
+    firebaseReady()
+      .then(function () {
+        return subscribeCodenamesRoom(roomId, function (room) {
+          if (!room) {
+            renderError(viewEl, '部屋が見つかりません');
+            return;
+          }
+
+          var player = room.players ? room.players[playerId] : null;
+          renderCodenamesPlayer(viewEl, { roomId: roomId, playerId: playerId, room: room, player: player, isHost: isHost });
+
+          var saveBtn = document.getElementById('cnSavePrefs');
+          if (saveBtn && !saveBtn.__cn_bound) {
+            saveBtn.__cn_bound = true;
+            saveBtn.addEventListener('click', function () {
+              var teamSel = document.getElementById('cnTeam');
+              var roleSel = document.getElementById('cnRole');
+              var team = String((teamSel && teamSel.value) || '');
+              var role = String((roleSel && roleSel.value) || '');
+              setCodenamesPlayerPrefs(roomId, playerId, team, role).catch(function (e) {
+                alert((e && e.message) || '失敗');
+              });
+            });
+          }
+
+          var clueBtn = document.getElementById('cnSubmitClue');
+          if (clueBtn && !clueBtn.__cn_bound) {
+            clueBtn.__cn_bound = true;
+            clueBtn.addEventListener('click', function () {
+              var wEl = document.getElementById('cnClueWord');
+              var nEl = document.getElementById('cnClueNum');
+              var w = String((wEl && wEl.value) || '');
+              var n = parseIntSafe(nEl && nEl.value, 0);
+              submitCodenamesClue(roomId, playerId, w, n).catch(function (e) {
+                alert((e && e.message) || '失敗');
+              });
+            });
+          }
+
+          var endBtn = document.getElementById('cnEndTurn');
+          if (endBtn && !endBtn.__cn_bound) {
+            endBtn.__cn_bound = true;
+            endBtn.addEventListener('click', function () {
+              endCodenamesTurn(roomId).catch(function (e) {
+                alert((e && e.message) || '失敗');
+              });
+            });
+          }
+
+          var pickBtns = document.querySelectorAll('.cnPick');
+          for (var i = 0; i < pickBtns.length; i++) {
+            var b = pickBtns[i];
+            if (b.__cn_bound) continue;
+            b.__cn_bound = true;
+            b.addEventListener('click', function (ev) {
+              var el = ev && ev.currentTarget ? ev.currentTarget : null;
+              if (!el) return;
+              var idx = el.getAttribute('data-idx');
+              revealCodenamesCard(roomId, playerId, idx).catch(function (e) {
+                alert((e && e.message) || '失敗');
+              });
+            });
+          }
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+    });
   }
 
   function setupRulesButton() {
@@ -2423,6 +4625,22 @@
     btn.__ww_bound = true;
 
     btn.addEventListener('click', function () {
+      var q = parseQuery();
+      var s = q && q.screen ? String(q.screen) : '';
+      if (s.indexOf('codenames_') === 0) {
+        var cl = [];
+        cl.push('【コードネーム ルール】');
+        cl.push('1) 部屋を作成 → QRで参加');
+        cl.push('2) 各自でチーム（赤/青）と役職（スパイマスター/当てる側）を選ぶ');
+        cl.push('3) 各チーム「スパイマスター1人 + 当てる側1人以上」が揃ったらスタート');
+        cl.push('4) 手番チームのスパイマスターがヒント（単語・数）を出す');
+        cl.push('5) 当てる側がカードをめくる（自分の色なら続行、違う色/中立なら手番交代）');
+        cl.push('6) 暗殺者をめくると、そのチームの負け');
+        cl.push('7) 自分の色を全てめくったチームの勝ち');
+        alert(cl.join('\n'));
+        return;
+      }
+
       var lines = [];
       lines.push('【ワードウルフ ルール】');
       lines.push('1) ゲームマスターが部屋を作成し、QRを配布');
@@ -2444,7 +4662,7 @@
     var buildInfoEl = document.querySelector('#buildInfo');
     if (buildInfoEl) {
       var assetV = getCacheBusterParam();
-      buildInfoEl.textContent = 'v0.9 (gm-first + auto vote + reveal flow)' + (assetV ? ' / assets ' + assetV : '');
+      buildInfoEl.textContent = 'v0.10 (B_BoardGames + codenames)' + (assetV ? ' / assets ' + assetV : '');
     }
 
     window.addEventListener('popstate', function () {

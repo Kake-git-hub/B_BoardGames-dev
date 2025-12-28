@@ -64,3 +64,21 @@ hr{border:none;border-top:1px solid var(--line);margin:12px 0}
 /* QR should remain scannable on dark UI */
 #qr,#qrImg{background:var(--text);padding:8px;border-radius:12px;display:inline-block}
 #qrImg{max-width:240px;height:auto}
+
+/* Codenames */
+.cn-board{display:grid;gap:8px}
+.cn-card{
+  width:100%;
+  padding:10px 8px;
+  border-radius:12px;
+  border:1px solid var(--line);
+  background:var(--card);
+  color:var(--text);
+  min-height:44px;
+}
+.cn-card:disabled{opacity:1}
+.cn-word{display:block;font-weight:800;font-size:12px;word-break:break-word;line-height:1.1}
+.cn-revealed.cn-red{background:rgba(255,90,106,.22);border-color:rgba(255,90,106,.55)}
+.cn-revealed.cn-blue{background:rgba(77,163,255,.22);border-color:rgba(77,163,255,.55)}
+.cn-revealed.cn-neutral{background:transparent}
+.cn-revealed.cn-assassin{background:var(--bg)}
