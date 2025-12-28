@@ -102,3 +102,4 @@ hr{border:none;border-top:1px solid var(--line);margin:12px 0}
 .cn-clue-view b,.cn-clue-left b{color:var(--text)}
 
 .cn-pending .cn-word{color:var(--ok)}
+.cn-card.cn-pending{border-color:var(--ok);background:rgba(53,208,127,.10)}

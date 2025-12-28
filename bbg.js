@@ -114,6 +114,10 @@
   // Revert later by setting to 0 (or removing override).
   var FORCE_TALK_SECONDS = 0;
 
+  // Codenames: long-press duration (ms) to confirm a card pick.
+  // Short tap = pending toggle.
+  var CN_LONG_PRESS_MS = 600;
+
   // Firebase server time correction (helps devices with clock drift / iOS timer lag)
   var _serverTimeOffsetMs = 0;
   function serverNowMs() {
@@ -4721,7 +4725,7 @@
             b.__cn_bound = true;
 
             (function (btn) {
-              var holdMs = 450;
+              var holdMs = CN_LONG_PRESS_MS;
               var timer = null;
               var longFired = false;
 
