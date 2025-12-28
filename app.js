@@ -48,6 +48,12 @@
     return Date.now ? Date.now() : new Date().getTime();
   }
 
+  // Firebase server time correction (helps devices with clock drift / iOS timer lag)
+  var _serverTimeOffsetMs = 0;
+  function serverNowMs() {
+    return nowMs() + (_serverTimeOffsetMs || 0);
+  }
+
   function pad2(n) {
     var s = String(Math.floor(Math.abs(n)));
     return s.length >= 2 ? s : '0' + s;
@@ -392,7 +398,19 @@
           })
           .then(function () {
             firebase.initializeApp(firebaseConfig);
-            return firebase.database();
+            var db = firebase.database();
+
+            // Keep an approximate server clock for consistent timers across devices.
+            try {
+              db.ref('.info/serverTimeOffset').on('value', function (snap) {
+                var v = snap && snap.val ? snap.val() : 0;
+                _serverTimeOffsetMs = parseIntSafe(v, 0) || 0;
+              });
+            } catch (e) {
+              // ignore
+            }
+
+            return db;
           });
       });
 
@@ -477,7 +495,7 @@
     }
 
     var room = {
-      createdAt: nowMs(),
+      createdAt: serverNowMs(),
       phase: 'lobby',
       settings: {
         minorityCount: settings.minorityCount,
@@ -530,8 +548,8 @@
       var prev = players[playerId] || {};
       var next = assign({}, prev, {
         name: name,
-        joinedAt: prev.joinedAt || nowMs(),
-        lastSeenAt: nowMs()
+        joinedAt: prev.joinedAt || serverNowMs(),
+        lastSeenAt: serverNowMs()
       });
 
       if (isHostPlayer) next.isHost = true;
@@ -543,7 +561,11 @@
   }
 
   function formatPlayerDisplayName(player) {
-    var name = player && player.name ? String(player.name) : '';
+    return player && player.name ? String(player.name) : '';
+  }
+
+  function formatPlayerMenuName(player) {
+    var name = formatPlayerDisplayName(player);
     if (player && player.isHost) name += ' (ゲームマスター)';
     return name;
   }
@@ -664,7 +686,7 @@
         nextPlayers[pid] = assign({}, p, { role: minoritySet[pid] ? 'minority' : 'majority' });
       }
 
-      var startedAt = nowMs();
+      var startedAt = serverNowMs();
       return assign({}, room, {
         phase: 'discussion',
         players: nextPlayers,
@@ -689,10 +711,10 @@
       if (room.phase !== 'discussion') return room;
       var endAt = room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
       if (!endAt) return room;
-      if (nowMs() < endAt) return room;
+      if (serverNowMs() < endAt) return room;
       return assign({}, room, {
         phase: 'voting',
-        voting: { startedAt: nowMs(), revealedAt: 0 },
+        voting: { startedAt: serverNowMs(), revealedAt: 0 },
         votes: {}
       });
     });
@@ -715,8 +737,8 @@
       if (votedOutRole === 'majority') {
         return assign({}, room, {
           phase: 'finished',
-          reveal: { revealedAt: nowMs(), votedOutId: votedOutId },
-          result: { winner: 'minority', decidedAt: nowMs(), decidedBy: 'auto' }
+          reveal: { revealedAt: serverNowMs(), votedOutId: votedOutId },
+          result: { winner: 'minority', decidedAt: serverNowMs(), decidedBy: 'auto' }
         });
       }
 
@@ -732,7 +754,7 @@
         if (!nextGuess.guesses) nextGuess.guesses = {};
         return assign({}, room, {
           phase: 'guess',
-          reveal: { revealedAt: nowMs(), votedOutId: votedOutId },
+          reveal: { revealedAt: serverNowMs(), votedOutId: votedOutId },
           guess: nextGuess,
           result: { winner: '', decidedAt: 0, decidedBy: '' }
         });
@@ -741,8 +763,8 @@
       // default: majority wins
       return assign({}, room, {
         phase: 'finished',
-        reveal: { revealedAt: nowMs(), votedOutId: votedOutId },
-        result: { winner: 'majority', decidedAt: nowMs(), decidedBy: 'auto' }
+        reveal: { revealedAt: serverNowMs(), votedOutId: votedOutId },
+        result: { winner: 'majority', decidedAt: serverNowMs(), decidedBy: 'auto' }
       });
     });
   }
@@ -758,7 +780,7 @@
       if (!voter || voter.role === 'spectator') return room;
       if (!to || to.role === 'spectator') return room;
       var nextVotes = assign({}, room.votes || {});
-      nextVotes[voterId] = { to: toPlayerId, at: nowMs() };
+      nextVotes[voterId] = { to: toPlayerId, at: serverNowMs() };
       return assign({}, room, { votes: nextVotes });
     });
   }
@@ -782,9 +804,9 @@
         room.guess || {}
       );
       var guesses = assign({}, nextGuess.guesses || {});
-      if (gt) guesses[playerId] = { text: gt, at: nowMs() };
+      if (gt) guesses[playerId] = { text: gt, at: serverNowMs() };
       nextGuess.guesses = guesses;
-      nextGuess.submittedAt = nowMs();
+      nextGuess.submittedAt = serverNowMs();
 
       var nextRoom = assign({}, room, { guess: nextGuess });
 
@@ -803,7 +825,7 @@
       if (room.phase !== 'judge') return room;
       return assign({}, room, {
         phase: 'finished',
-        result: { winner: w, decidedAt: nowMs(), decidedBy: 'gm' }
+        result: { winner: w, decidedAt: serverNowMs(), decidedBy: 'gm' }
       });
     });
   }
@@ -850,7 +872,7 @@
         nextPlayers[pid] = assign({}, p, { role: minoritySet[pid] ? 'minority' : 'majority' });
       }
 
-      var startedAt = nowMs();
+      var startedAt = serverNowMs();
       return assign({}, room, {
         phase: 'discussion',
         settings: {
@@ -876,6 +898,50 @@
           submittedAt: 0,
           guesses: {}
         },
+        result: { winner: '', decidedAt: 0, decidedBy: '' }
+      });
+    });
+  }
+
+  function resetRoomForPlayerChange(roomId, hostPlayerId) {
+    var base = roomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'finished') return room;
+
+      var players = room.players || {};
+      var hostId = hostPlayerId;
+      if (!players[hostId] || !players[hostId].isHost) {
+        hostId = '';
+        var keys = Object.keys(players);
+        for (var i = 0; i < keys.length; i++) {
+          var pid = keys[i];
+          if (players[pid] && players[pid].isHost) {
+            hostId = pid;
+            break;
+          }
+        }
+      }
+
+      var host = hostId && players[hostId] ? players[hostId] : null;
+      if (!hostId || !host) return room;
+
+      var nextPlayers = {};
+      nextPlayers[hostId] = {
+        name: host.name || 'GM',
+        isHost: true,
+        joinedAt: host.joinedAt || serverNowMs(),
+        lastSeenAt: serverNowMs()
+      };
+
+      return assign({}, room, {
+        phase: 'lobby',
+        players: nextPlayers,
+        discussion: { startedAt: 0, endsAt: 0 },
+        voting: { startedAt: 0, revealedAt: 0 },
+        votes: {},
+        reveal: { revealedAt: 0, votedOutId: '' },
+        guess: { enabled: !!(room.settings && room.settings.reversal), submittedAt: 0, guesses: {} },
         result: { winner: '', decidedAt: 0, decidedBy: '' }
       });
     });
@@ -1076,7 +1142,7 @@
   function renderCreate(viewEl) {
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">部屋を作成</div>\n\n      <div class="field">\n        <label>GMの名前（表示用）</label>\n        <input id="gmName" placeholder="例: たろう" />\n        <div class="muted">※ ゲーム中は「(ゲームマスター)」を付けて表示します。</div>\n      </div>\n\n      <div class="field">\n        <label>少数側の人数（最大5）</label>\n        <input id="minorityCount" type="range" min="1" max="5" step="1" value="1" />\n        <div class="kv"><span class="muted">現在</span><b id="minorityCountLabel">1</b></div>\n      </div>\n\n      <div class="field">\n        <label>トーク時間（分・最大5分）</label>\n        <input id="talkMinutes" type="range" min="1" max="5" step="1" value="3" />\n        <div class="kv"><span class="muted">現在</span><b id="talkMinutesLabel">3分</b></div>\n      </div>\n\n      <div class="field">\n        <label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>\n        <select id="reversal">\n          <option value="1" selected>あり</option>\n          <option value="0">なし</option>\n        </select>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>お題カテゴリ</label>\n        <select id="topicCategory"></select>\n        <div class="muted">※ 作成時点（QR表示時）にワードを確定してDBに保持します。画面には表示しません。</div>\n      </div>\n\n      <div class="row">\n        <button id="createRoom" class="primary">QRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">部屋を作成</div>\n\n      <div class="field">\n        <label>GMの名前（表示用）</label>\n        <input id="gmName" placeholder="例: たろう" />\n        <div class="muted">※ 待機中など一部の画面では「(ゲームマスター)」を付けて表示します。</div>\n      </div>\n\n      <div class="field">\n        <label>少数側の人数（最大5）</label>\n        <input id="minorityCount" type="range" min="1" max="5" step="1" value="1" />\n        <div class="kv"><span class="muted">現在</span><b id="minorityCountLabel">1</b></div>\n      </div>\n\n      <div class="field">\n        <label>トーク時間（分・最大5分）</label>\n        <input id="talkMinutes" type="range" min="1" max="5" step="1" value="3" />\n        <div class="kv"><span class="muted">現在</span><b id="talkMinutesLabel">3分</b></div>\n      </div>\n\n      <div class="field">\n        <label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>\n        <select id="reversal">\n          <option value="1" selected>あり</option>\n          <option value="0">なし</option>\n        </select>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>お題カテゴリ</label>\n        <select id="topicCategory"></select>\n        <div class="muted">※ 作成時点（QR表示時）にワードを確定してDBに保持します。画面には表示しません。</div>\n      </div>\n\n      <div class="row">\n        <button id="createRoom" class="primary">QRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
     );
 
     var sel = document.getElementById('topicCategory');
@@ -1224,7 +1290,7 @@
     if (isHost) wordView = '（非表示）';
 
     var endAt = room && room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
-    var remain = Math.max(0, Math.floor((endAt - (Date.now ? Date.now() : new Date().getTime())) / 1000));
+    var remain = phase === 'discussion' ? Math.max(0, Math.floor((endAt - serverNowMs()) / 1000)) : 0;
 
     var statusText = '';
     if (phase === 'lobby') statusText = '待機中：GMがスタートするまでお待ちください。';
@@ -1271,13 +1337,14 @@
     }
 
     var voteResultHtml = '';
-    if (phase === 'finished') {
+    var canShowVoteResult = !!(room && room.reveal && room.reveal.revealedAt) || !!votedOutId;
+    if (canShowVoteResult && (phase === 'guess' || phase === 'judge' || phase === 'finished')) {
       var rows = '';
       for (var ti = 0; ti < tally.length; ti++) {
         var r = tally[ti];
         rows += '<div class="kv"><span class="muted">' + escapeHtml(r.name) + '</span><b>' + r.count + '</b></div>';
       }
-      voteResultHtml = '<hr /><div class="muted">投票結果（得票数）</div><div class="stack">' + rows + '</div>';
+      voteResultHtml = '<hr /><div class="big">投票結果</div><div class="stack">' + rows + '</div>';
     }
 
     var minorityNames = [];
@@ -1407,26 +1474,48 @@
               '<button id="changePlayers" class="ghost">参加者変更</button>' +
               '</div>'
           : '') +
-        voteResultHtml +
         '</div>';
-      voteResultHtml = '';
+    }
+
+    var selfName = formatPlayerDisplayName(player) || '';
+    if (player && player.isHost && (phase === 'lobby' || phase === 'finished')) {
+      selfName = formatPlayerMenuName(player);
+    }
+
+    var statusCardHtml = '';
+    if (phase === 'discussion') {
+      statusCardHtml =
+        '<div class="card center" style="padding:12px">' +
+        '<div class="timer" id="timer">' +
+        escapeHtml(formatMMSS(remain)) +
+        '</div>' +
+        '<div class="big">' +
+        escapeHtml(statusText) +
+        '</div>' +
+        '</div>';
+    } else {
+      statusCardHtml =
+        '<div class="card center" style="padding:12px">' +
+        '<div class="big">' +
+        escapeHtml(statusText) +
+        '</div>' +
+        '</div>';
     }
 
     render(
       viewEl,
       '\n    <div class="stack">\n      <div class="big">' +
-        escapeHtml(formatPlayerDisplayName(player) || '') +
+        escapeHtml(selfName) +
         '</div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">あなたのワード</div>\n        <div class="big">' +
         escapeHtml(wordView || '（未配布）') +
-        '</div>\n      </div>\n\n      <div class="card center" style="padding:12px">\n        <div class="muted">残り時間</div>\n        <div class="timer" id="timer">' +
-        escapeHtml(formatMMSS(remain)) +
-        '</div>\n        <div class="muted">' +
-        escapeHtml(statusText) +
         '</div>\n      </div>\n\n      ' +
+        statusCardHtml +
+        '\n\n      ' +
         votingHtml +
         guessHtml +
         judgeHtml +
         finishedHtml +
+        voteResultHtml +
         '\n\n      <div class="row">' +
         (isHost && phase === 'voting' && isVotingComplete(room) ? '<button id="revealNext" class="primary">結果発表</button>' : '') +
         '</div>\n    </div>\n  '
@@ -1809,8 +1898,9 @@
     function rerenderTimer(room) {
       var el = document.getElementById('timer');
       if (!el) return;
+      if (!room || room.phase !== 'discussion') return;
       var endAt = room && room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
-      var remain = Math.max(0, Math.floor((endAt - (Date.now ? Date.now() : new Date().getTime())) / 1000));
+      var remain = Math.max(0, Math.floor((endAt - serverNowMs()) / 1000));
       el.textContent = formatMMSS(remain);
     }
 
@@ -1836,7 +1926,7 @@
             rerenderTimer(room);
             if (!autoVoteRequested && room && room.phase === 'discussion') {
               var endAt = room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
-              if (endAt && nowMs() >= endAt) {
+              if (endAt && serverNowMs() >= endAt) {
                 autoVoteRequested = true;
                 autoStartVotingIfEnded(roomId);
               }
@@ -1972,11 +2062,22 @@
           var changePlayersBtn = document.getElementById('changePlayers');
           if (changePlayersBtn) {
             changePlayersBtn.addEventListener('click', function () {
-              var q = { screen: 'create' };
-              var v = getCacheBusterParam();
-              if (v) q.v = v;
-              setQuery(q);
-              route();
+              changePlayersBtn.disabled = true;
+              resetRoomForPlayerChange(roomId, playerId)
+                .then(function () {
+                  var q = { screen: 'join', room: roomId };
+                  if (isHost) q.host = '1';
+                  var v = getCacheBusterParam();
+                  if (v) q.v = v;
+                  setQuery(q);
+                  route();
+                })
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  changePlayersBtn.disabled = false;
+                });
             });
           }
         });
