@@ -789,6 +789,14 @@
       }
 
       if (leaders.length > 1) {
+        // If this is already a runoff revote and it's still tied, minority wins.
+        if (candidateIds && candidateIds.length) {
+          return assign({}, room, {
+            phase: 'finished',
+            reveal: { revealedAt: serverNowMs(), votedOutId: '' },
+            result: { winner: 'minority', decidedAt: serverNowMs(), decidedBy: 'runoff-tie' }
+          });
+        }
         var prevRound = room.voting && room.voting.runoff && room.voting.runoff.round ? parseIntSafe(room.voting.runoff.round, 0) : 0;
         return assign({}, room, {
           phase: 'voting',
@@ -1368,13 +1376,26 @@
       return b.count - a.count;
     });
 
+    var majorityWord = (room && room.words ? room.words.majority : '') || '';
+    var minorityWord = (room && room.words ? room.words.minority : '') || '';
+
     var word = '';
-    if (role === 'minority') word = (room && room.words ? room.words.minority : '') || '';
-    if (role === 'majority') word = (room && room.words ? room.words.majority : '') || '';
+    if (role === 'minority') word = minorityWord;
+    if (role === 'majority') word = majorityWord;
+
+    // Reveal both words when:
+    // - majority wins (phase finished), or
+    // - minority guesses are completed (phase judge)
+    // (Finished always reveals.)
+    var shouldRevealBothWords = phase === 'judge' || phase === 'finished';
 
     var wordView = word;
+    if (shouldRevealBothWords && (majorityWord || minorityWord)) {
+      wordView = '多数側：' + (majorityWord || '-') + '\n少数側：' + (minorityWord || '-');
+    }
 
-    var showRoleLabel = phase === 'voting' || phase === 'guess' || phase === 'judge' || phase === 'finished';
+    // Role label is hidden during voting; show only after reveal (guess/judge/finished).
+    var showRoleLabel = phase === 'guess' || phase === 'judge' || phase === 'finished';
     var roleLabel = '';
     if (showRoleLabel) {
       if (role === 'majority') roleLabel = '多人数側';
@@ -2270,9 +2291,36 @@
     return routeJoin(roomId, false);
   }
 
+  function setupRulesButton() {
+    var btn = null;
+    try {
+      btn = document.getElementById('rulesBtn');
+    } catch (e) {
+      btn = null;
+    }
+    if (!btn) return;
+    if (btn.__ww_bound) return;
+    btn.__ww_bound = true;
+
+    btn.addEventListener('click', function () {
+      var lines = [];
+      lines.push('【ワードウルフ ルール】');
+      lines.push('1) ゲームマスターが部屋を作成し、QRを配布');
+      lines.push('2) スタート → トーク（少数側を探す）');
+      lines.push('3) 投票（同票なら同票者で再投票）');
+      lines.push('   ※ 再投票でも同票なら少数側の勝ち');
+      lines.push('4) 結果発表');
+      lines.push('   - 多数側が追放されたら少数側の勝ち');
+      lines.push('   - 少数側が追放され、逆転ありの場合：少数側が多数側ワードを入力 → 予想一覧 → ゲームマスターが判定');
+      lines.push('   - 逆転なしの場合：多数側の勝ち');
+      alert(lines.join('\n'));
+    });
+  }
+
   // boot
   try {
     viewEl = qs('#view');
+    setupRulesButton();
     var buildInfoEl = document.querySelector('#buildInfo');
     if (buildInfoEl) {
       var assetV = getCacheBusterParam();

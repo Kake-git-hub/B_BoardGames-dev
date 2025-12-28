@@ -17,8 +17,10 @@ body{
 }
 .app{max-width:520px;margin:0 auto;padding:16px}
 .header{padding:8px 4px 12px}
+.header-row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
 .header h1{margin:0;font-size:22px}
 .sub{margin:6px 0 0;color:var(--muted);font-size:13px}
+.rules-btn{white-space:nowrap}
 .card{
   background:var(--card);
   border:1px solid var(--line);
