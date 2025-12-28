@@ -1093,6 +1093,12 @@
         finishedHtml +
         '\n\n      <div class="row">\n        <a class="btn ghost" href="./">ホームへ</a>\n      </div>\n    </div>\n  '
     );
+  }
+
+  // -------------------- main (router) --------------------
+  var viewEl = null;
+
+  function makeJoinUrl(roomId) {
     var q = {};
     var v = getCacheBusterParam();
     if (v) q.v = v;
