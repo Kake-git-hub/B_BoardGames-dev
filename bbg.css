@@ -58,6 +58,9 @@ hr{border:none;border-top:1px solid var(--line);margin:12px 0}
 .inline-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .footer{padding:10px 4px;color:var(--muted);text-align:center}
 
+.form-error{color:var(--danger);font-size:13px;line-height:1.4}
+.form-error:empty{display:none}
+
 /* Result highlight (winner=red, loser=blue) */
 #view.result-win{background:rgba(255,90,106,.22);border-color:rgba(255,90,106,.55)}
 #view.result-lose{background:rgba(77,163,255,.22);border-color:rgba(77,163,255,.55)}
@@ -98,6 +101,12 @@ hr{border:none;border-top:1px solid var(--line);margin:12px 0}
 .cn-turn-active{background:var(--text);border-color:var(--text);color:var(--bg)}
 .cn-turn-red.cn-turn-active{background:var(--text);border-color:var(--text)}
 .cn-turn-blue.cn-turn-active{background:var(--text);border-color:var(--text)}
+
+/* Codenames: emphasize whole field on my turn */
+#view.cn-myturn{background:var(--text);border-color:var(--text);color:var(--bg)}
+#view.cn-myturn .muted,#view.cn-myturn label,#view.cn-myturn .cn-role,#view.cn-myturn .cn-clue-view,#view.cn-myturn .cn-clue-left{color:var(--bg);opacity:.72}
+#view.cn-myturn .cn-turn{border-color:var(--bg);color:var(--bg);opacity:.85}
+#view.cn-myturn .cn-turn-active{background:var(--bg);border-color:var(--bg);color:var(--text);opacity:1}
 
 .cn-clue-row{display:flex;gap:10px;align-items:center;flex-wrap:nowrap}
 .cn-clue-row input{flex:1;min-width:0}

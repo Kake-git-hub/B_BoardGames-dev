@@ -3038,6 +3038,17 @@
     );
   }
 
+  function setInlineError(id, message) {
+    var el = document.getElementById(id);
+    if (!el) return false;
+    el.textContent = String(message || '');
+    return true;
+  }
+
+  function clearInlineError(id) {
+    setInlineError(id, '');
+  }
+
   function renderHome(viewEl) {
     render(
       viewEl,
@@ -3046,9 +3057,14 @@
   }
 
   function renderCodenamesCreate(viewEl) {
+    try {
+      if (viewEl && viewEl.classList) viewEl.classList.remove('cn-myturn');
+    } catch (e) {
+      // ignore
+    }
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">コードネーム：部屋を作成</div>\n\n      <div class="field">\n        <label>あなたの名前（表示用）</label>\n        <input id="cnHostName" placeholder="例: たろう" />\n      </div>\n\n      <div class="field">\n        <label>ボードサイズ（デフォルト 5x5）</label>\n        <input id="cnSize" type="number" min="3" max="8" value="5" />\n        <div class="muted">※ NxN（最大8）</div>\n      </div>\n\n      <div class="row">\n        <button id="cnCreateRoom" class="primary">QRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">コードネーム：部屋を作成</div>\n      <div id="cnCreateError" class="form-error" role="alert"></div>\n\n      <div class="field">\n        <label>あなたの名前（表示用）</label>\n        <input id="cnHostName" placeholder="例: たろう" />\n      </div>\n\n      <div class="field">\n        <label>ボードサイズ（デフォルト 5x5）</label>\n        <input id="cnSize" type="number" min="3" max="8" value="5" />\n        <div class="muted">※ NxN（最大8）</div>\n      </div>\n\n      <div class="row">\n        <button id="cnCreateRoom" class="primary">QRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
     );
   }
 
@@ -3062,11 +3078,16 @@
   }
 
   function renderCodenamesJoin(viewEl, roomId) {
+    try {
+      if (viewEl && viewEl.classList) viewEl.classList.remove('cn-myturn');
+    } catch (e) {
+      // ignore
+    }
     render(
       viewEl,
       '\n    <div class="stack">\n      <div class="big">コードネーム：参加</div>\n      <div class="kv"><span class="muted">ルームID</span><b>' +
         escapeHtml(roomId) +
-        '</b></div>\n\n      <div class="field">\n        <label>名前（表示用）</label>\n        <input id="cnPlayerName" placeholder="例: たろう" />\n      </div>\n\n      <div class="row">\n        <button id="cnJoin" class="primary">参加する</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+        '</b></div>\n\n      <div id="cnJoinError" class="form-error" role="alert"></div>\n\n      <div class="field">\n        <label>名前（表示用）</label>\n        <input id="cnPlayerName" placeholder="例: たろう" />\n      </div>\n\n      <div class="row">\n        <button id="cnJoin" class="primary">参加する</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
     );
   }
 
@@ -3152,6 +3173,7 @@
       '<hr />' +
       '<div class="stack">' +
       '<div class="big">GM（この端末）</div>' +
+      '<div id="cnGmError" class="form-error" role="alert"></div>' +
       '<div class="field"><label>名前（表示用）</label><input id="cnGmName" placeholder="例: たろう" value="' +
       escapeHtml(gmName) +
       '" /></div>' +
@@ -3222,6 +3244,17 @@
     var turnTeam = phase === 'playing' && room && room.turn ? room.turn.team : '';
     var turnLabel = turnTeam === 'red' ? '赤' : turnTeam === 'blue' ? '青' : '-';
     var turnCls = 'cn-turn' + (turnTeam === 'red' ? ' cn-turn-red' : turnTeam === 'blue' ? ' cn-turn-blue' : '') + (myTeam && turnTeam && myTeam === turnTeam ? ' cn-turn-active' : '');
+
+    try {
+      if (viewEl && viewEl.classList) {
+        viewEl.classList.remove('cn-myturn');
+        if (phase === 'playing' && myTeam && turnTeam && myTeam === turnTeam) {
+          viewEl.classList.add('cn-myturn');
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
     var topLine =
       '<div class="cn-topline">' +
       '<div class="cn-me">' +
@@ -3279,6 +3312,7 @@
         '<select id="cnTeam"><option value="">未選択</option><option value="red">赤</option><option value="blue">青</option></select></div>' +
         '<div class="field"><label>役職</label>' +
         '<select id="cnRole"><option value="">未選択</option><option value="spymaster">スパイマスター</option><option value="operative">諜報員</option></select></div>' +
+        '<div id="cnPrefsError" class="form-error" role="alert"></div>' +
         '<button id="cnSavePrefs" class="primary">保存</button>' +
         (isGm
           ? '<hr />' +
@@ -3316,7 +3350,8 @@
           '<input id="cnClueWord" placeholder="ヒント" />' +
           '<input id="cnClueNum" class="cn-clue-num" type="number" min="0" max="20" value="1" />' +
           '<button id="cnSubmitClue" class="primary">送信</button>' +
-          '</div>';
+          '</div>' +
+          '<div id="cnClueError" class="form-error" role="alert"></div>';
       } else {
         var clueLine = clueText ? escapeHtml(clueText) + ' / ' + escapeHtml(clueNum || '0') : '（未提示）';
         clueRowHtml =
@@ -3587,9 +3622,14 @@
   }
 
   function renderCreate(viewEl) {
+    try {
+      if (viewEl && viewEl.classList) viewEl.classList.remove('cn-myturn');
+    } catch (e) {
+      // ignore
+    }
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">部屋を作成</div>\n\n      <div class="field">\n        <label>ゲームマスターの名前（表示用）</label>\n        <input id="gmName" placeholder="例: たろう" />\n        <div class="muted">※ 待機中など一部の画面では「(ゲームマスター)」を付けて表示します。</div>\n      </div>\n\n      <div class="field">\n        <label>少数側の人数（最大5）</label>\n        <input id="minorityCount" type="range" min="1" max="5" step="1" value="1" />\n        <div class="kv"><span class="muted">現在</span><b id="minorityCountLabel">1</b></div>\n      </div>\n\n      <div class="field">\n        <label>トーク時間（分・最大5分）</label>\n        <input id="talkMinutes" type="range" min="1" max="5" step="1" value="3" />\n        <div class="kv"><span class="muted">現在</span><b id="talkMinutesLabel">3分</b></div>\n      </div>\n\n      <div class="field">\n        <label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>\n        <select id="reversal">\n          <option value="1" selected>あり</option>\n          <option value="0">なし</option>\n        </select>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>お題カテゴリ</label>\n        <select id="topicCategory"></select>\n        <div class="muted">※ 作成時点（QR表示時）にワードを確定してDBに保持します。画面には表示しません。</div>\n      </div>\n\n      <div class="row">\n        <button id="createRoom" class="primary">QRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">部屋を作成</div>\n      <div id="wwCreateError" class="form-error" role="alert"></div>\n\n      <div class="field">\n        <label>ゲームマスターの名前（表示用）</label>\n        <input id="gmName" placeholder="例: たろう" />\n        <div class="muted">※ 待機中など一部の画面では「(ゲームマスター)」を付けて表示します。</div>\n      </div>\n\n      <div class="field">\n        <label>少数側の人数（最大5）</label>\n        <input id="minorityCount" type="range" min="1" max="5" step="1" value="1" />\n        <div class="kv"><span class="muted">現在</span><b id="minorityCountLabel">1</b></div>\n      </div>\n\n      <div class="field">\n        <label>トーク時間（分・最大5分）</label>\n        <input id="talkMinutes" type="range" min="1" max="5" step="1" value="3" />\n        <div class="kv"><span class="muted">現在</span><b id="talkMinutesLabel">3分</b></div>\n      </div>\n\n      <div class="field">\n        <label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>\n        <select id="reversal">\n          <option value="1" selected>あり</option>\n          <option value="0">なし</option>\n        </select>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>お題カテゴリ</label>\n        <select id="topicCategory"></select>\n        <div class="muted">※ 作成時点（QR表示時）にワードを確定してDBに保持します。画面には表示しません。</div>\n      </div>\n\n      <div class="row">\n        <button id="createRoom" class="primary">QRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
     );
 
     var sel = document.getElementById('topicCategory');
@@ -3646,11 +3686,16 @@
   }
 
   function renderJoin(viewEl, roomId) {
+    try {
+      if (viewEl && viewEl.classList) viewEl.classList.remove('cn-myturn');
+    } catch (e) {
+      // ignore
+    }
     render(
       viewEl,
       '\n    <div class="stack">\n      <div class="big">参加</div>\n      <div class="kv"><span class="muted">ルームID</span><b>' +
         escapeHtml(roomId) +
-        '</b></div>\n\n      <div class="field">\n        <label>名前（表示用）</label>\n        <input id="playerName" placeholder="例: たろう" />\n      </div>\n\n      <div class="row">\n        <button id="join" class="primary">参加する</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+        '</b></div>\n\n      <div id="wwJoinError" class="form-error" role="alert"></div>\n\n      <div class="field">\n        <label>名前（表示用）</label>\n        <input id="playerName" placeholder="例: たろう" />\n      </div>\n\n      <div class="row">\n        <button id="join" class="primary">参加する</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
     );
   }
 
@@ -4215,15 +4260,17 @@
 
   function routeCreate() {
     renderCreate(viewEl);
+    clearInlineError('wwCreateError');
 
     var createBtn = document.getElementById('createRoom');
     if (createBtn) {
       createBtn.addEventListener('click', function () {
         var settings;
         try {
+          clearInlineError('wwCreateError');
           settings = readCreateForm();
         } catch (e) {
-          renderError(viewEl, (e && e.message) || '作成に失敗しました');
+          setInlineError('wwCreateError', (e && e.message) || '入力を確認してください。');
           return;
         }
         var roomId = makeRoomId();
@@ -4258,15 +4305,17 @@
 
   function routeJoin(roomId, isHost) {
     renderJoin(viewEl, roomId);
+    clearInlineError('wwJoinError');
     var joinBtn = document.getElementById('join');
     if (!joinBtn) return;
 
     joinBtn.addEventListener('click', function () {
       var form;
       try {
+        clearInlineError('wwJoinError');
         form = readJoinForm();
       } catch (e) {
-        renderError(viewEl, (e && e.message) || '参加に失敗しました');
+        setInlineError('wwJoinError', (e && e.message) || '入力を確認してください。');
         return;
       }
 
@@ -4685,14 +4734,16 @@
 
   function routeCodenamesCreate() {
     renderCodenamesCreate(viewEl);
+    clearInlineError('cnCreateError');
     var btn = document.getElementById('cnCreateRoom');
     if (!btn) return;
     btn.addEventListener('click', function () {
       var settings;
       try {
+        clearInlineError('cnCreateError');
         settings = readCodenamesCreateForm();
       } catch (e) {
-        renderError(viewEl, (e && e.message) || '作成に失敗しました');
+        setInlineError('cnCreateError', (e && e.message) || '入力を確認してください。');
         return;
       }
 
@@ -4723,14 +4774,16 @@
 
   function routeCodenamesJoin(roomId, isHost) {
     renderCodenamesJoin(viewEl, roomId);
+    clearInlineError('cnJoinError');
     var btn = document.getElementById('cnJoin');
     if (!btn) return;
     btn.addEventListener('click', function () {
       var form;
       try {
+        clearInlineError('cnJoinError');
         form = readCodenamesJoinForm();
       } catch (e) {
-        renderError(viewEl, (e && e.message) || '参加に失敗しました');
+        setInlineError('cnJoinError', (e && e.message) || '入力を確認してください。');
         return;
       }
 
@@ -4889,19 +4942,35 @@
         gmSave.addEventListener('click', function () {
           var st = document.getElementById('cnGmStatus');
           if (st) st.textContent = '保存中...';
+          clearInlineError('cnGmError');
           var nameEl = document.getElementById('cnGmName');
           var teamEl = document.getElementById('cnGmTeam');
           var roleEl = document.getElementById('cnGmRole');
           var nm = String((nameEl && nameEl.value) || '').trim();
           var tm = String((teamEl && teamEl.value) || '');
           var rl = String((roleEl && roleEl.value) || '');
+          if (!nm) {
+            if (st) st.textContent = '';
+            setInlineError('cnGmError', '名前を入力してください。');
+            return;
+          }
+          if (!tm) {
+            if (st) st.textContent = '';
+            setInlineError('cnGmError', 'チームを選んでください。');
+            return;
+          }
+          if (!rl) {
+            if (st) st.textContent = '';
+            setInlineError('cnGmError', '役職を選んでください。');
+            return;
+          }
           setCodenamesPlayerProfile(roomId, hostPlayerId, nm, tm, rl)
             .then(function () {
               if (st) st.textContent = '保存しました';
             })
             .catch(function (e) {
               if (st) st.textContent = '保存できませんでした';
-              alert((e && e.message) || '失敗');
+              setInlineError('cnGmError', (e && e.message) || '保存に失敗しました');
             });
         });
       }
@@ -4952,8 +5021,13 @@
               var roleSel = document.getElementById('cnRole');
               var team = String((teamSel && teamSel.value) || '');
               var role = String((roleSel && roleSel.value) || '');
+              clearInlineError('cnPrefsError');
+              if (!team || !role) {
+                setInlineError('cnPrefsError', 'チームと役職を選んでください。');
+                return;
+              }
               setCodenamesPlayerPrefs(roomId, playerId, team, role).catch(function (e) {
-                alert((e && e.message) || '失敗');
+                setInlineError('cnPrefsError', (e && e.message) || '保存に失敗しました');
               });
             });
           }
@@ -5005,10 +5079,19 @@
             clueBtn.addEventListener('click', function () {
               var wEl = document.getElementById('cnClueWord');
               var nEl = document.getElementById('cnClueNum');
-              var w = String((wEl && wEl.value) || '');
+              var w = String((wEl && wEl.value) || '').trim();
               var n = parseIntSafe(nEl && nEl.value, 0);
+              clearInlineError('cnClueError');
+              if (!w) {
+                setInlineError('cnClueError', 'ヒントを入力してください。');
+                return;
+              }
+              if (n == null || isNaN(n) || n < 0) {
+                setInlineError('cnClueError', '数（0以上）を入力してください。');
+                return;
+              }
               submitCodenamesClue(roomId, playerId, w, n).catch(function (e) {
-                alert((e && e.message) || '失敗');
+                setInlineError('cnClueError', (e && e.message) || '送信に失敗しました');
               });
             });
           }
@@ -5185,7 +5268,7 @@
     var buildInfoEl = document.querySelector('#buildInfo');
     if (buildInfoEl) {
       var assetV = getCacheBusterParam();
-      buildInfoEl.textContent = 'v0.14 (B_BoardGames + codenames)' + (assetV ? ' / assets ' + assetV : '');
+      buildInfoEl.textContent = 'v0.15 (B_BoardGames + codenames)' + (assetV ? ' / assets ' + assetV : '');
     }
 
     window.addEventListener('popstate', function () {
