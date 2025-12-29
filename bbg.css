@@ -94,6 +94,9 @@ hr{border:none;border-top:1px solid var(--line);margin:12px 0}
 .cn-revealed.cn-neutral{background:rgba(245,214,107,.22);border-color:rgba(245,214,107,.55)}
 .cn-revealed.cn-assassin{background:var(--bg)}
 
+/* Codenames: indicate opened cards */
+.cn-revealed:not(.cn-keypreview) .cn-word{text-decoration:line-through;opacity:.75}
+
 .cn-topline{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:nowrap}
 .cn-topline>div{min-width:0}
 .cn-me{font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

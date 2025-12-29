@@ -685,6 +685,11 @@
     return id;
   }
 
+  function setCodenamesPlayerId(roomId, playerId) {
+    var key = 'cn_player_' + roomId;
+    localStorage.setItem(key, String(playerId || ''));
+  }
+
   function codenamesRoomPath(roomId) {
     return 'codenamesRooms/' + roomId;
   }
@@ -2177,6 +2182,14 @@
     });
   }
 
+  function touchCodenamesPlayer(roomId, playerId) {
+    var path = codenamesPlayerPath(roomId, playerId);
+    return runTxn(path, function (p) {
+      if (!p) return p;
+      return assign({}, p, { lastSeenAt: serverNowMs() });
+    });
+  }
+
   function resetCodenamesToLobby(roomId) {
     var base = codenamesRoomPath(roomId);
     return runTxn(base, function (room) {
@@ -3109,8 +3122,56 @@
     var v = getCacheBusterParam();
     if (v) q.v = v;
     q.room = roomId;
-    q.screen = 'codenames_join';
+    q.screen = 'codenames_rejoin';
     return baseUrl() + '?' + buildQuery(q);
+  }
+
+  function renderCodenamesRejoin(viewEl, opts) {
+    var roomId = opts.roomId;
+    var room = opts.room;
+
+    var items = '';
+    try {
+      var ps = (room && room.players) || {};
+      var keys = Object.keys(ps);
+      if (keys.length) {
+        keys.sort(function (a, b) {
+          var pa = ps[a] || {};
+          var pb = ps[b] || {};
+          var aa = pa.joinedAt || 0;
+          var bb = pb.joinedAt || 0;
+          return aa - bb;
+        });
+        for (var i = 0; i < keys.length; i++) {
+          var id = keys[i];
+          var p = ps[id] || {};
+          var nm = escapeHtml(formatPlayerDisplayName(p) || '-');
+          var t = p.team === 'red' ? '赤' : p.team === 'blue' ? '青' : '未選択';
+          var r = p.role === 'spymaster' ? 'スパイマスター' : p.role === 'operative' ? '諜報員' : '未選択';
+          var hostMark = p.isHost ? ' <span class="badge">GM</span>' : '';
+          items +=
+            '<button class="ghost cnRejoinPick" data-pid="' +
+            escapeHtml(id) +
+            '">' +
+            nm +
+            hostMark +
+            ' <span class="muted">(' +
+            escapeHtml(t + ' / ' + r) +
+            ')</span></button>';
+        }
+      }
+    } catch (e) {
+      items = '';
+    }
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">コードネーム：再入場</div>\n      <div class="kv"><span class="muted">ルームID</span><b>' +
+        escapeHtml(roomId) +
+        '</b></div>\n\n      <div class="muted">すでに登録済みの名前を選ぶと、そのまま再入場します。</div>\n\n      <div id="cnRejoinError" class="form-error" role="alert"></div>\n\n      <div class="stack">' +
+        (items || '<div class="muted">まだ参加者がいません。新規参加してください。</div>') +
+        '</div>\n\n      <hr />\n      <div class="row">\n        <button id="cnGoNewJoin" class="primary">新規参加</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+    );
   }
 
   function renderCodenamesHost(viewEl, opts) {
@@ -3335,6 +3396,8 @@
       '</div>' +
       '</div>';
 
+    var gmToolsHtml = player && player.isHost ? '<div class="row"><button id="cnShowQr" class="ghost">QR再表示</button></div>' : '';
+
     var lobbyHtml = '';
     if (phase === 'lobby') {
       var playersHtml = '';
@@ -3440,6 +3503,7 @@
         var isRev = !!revealed[i];
         var k = key[i];
         var cls = codenamesCellClass(k, isRev || (showKey && phase === 'playing'));
+        if (!isRev && showKey && phase === 'playing') cls += ' cn-keypreview';
         if (!isRev && pendingObj && pendingObj[String(i)]) cls += ' cn-pending';
         var disabled = phase !== 'playing' || isRev || myRole !== 'operative' || !myTeam || !room.turn || room.turn.team !== myTeam || room.turn.status !== 'guessing';
         var tagStart = disabled ? '<button class="' + cls + '" disabled>' : '<button class="' + cls + ' cnPick" data-idx="' + i + '">';
@@ -3511,6 +3575,8 @@
       viewEl,
       '\n    <div class="stack">\n      ' +
         topLine +
+        '\n      ' +
+        gmToolsHtml +
         '\n\n      ' +
         (phase === 'lobby' ? lobbyHtml : '') +
         (phase === 'playing' ? clueRowHtml : '') +
@@ -4781,6 +4847,10 @@
     if (screen === 'history') return routeHistory();
     if (screen === 'create') return routeCreate();
 
+    if (screen === 'codenames_rejoin') {
+      if (!roomId) return routeHome();
+      return routeCodenamesRejoin(roomId);
+    }
     if (screen === 'codenames_join') {
       if (!roomId) return routeHome();
       return routeCodenamesJoin(roomId, isHost);
@@ -4882,6 +4952,78 @@
         .catch(function (e) {
           renderError(viewEl, (e && e.message) || '参加に失敗しました');
         });
+    });
+  }
+
+  function routeCodenamesRejoin(roomId) {
+    var unsub = null;
+
+    firebaseReady()
+      .then(function () {
+        return subscribeCodenamesRoom(roomId, function (room) {
+          if (!room) {
+            renderError(viewEl, '部屋が見つかりません');
+            return;
+          }
+
+          renderCodenamesRejoin(viewEl, { roomId: roomId, room: room });
+          clearInlineError('cnRejoinError');
+
+          var goNew = document.getElementById('cnGoNewJoin');
+          if (goNew && !goNew.__cn_bound) {
+            goNew.__cn_bound = true;
+            goNew.addEventListener('click', function () {
+              var q = {};
+              var v = getCacheBusterParam();
+              if (v) q.v = v;
+              q.room = roomId;
+              q.screen = 'codenames_join';
+              setQuery(q);
+              route();
+            });
+          }
+
+          var picks = document.querySelectorAll('.cnRejoinPick');
+          for (var i = 0; i < picks.length; i++) {
+            var b = picks[i];
+            if (b.__cn_bound) continue;
+            b.__cn_bound = true;
+            b.addEventListener('click', function (ev) {
+              var el = ev && ev.currentTarget ? ev.currentTarget : null;
+              var pid = el ? el.getAttribute('data-pid') : '';
+              if (!pid) {
+                setInlineError('cnRejoinError', '選択に失敗しました');
+                return;
+              }
+
+              var p = room && room.players ? room.players[pid] : null;
+              setCodenamesPlayerId(roomId, pid);
+              touchCodenamesPlayer(roomId, pid).catch(function () {
+                // ignore
+              });
+
+              var q2 = {};
+              var v2 = getCacheBusterParam();
+              if (v2) q2.v = v2;
+              q2.room = roomId;
+              q2.screen = 'codenames_player';
+              q2.player = '1';
+              if (p && p.isHost) q2.host = '1';
+              setQuery(q2);
+              route();
+            });
+          }
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
     });
   }
 
@@ -5141,6 +5283,21 @@
                 .catch(function (e) {
                   alert((e && e.message) || '失敗');
                 });
+            });
+          }
+
+          var showQrBtn = document.getElementById('cnShowQr');
+          if (showQrBtn && !showQrBtn.__cn_bound) {
+            showQrBtn.__cn_bound = true;
+            showQrBtn.addEventListener('click', function () {
+              var q = {};
+              var v = getCacheBusterParam();
+              if (v) q.v = v;
+              q.room = roomId;
+              q.host = '1';
+              q.screen = 'codenames_host';
+              setQuery(q);
+              route();
             });
           }
 
