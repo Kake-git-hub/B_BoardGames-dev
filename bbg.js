@@ -5148,7 +5148,7 @@
     var buildInfoEl = document.querySelector('#buildInfo');
     if (buildInfoEl) {
       var assetV = getCacheBusterParam();
-      buildInfoEl.textContent = 'v0.12 (B_BoardGames + codenames)' + (assetV ? ' / assets ' + assetV : '');
+      buildInfoEl.textContent = 'v0.13 (B_BoardGames + codenames)' + (assetV ? ' / assets ' + assetV : '');
     }
 
     window.addEventListener('popstate', function () {
