@@ -3179,6 +3179,7 @@
     var joinUrl = opts.joinUrl;
     var room = opts.room;
     var hostPlayerId = opts.hostPlayerId;
+    var qrOnly = !!opts.qrOnly;
     var hostPlayer = (room && room.players && hostPlayerId && room.players[hostPlayerId]) || null;
 
     var playerCount = room && room.players ? Object.keys(room.players).length : 0;
@@ -3187,7 +3188,7 @@
 
     var canStart = phase === 'lobby' && counts.redSpymaster === 1 && counts.blueSpymaster === 1 && counts.redOperative >= 1 && counts.blueOperative >= 1;
     var actionHtml = '';
-    if (phase === 'lobby') {
+    if (!qrOnly && phase === 'lobby') {
       actionHtml =
         '<div class="stack">' +
         '<div class="muted">準備: 赤/青それぞれスパイマスター1人＋諜報員1人以上</div>' +
@@ -3221,10 +3222,14 @@
           var id = pkeys[pi];
           var p = ps[id] || {};
           var nm = escapeHtml(formatPlayerDisplayName(p) || '-');
-          var t = p.team === 'red' ? '赤' : p.team === 'blue' ? '青' : '未選択';
-          var r = p.role === 'spymaster' ? 'スパイマスター' : p.role === 'operative' ? '諜報員' : '未選択';
           var hostMark = p.isHost ? ' <span class="badge">GM</span>' : '';
-          playersHtml += '<div class="kv"><span class="muted">' + nm + hostMark + '</span><b>' + escapeHtml(t + ' / ' + r) + '</b></div>';
+          if (qrOnly) {
+            playersHtml += '<div class="kv"><span class="muted">' + nm + hostMark + '</span><b></b></div>';
+          } else {
+            var t = p.team === 'red' ? '赤' : p.team === 'blue' ? '青' : '未選択';
+            var r = p.role === 'spymaster' ? 'スパイマスター' : p.role === 'operative' ? '諜報員' : '未選択';
+            playersHtml += '<div class="kv"><span class="muted">' + nm + hostMark + '</span><b>' + escapeHtml(t + ' / ' + r) + '</b></div>';
+          }
         }
       } else {
         playersHtml = '<div class="muted">まだ参加者がいません。</div>';
@@ -3236,21 +3241,26 @@
     var gmName = hostPlayer ? String(hostPlayer.name || '') : '';
     var gmTeam = hostPlayer ? String(hostPlayer.team || '') : '';
     var gmRole = hostPlayer ? String(hostPlayer.role || '') : '';
-    var gmHtml =
-      '<hr />' +
-      '<div class="stack">' +
-      '<div class="big">GM（この端末）</div>' +
-      '<div id="cnGmError" class="form-error" role="alert"></div>' +
-      '<div class="field"><label>名前（表示用）</label><input id="cnGmName" placeholder="例: たろう" value="' +
-      escapeHtml(gmName) +
-      '" /></div>' +
-      '<div class="field"><label>チーム</label><select id="cnGmTeam">' +
-      '<option value="">未選択</option><option value="red">赤</option><option value="blue">青</option></select></div>' +
-      '<div class="field"><label>役職</label><select id="cnGmRole">' +
-      '<option value="">未選択</option><option value="spymaster">スパイマスター</option><option value="operative">諜報員</option></select></div>' +
-      '<div class="row"><button id="cnGmSave" class="ghost">保存</button><div class="muted" id="cnGmStatus"></div></div>' +
-      '<div class="muted">※ GMもプレイヤーとして参加します（ここで設定できます）。</div>' +
-      '</div>';
+    var gmHtml = '';
+    if (!qrOnly) {
+      gmHtml =
+        '<hr />' +
+        '<div class="stack">' +
+        '<div class="big">GM（この端末）</div>' +
+        '<div id="cnGmError" class="form-error" role="alert"></div>' +
+        '<div class="field"><label>名前（表示用）</label><input id="cnGmName" placeholder="例: たろう" value="' +
+        escapeHtml(gmName) +
+        '" /></div>' +
+        '<div class="field"><label>チーム</label><select id="cnGmTeam">' +
+        '<option value="">未選択</option><option value="red">赤</option><option value="blue">青</option></select></div>' +
+        '<div class="field"><label>役職</label><select id="cnGmRole">' +
+        '<option value="">未選択</option><option value="spymaster">スパイマスター</option><option value="operative">諜報員</option></select></div>' +
+        '<div class="row"><button id="cnGmSave" class="ghost">保存</button><div class="muted" id="cnGmStatus"></div></div>' +
+        '<div class="muted">※ GMもプレイヤーとして参加します（ここで設定できます）。</div>' +
+        '</div>';
+    }
+
+    var backToGameHtml = qrOnly ? '<hr /><div class="row"><button id="cnBackToGame" class="primary">GMがゲームに戻る</button></div>' : '';
 
     render(
       viewEl,
@@ -3258,24 +3268,29 @@
         escapeHtml(joinUrl || '') +
         '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
         playerCount +
-        '</b></div>\n      <div class="kv"><span class="muted">フェーズ</span><b>' +
-        escapeHtml(phase) +
-        '</b></div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="big">参加者（保存状況）</div>\n        ' +
+        '</b></div>' +
+        (qrOnly
+          ? ''
+          : '\n      <div class="kv"><span class="muted">フェーズ</span><b>' + escapeHtml(phase) + '</b></div>') +
+        '\n\n      <hr />\n\n      <div class="stack">\n        <div class="big">参加者（保存状況）</div>\n        ' +
         playersHtml +
         '\n      </div>\n\n      ' +
         gmHtml +
-        '\n\n      <hr />\n\n      ' +
-        actionHtml +
-        '\n\n      <div class="muted">※ 参加後は各自の画面でチーム/役職を選びます。</div>\n    </div>\n  '
+        (actionHtml ? '\n\n      <hr />\n\n      ' + actionHtml : '') +
+        backToGameHtml +
+        (qrOnly ? '' : '\n\n      <div class="muted">※ 参加後は各自の画面でチーム/役職を選びます。</div>') +
+        '\n    </div>\n  '
     );
 
-    try {
-      var tsel = document.getElementById('cnGmTeam');
-      if (tsel) tsel.value = gmTeam || '';
-      var rsel = document.getElementById('cnGmRole');
-      if (rsel) rsel.value = gmRole || '';
-    } catch (e) {
-      // ignore
+    if (!qrOnly) {
+      try {
+        var tsel = document.getElementById('cnGmTeam');
+        if (tsel) tsel.value = gmTeam || '';
+        var rsel = document.getElementById('cnGmRole');
+        if (rsel) rsel.value = gmRole || '';
+      } catch (e) {
+        // ignore
+      }
     }
   }
 
@@ -5029,6 +5044,8 @@
 
   function routeCodenamesHost(roomId) {
     var unsub = null;
+    var q0 = parseQuery();
+    var qrOnly = q0 && q0.qr === '1';
     var joinUrl = makeCodenamesJoinUrl(roomId);
     var hostPlayerId = getOrCreateCodenamesPlayerId(roomId);
 
@@ -5109,7 +5126,7 @@
     }
 
     function renderWithRoom(room) {
-      renderCodenamesHost(viewEl, { roomId: roomId, joinUrl: joinUrl, room: room, hostPlayerId: hostPlayerId });
+      renderCodenamesHost(viewEl, { roomId: roomId, joinUrl: joinUrl, room: room, hostPlayerId: hostPlayerId, qrOnly: qrOnly });
       drawQr();
 
       var copyBtn = document.getElementById('copyJoinUrl');
@@ -5146,6 +5163,21 @@
             .catch(function (e) {
               alert((e && e.message) || '失敗');
             });
+        });
+      }
+
+      var backBtn = document.getElementById('cnBackToGame');
+      if (backBtn) {
+        backBtn.addEventListener('click', function () {
+          var q = {};
+          var v = getCacheBusterParam();
+          if (v) q.v = v;
+          q.room = roomId;
+          q.host = '1';
+          q.player = '1';
+          q.screen = 'codenames_player';
+          setQuery(q);
+          route();
         });
       }
 
@@ -5295,6 +5327,7 @@
               if (v) q.v = v;
               q.room = roomId;
               q.host = '1';
+              q.qr = '1';
               q.screen = 'codenames_host';
               setQuery(q);
               route();
