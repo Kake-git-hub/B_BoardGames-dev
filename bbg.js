@@ -3058,7 +3058,10 @@
 
   function renderCodenamesCreate(viewEl) {
     try {
-      if (viewEl && viewEl.classList) viewEl.classList.remove('cn-myturn');
+      if (viewEl && viewEl.classList) {
+        viewEl.classList.remove('cn-turn-actor');
+        viewEl.classList.remove('cn-myturn');
+      }
     } catch (e) {
       // ignore
     }
@@ -3079,7 +3082,10 @@
 
   function renderCodenamesJoin(viewEl, roomId) {
     try {
-      if (viewEl && viewEl.classList) viewEl.classList.remove('cn-myturn');
+      if (viewEl && viewEl.classList) {
+        viewEl.classList.remove('cn-turn-actor');
+        viewEl.classList.remove('cn-myturn');
+      }
     } catch (e) {
       // ignore
     }
@@ -3241,16 +3247,74 @@
 
     var nameText = escapeHtml(formatPlayerDisplayName(player));
     var roleText = myTeam || myRole ? escapeHtml((myTeam === 'red' ? '赤' : myTeam === 'blue' ? '青' : '-') + ' / ' + (myRole === 'spymaster' ? 'スパイマスター' : myRole === 'operative' ? '諜報員' : '-')) : '-';
+    var tt0 = phase === 'playing' && room && room.turn ? room.turn : {};
     var turnTeam = phase === 'playing' && room && room.turn ? room.turn.team : '';
     var turnLabel = turnTeam === 'red' ? '赤' : turnTeam === 'blue' ? '青' : '-';
-    var turnCls = 'cn-turn' + (turnTeam === 'red' ? ' cn-turn-red' : turnTeam === 'blue' ? ' cn-turn-blue' : '') + (myTeam && turnTeam && myTeam === turnTeam ? ' cn-turn-active' : '');
+
+    function findCodenamesPlayerName(team, role) {
+      try {
+        var ps = (room && room.players) || {};
+        var keys = Object.keys(ps);
+        for (var i = 0; i < keys.length; i++) {
+          var p = ps[keys[i]];
+          if (!p) continue;
+          if (String(p.team || '') === String(team || '') && String(p.role || '') === String(role || '')) {
+            return String(formatPlayerDisplayName(p) || '').trim();
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+      return '';
+    }
+
+    function countCodenamesRole(team, role) {
+      var c = 0;
+      try {
+        var ps2 = (room && room.players) || {};
+        var keys2 = Object.keys(ps2);
+        for (var i2 = 0; i2 < keys2.length; i2++) {
+          var p2 = ps2[keys2[i2]];
+          if (!p2) continue;
+          if (String(p2.team || '') === String(team || '') && String(p2.role || '') === String(role || '')) c++;
+        }
+      } catch (e) {
+        // ignore
+      }
+      return c;
+    }
+
+    var turnStatus = String((tt0 && tt0.status) || '');
+    var isMyTeamTurn = !!(phase === 'playing' && myTeam && turnTeam && myTeam === turnTeam);
+    var isActor = false;
+    if (isMyTeamTurn) {
+      if (turnStatus === 'awaiting_clue') isActor = myRole === 'spymaster';
+      if (turnStatus === 'guessing') isActor = myRole === 'operative';
+    }
+
+    var who = '';
+    if (phase === 'playing' && turnTeam) {
+      if (turnStatus === 'awaiting_clue') {
+        var sm = findCodenamesPlayerName(turnTeam, 'spymaster');
+        who = sm ? sm : 'スパイマスター';
+      } else if (turnStatus === 'guessing') {
+        var oc = countCodenamesRole(turnTeam, 'operative');
+        if (oc === 1) {
+          var op = findCodenamesPlayerName(turnTeam, 'operative');
+          who = op ? op : '諜報員';
+        } else {
+          who = '諜報員';
+        }
+      }
+    }
+
+    var turnCls = 'cn-turn' + (turnTeam === 'red' ? ' cn-turn-red' : turnTeam === 'blue' ? ' cn-turn-blue' : '') + (isActor ? ' cn-turn-active' : '');
 
     try {
       if (viewEl && viewEl.classList) {
+        viewEl.classList.remove('cn-turn-actor');
         viewEl.classList.remove('cn-myturn');
-        if (phase === 'playing' && myTeam && turnTeam && myTeam === turnTeam) {
-          viewEl.classList.add('cn-myturn');
-        }
+        if (phase === 'playing' && isActor) viewEl.classList.add('cn-turn-actor');
       }
     } catch (e) {
       // ignore
@@ -3267,6 +3331,7 @@
       turnCls +
       '">手番: ' +
       escapeHtml(turnLabel) +
+      (who ? '（' + escapeHtml(who) + '）' : '') +
       '</div>' +
       '</div>';
 
@@ -3623,7 +3688,10 @@
 
   function renderCreate(viewEl) {
     try {
-      if (viewEl && viewEl.classList) viewEl.classList.remove('cn-myturn');
+      if (viewEl && viewEl.classList) {
+        viewEl.classList.remove('cn-turn-actor');
+        viewEl.classList.remove('cn-myturn');
+      }
     } catch (e) {
       // ignore
     }
@@ -3687,7 +3755,10 @@
 
   function renderJoin(viewEl, roomId) {
     try {
-      if (viewEl && viewEl.classList) viewEl.classList.remove('cn-myturn');
+      if (viewEl && viewEl.classList) {
+        viewEl.classList.remove('cn-turn-actor');
+        viewEl.classList.remove('cn-myturn');
+      }
     } catch (e) {
       // ignore
     }

@@ -16,9 +16,9 @@ function Replace-AssetV([string]$path) {
   $s = Get-Content -Raw -Encoding UTF8 $p
 
   # Replace existing ?v=... for known assets
-  $s = $s -replace '(bbg\.css\?v=)[^"\s>]+', ('$1' + $assetV)
-  $s = $s -replace '(bbg-config\.js\?v=)[^"\s>]+', ('$1' + $assetV)
-  $s = $s -replace '(bbg\.js\?v=)[^"\s>]+', ('$1' + $assetV)
+  $s = $s -replace '(bbg\.css\?v=)[^"\s>]+', { param($m) $m.Groups[1].Value + $assetV }
+  $s = $s -replace '(bbg-config\.js\?v=)[^"\s>]+', { param($m) $m.Groups[1].Value + $assetV }
+  $s = $s -replace '(bbg\.js\?v=)[^"\s>]+', { param($m) $m.Groups[1].Value + $assetV }
 
   Set-Content -Encoding UTF8 -NoNewline -Path $p -Value $s
 }

@@ -65,6 +65,9 @@ hr{border:none;border-top:1px solid var(--line);margin:12px 0}
 #view.result-win{background:rgba(255,90,106,.22);border-color:rgba(255,90,106,.55)}
 #view.result-lose{background:rgba(77,163,255,.22);border-color:rgba(77,163,255,.55)}
 
+/* Allow overlays (used by codenames turn frame) */
+#view{position:relative}
+
 /* QR should remain scannable on dark UI */
 #qr,#qrImg{background:var(--text);padding:8px;border-radius:12px;display:inline-block}
 #qrImg{max-width:240px;height:auto}
@@ -102,11 +105,8 @@ hr{border:none;border-top:1px solid var(--line);margin:12px 0}
 .cn-turn-red.cn-turn-active{background:var(--text);border-color:var(--text)}
 .cn-turn-blue.cn-turn-active{background:var(--text);border-color:var(--text)}
 
-/* Codenames: emphasize whole field on my turn */
-#view.cn-myturn{background:var(--text);border-color:var(--text);color:var(--bg)}
-#view.cn-myturn .muted,#view.cn-myturn label,#view.cn-myturn .cn-role,#view.cn-myturn .cn-clue-view,#view.cn-myturn .cn-clue-left{color:var(--bg);opacity:.72}
-#view.cn-myturn .cn-turn{border-color:var(--bg);color:var(--bg);opacity:.85}
-#view.cn-myturn .cn-turn-active{background:var(--bg);border-color:var(--bg);color:var(--text);opacity:1}
+/* Codenames: emphasize only the acting player (frame) */
+#view.cn-turn-actor::before{content:"";position:absolute;inset:-3px;border:3px solid var(--text);border-radius:12px;pointer-events:none}
 
 .cn-clue-row{display:flex;gap:10px;align-items:center;flex-wrap:nowrap}
 .cn-clue-row input{flex:1;min-width:0}
