@@ -5618,7 +5618,7 @@
     else if (phase === 'playing') {
       if (myElim) statusText = 'あなたは脱落しました。';
       else if (isMyTurn) statusText = 'あなたの番です。';
-      else statusText = '待機中：' + (turnName || '');
+      else statusText = '待機中：' + (turnName || '-');
     } else if (phase === 'finished') statusText = 'ゲーム終了';
 
     function llCardImgHtml(rank) {
@@ -6207,6 +6207,7 @@
           playLoveLetterAction(roomId, playerId, payload)
             .then(function () {
               ui.pending = null;
+              renderNow(room);
             })
             .catch(function () {
               setInlineError(errId, '実行に失敗しました');
