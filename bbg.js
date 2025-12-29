@@ -702,6 +702,34 @@
     return onValue(codenamesRoomPath(roomId), cb);
   }
 
+  // -------------------- loveletter (state) --------------------
+  function getOrCreateLoveLetterPlayerId(roomId) {
+    var key = 'll_player_' + roomId;
+    var id = localStorage.getItem(key);
+    if (!id) {
+      id = randomId(12);
+      localStorage.setItem(key, id);
+    }
+    return id;
+  }
+
+  function setLoveLetterPlayerId(roomId, playerId) {
+    var key = 'll_player_' + roomId;
+    localStorage.setItem(key, String(playerId || ''));
+  }
+
+  function loveletterRoomPath(roomId) {
+    return 'loveletterRooms/' + roomId;
+  }
+
+  function loveletterPlayerPath(roomId, playerId) {
+    return loveletterRoomPath(roomId) + '/players/' + playerId;
+  }
+
+  function subscribeLoveLetterRoom(roomId, cb) {
+    return onValue(loveletterRoomPath(roomId), cb);
+  }
+
   function parseWordListText(text) {
     var s = String(text || '');
     s = s.replace(/\r\n/g, '\n');
@@ -3027,6 +3055,621 @@
     return onValue(roomPath(roomId), cb);
   }
 
+  // -------------------- loveletter (logic) --------------------
+  // Note: Text-based UI for now. Card defs include fields to allow future icon assets.
+  var LOVELETTER_CARD_DEFS = {
+    '1': { rank: 1, name: '衛兵', desc: '相手1人を選び、カード名を推測する（衛兵は不可）。当たれば脱落。', icon: '' },
+    '2': { rank: 2, name: '僧侶', desc: '相手1人の手札を見る。', icon: '' },
+    '3': { rank: 3, name: '男爵', desc: '相手1人と手札の強さを比べ、弱い方が脱落。', icon: '' },
+    '4': { rank: 4, name: '侍女', desc: '次の自分の番まで、他プレイヤーの効果を受けない。', icon: '' },
+    '5': { rank: 5, name: '王子', desc: '誰か1人（自分も可）に手札を捨てさせ、1枚引かせる。姫なら脱落。', icon: '' },
+    '6': { rank: 6, name: '王様', desc: '相手1人と手札を交換する。', icon: '' },
+    '7': { rank: 7, name: '伯爵夫人', desc: '王様(6)か王子(5)と同時に持つなら必ず捨てる。', icon: '' },
+    '8': { rank: 8, name: '姫', desc: '捨てたら脱落。', icon: '' }
+  };
+
+  function llCardDef(rank) {
+    var k = String(rank || '');
+    return LOVELETTER_CARD_DEFS[k] || { rank: parseIntSafe(k, 0) || 0, name: k || '-', desc: '', icon: '' };
+  }
+
+  function llTokenGoalForPlayerCount(n) {
+    var c = parseIntSafe(n, 0) || 0;
+    if (c <= 2) return 7;
+    if (c === 3) return 5;
+    return 4;
+  }
+
+  function llBuildDeck() {
+    var out = [];
+    function pushMany(rank, count) {
+      for (var i = 0; i < count; i++) out.push(String(rank));
+    }
+    // Standard 16-card deck.
+    pushMany(1, 5);
+    pushMany(2, 2);
+    pushMany(3, 2);
+    pushMany(4, 2);
+    pushMany(5, 2);
+    pushMany(6, 1);
+    pushMany(7, 1);
+    pushMany(8, 1);
+    return out;
+  }
+
+  function llShuffle(arr) {
+    var a = Array.isArray(arr) ? arr : [];
+    for (var i = a.length - 1; i > 0; i--) {
+      var j = randomInt(i + 1);
+      var tmp = a[i];
+      a[i] = a[j];
+      a[j] = tmp;
+    }
+    return a;
+  }
+
+  function llListPlayerIdsByJoin(room) {
+    var ps = (room && room.players) || {};
+    var keys = Object.keys(ps);
+    keys.sort(function (a, b) {
+      var pa = ps[a] || {};
+      var pb = ps[b] || {};
+      return (pa.joinedAt || 0) - (pb.joinedAt || 0);
+    });
+    return keys;
+  }
+
+  function llAppendLog(room, text) {
+    var log = [];
+    try {
+      log = Array.isArray(room && room.log) ? room.log.slice() : [];
+    } catch (e) {
+      log = [];
+    }
+    if (log.length > 40) log = log.slice(log.length - 40);
+    log.push({ at: serverNowMs(), text: String(text || '') });
+    if (log.length > 40) log = log.slice(log.length - 40);
+    return log;
+  }
+
+  function llMustPlayCountess(hand) {
+    if (!Array.isArray(hand) || hand.length < 2) return false;
+    var has7 = false;
+    var has5or6 = false;
+    for (var i = 0; i < hand.length; i++) {
+      var r = String(hand[i]);
+      if (r === '7') has7 = true;
+      if (r === '5' || r === '6') has5or6 = true;
+    }
+    return has7 && has5or6;
+  }
+
+  function llDrawFromRound(round) {
+    if (!round) return '';
+    var deck = Array.isArray(round.deck) ? round.deck : [];
+    if (deck.length) {
+      return String(deck.pop());
+    }
+    var burn = round.burn ? String(round.burn) : '';
+    if (burn) {
+      round.burn = '';
+      return burn;
+    }
+    var setAside = Array.isArray(round.setAside) ? round.setAside : [];
+    if (setAside.length) {
+      return String(setAside.pop());
+    }
+    return '';
+  }
+
+  function llEliminate(round, playerId, reason) {
+    if (!round) return;
+    if (!round.eliminated) round.eliminated = {};
+    if (round.eliminated[playerId]) return;
+    round.eliminated[playerId] = true;
+    if (!round.discards) round.discards = {};
+    if (!round.hands) round.hands = {};
+    if (!round.protected) round.protected = {};
+    var hand = Array.isArray(round.hands[playerId]) ? round.hands[playerId] : [];
+    var disc = Array.isArray(round.discards[playerId]) ? round.discards[playerId] : [];
+    for (var i = 0; i < hand.length; i++) {
+      disc.push(String(hand[i]));
+    }
+    round.discards[playerId] = disc;
+    round.hands[playerId] = [];
+    round.protected[playerId] = false;
+    if (reason) {
+      // optional hook for future: round.elimReason[playerId] = String(reason)
+    }
+  }
+
+  function llAliveIds(room, round) {
+    var ids = llListPlayerIdsByJoin(room);
+    var out = [];
+    for (var i = 0; i < ids.length; i++) {
+      var id = ids[i];
+      if (!round || !round.eliminated || !round.eliminated[id]) out.push(id);
+    }
+    return out;
+  }
+
+  function llFindNextAlive(round, order, startIndexExclusive) {
+    if (!round || !Array.isArray(order) || !order.length) return { id: '', index: -1 };
+    var n = order.length;
+    for (var step = 1; step <= n; step++) {
+      var idx = (startIndexExclusive + step) % n;
+      var pid = order[idx];
+      if (!pid) continue;
+      if (round.eliminated && round.eliminated[pid]) continue;
+      return { id: pid, index: idx };
+    }
+    return { id: '', index: -1 };
+  }
+
+  function llRoundWinners(room, round) {
+    var ids = llAliveIds(room, round);
+    if (ids.length <= 1) return ids;
+
+    var bestHand = -1;
+    var best = [];
+    for (var i = 0; i < ids.length; i++) {
+      var pid = ids[i];
+      var hand = round && round.hands && Array.isArray(round.hands[pid]) ? round.hands[pid] : [];
+      var v = hand.length ? parseIntSafe(hand[0], 0) : 0;
+      if (v > bestHand) {
+        bestHand = v;
+        best = [pid];
+      } else if (v === bestHand) {
+        best.push(pid);
+      }
+    }
+
+    if (best.length <= 1) return best;
+
+    // Tie-break: sum of discarded ranks.
+    var bestSum = -1;
+    var best2 = [];
+    for (var j = 0; j < best.length; j++) {
+      var pid2 = best[j];
+      var disc = round && round.discards && Array.isArray(round.discards[pid2]) ? round.discards[pid2] : [];
+      var s = 0;
+      for (var k = 0; k < disc.length; k++) s += parseIntSafe(disc[k], 0) || 0;
+      if (s > bestSum) {
+        bestSum = s;
+        best2 = [pid2];
+      } else if (s === bestSum) {
+        best2.push(pid2);
+      }
+    }
+    return best2;
+  }
+
+  function createLoveLetterRoom(roomId, settings) {
+    var base = loveletterRoomPath(roomId);
+    var room = {
+      createdAt: serverNowMs(),
+      phase: 'lobby',
+      settings: {
+        // placeholder for future options
+      },
+      tokenGoal: 0,
+      tokens: {},
+      log: [],
+      round: {
+        no: 0,
+        state: 'none'
+      },
+      players: {}
+    };
+    return setValue(base, room);
+  }
+
+  function joinPlayerInLoveLetterRoom(roomId, playerId, name, isHostPlayer) {
+    var base = loveletterRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'lobby') return room;
+
+      var players = assign({}, room.players || {});
+      var prev = players[playerId] || {};
+      var next = assign({}, prev, {
+        name: name,
+        joinedAt: prev.joinedAt || serverNowMs(),
+        lastSeenAt: serverNowMs()
+      });
+      if (isHostPlayer) next.isHost = true;
+      players[playerId] = next;
+      return assign({}, room, { players: players });
+    });
+  }
+
+  function llInitRound(room) {
+    var ids = llListPlayerIdsByJoin(room);
+    var playerCount = ids.length;
+    if (playerCount < 2) return null;
+
+    var deck = llShuffle(llBuildDeck());
+    var burn = deck.length ? String(deck.pop()) : '';
+
+    // 2-player rule: set aside 3 extra cards face-down (common variant).
+    var setAside = [];
+    if (playerCount === 2) {
+      for (var i = 0; i < 3; i++) {
+        if (!deck.length) break;
+        setAside.push(String(deck.pop()));
+      }
+    }
+
+    var hands = {};
+    var discards = {};
+    var eliminated = {};
+    var protectedMap = {};
+    for (var p = 0; p < ids.length; p++) {
+      var pid = ids[p];
+      eliminated[pid] = false;
+      protectedMap[pid] = false;
+      discards[pid] = [];
+      hands[pid] = [];
+      if (deck.length) hands[pid].push(String(deck.pop()));
+    }
+
+    var startIndex = randomInt(ids.length);
+    var startId = ids[startIndex];
+    // Clear protection at start of your turn.
+    protectedMap[startId] = false;
+    if (hands[startId] && deck.length) hands[startId].push(String(deck.pop()));
+
+    return {
+      no: parseIntSafe(room && room.round && room.round.no, 0) + 1,
+      state: 'playing',
+      startedAt: serverNowMs(),
+      endedAt: 0,
+      order: ids,
+      currentIndex: startIndex,
+      currentPlayerId: startId,
+      deck: deck,
+      burn: burn,
+      setAside: setAside,
+      hands: hands,
+      discards: discards,
+      eliminated: eliminated,
+      protected: protectedMap,
+      peek: null,
+      winners: []
+    };
+  }
+
+  function startLoveLetterGame(roomId, hostPlayerId) {
+    var base = loveletterRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'lobby') return room;
+      var host = room.players && hostPlayerId && room.players[hostPlayerId] ? room.players[hostPlayerId] : null;
+      if (!host || !host.isHost) return room;
+
+      var ids = llListPlayerIdsByJoin(room);
+      if (ids.length < 2) return room;
+
+      var goal = llTokenGoalForPlayerCount(ids.length);
+      var tokens = assign({}, room.tokens || {});
+      for (var i = 0; i < ids.length; i++) {
+        var pid = ids[i];
+        if (tokens[pid] == null) tokens[pid] = 0;
+      }
+
+      var nextRound = llInitRound(room);
+      if (!nextRound) return room;
+
+      var nextRoom = assign({}, room, {
+        phase: 'playing',
+        tokenGoal: goal,
+        tokens: tokens,
+        round: nextRound
+      });
+      nextRoom.log = llAppendLog(nextRoom, 'ゲーム開始（目標 ' + goal + ' 点）');
+      nextRoom.log = llAppendLog(nextRoom, 'ラウンド ' + nextRound.no + ' 開始');
+      return nextRoom;
+    });
+  }
+
+  function startLoveLetterNextRound(roomId, hostPlayerId) {
+    var base = loveletterRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'round_over') return room;
+      var host = room.players && hostPlayerId && room.players[hostPlayerId] ? room.players[hostPlayerId] : null;
+      if (!host || !host.isHost) return room;
+
+      var nextRound = llInitRound(room);
+      if (!nextRound) return room;
+      var nextRoom = assign({}, room, { phase: 'playing', round: nextRound });
+      nextRoom.log = llAppendLog(nextRoom, 'ラウンド ' + nextRound.no + ' 開始');
+      return nextRoom;
+    });
+  }
+
+  function playLoveLetterAction(roomId, actorId, action) {
+    var base = loveletterRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'playing') return room;
+      var round = room.round || null;
+      if (!round || round.state !== 'playing') return room;
+      if (String(round.currentPlayerId || '') !== String(actorId || '')) return room;
+      if (round.eliminated && round.eliminated[actorId]) return room;
+
+      var card = action && action.card ? String(action.card) : '';
+      if (!card) return room;
+
+      var hands = assign({}, round.hands || {});
+      var myHand = Array.isArray(hands[actorId]) ? hands[actorId].slice() : [];
+      if (myHand.length < 2) return room;
+      var idx = myHand.indexOf(card);
+      if (idx < 0) return room;
+
+      // Countess rule.
+      if (llMustPlayCountess(myHand) && card !== '7') return room;
+
+      // Remove played card from hand.
+      myHand.splice(idx, 1);
+      hands[actorId] = myHand;
+
+      var discards = assign({}, round.discards || {});
+      var myDisc = Array.isArray(discards[actorId]) ? discards[actorId].slice() : [];
+      myDisc.push(card);
+      discards[actorId] = myDisc;
+
+      var eliminated = assign({}, round.eliminated || {});
+      var protectedMap = assign({}, round.protected || {});
+
+      // Clear any previous peek.
+      var peek = null;
+
+      var ps = room.players || {};
+      function pname(pid) {
+        return pid && ps[pid] ? formatPlayerDisplayName(ps[pid]) : String(pid || '-');
+      }
+
+      function isProtected(pid) {
+        return !!(protectedMap && protectedMap[pid]);
+      }
+
+      function isElim(pid) {
+        return !!(eliminated && eliminated[pid]);
+      }
+
+      function eligibleTargetIds(allowSelf) {
+        var ids = llListPlayerIdsByJoin(room);
+        var out = [];
+        for (var i = 0; i < ids.length; i++) {
+          var id = ids[i];
+          if (!id) continue;
+          if (!allowSelf && String(id) === String(actorId)) continue;
+          if (isElim(id)) continue;
+          if (isProtected(id)) continue;
+          out.push(id);
+        }
+        return out;
+      }
+
+      function getSingleHand(pid) {
+        var h = hands && Array.isArray(hands[pid]) ? hands[pid] : [];
+        return h.length ? String(h[0]) : '';
+      }
+
+      function setSingleHand(pid, cardRank) {
+        hands[pid] = cardRank ? [String(cardRank)] : [];
+      }
+
+      function pushDiscard(pid, cardRank) {
+        var d = Array.isArray(discards[pid]) ? discards[pid].slice() : [];
+        if (cardRank) d.push(String(cardRank));
+        discards[pid] = d;
+      }
+
+      function eliminatePlayer(pid, reason) {
+        if (eliminated[pid]) return;
+        eliminated[pid] = true;
+        protectedMap[pid] = false;
+        // move remaining hand to discard (public)
+        var h = hands && Array.isArray(hands[pid]) ? hands[pid].slice() : [];
+        for (var i = 0; i < h.length; i++) pushDiscard(pid, h[i]);
+        hands[pid] = [];
+        if (reason) {
+          // reserved
+        }
+      }
+
+      var actorName = pname(actorId);
+      var cardDef = llCardDef(card);
+
+      var logText = actorName + ' が ' + cardDef.name + '(' + cardDef.rank + ') を使用';
+
+      // Apply effects
+      if (card === '1') {
+        // Guard: choose target + guess (2-8)
+        var t = action && action.target ? String(action.target) : '';
+        var guess = action && action.guess ? String(action.guess) : '';
+        var eligible = eligibleTargetIds(false);
+        if (eligible.length && (!t || eligible.indexOf(t) < 0)) return room;
+        var g = parseIntSafe(guess, 0);
+        if (!(g >= 2 && g <= 8)) return room;
+        if (t) {
+          var th = getSingleHand(t);
+          logText += ' → 対象 ' + pname(t) + ' / 推測 ' + llCardDef(String(g)).name + '(' + g + ')';
+          if (th && parseIntSafe(th, 0) === g) {
+            eliminatePlayer(t, 'guard');
+            logText += '（的中：脱落）';
+          } else {
+            logText += '（外れ）';
+          }
+        } else {
+          logText += '（対象なし）';
+        }
+      } else if (card === '2') {
+        // Priest
+        var t2 = action && action.target ? String(action.target) : '';
+        var eligible2 = eligibleTargetIds(false);
+        if (eligible2.length && (!t2 || eligible2.indexOf(t2) < 0)) return room;
+        if (t2) {
+          var seen = getSingleHand(t2);
+          peek = { to: actorId, target: t2, card: seen, until: serverNowMs() + 60000 };
+          logText += ' → ' + pname(t2) + ' の手札を確認';
+        } else {
+          logText += '（対象なし）';
+        }
+      } else if (card === '3') {
+        // Baron
+        var t3 = action && action.target ? String(action.target) : '';
+        var eligible3 = eligibleTargetIds(false);
+        if (eligible3.length && (!t3 || eligible3.indexOf(t3) < 0)) return room;
+        if (t3) {
+          var aCard = getSingleHand(actorId);
+          var bCard = getSingleHand(t3);
+          var av = parseIntSafe(aCard, 0);
+          var bv = parseIntSafe(bCard, 0);
+          logText += ' → ' + pname(t3) + ' と比較';
+          if (av && bv) {
+            if (av > bv) {
+              eliminatePlayer(t3, 'baron');
+              logText += '（' + actorName + ' 勝ち：' + pname(t3) + ' 脱落）';
+            } else if (bv > av) {
+              eliminatePlayer(actorId, 'baron');
+              logText += '（' + pname(t3) + ' 勝ち：' + actorName + ' 脱落）';
+            } else {
+              logText += '（引き分け）';
+            }
+          }
+        } else {
+          logText += '（対象なし）';
+        }
+      } else if (card === '4') {
+        // Handmaid
+        protectedMap[actorId] = true;
+        logText += '（保護）';
+      } else if (card === '5') {
+        // Prince
+        var t5 = action && action.target ? String(action.target) : '';
+        var allowSelf = true;
+        // Prince can target self, but protected targets are not allowed.
+        var eligible5 = eligibleTargetIds(true);
+        if (eligible5.length && (!t5 || eligible5.indexOf(t5) < 0)) return room;
+        if (t5) {
+          var old = getSingleHand(t5);
+          if (old) pushDiscard(t5, old);
+          setSingleHand(t5, '');
+          logText += ' → ' + pname(t5) + ' に捨て札';
+          if (String(old) === '8') {
+            eliminatePlayer(t5, 'prince_princess');
+            logText += '（姫：脱落）';
+          } else {
+            var drawn = llDrawFromRound(round);
+            if (drawn) {
+              setSingleHand(t5, drawn);
+              logText += '（引き直し）';
+            } else {
+              logText += '（山札なし）';
+            }
+          }
+        } else {
+          logText += '（対象なし）';
+        }
+      } else if (card === '6') {
+        // King
+        var t6 = action && action.target ? String(action.target) : '';
+        var eligible6 = eligibleTargetIds(false);
+        if (eligible6.length && (!t6 || eligible6.indexOf(t6) < 0)) return room;
+        if (t6) {
+          var a6 = getSingleHand(actorId);
+          var b6 = getSingleHand(t6);
+          setSingleHand(actorId, b6);
+          setSingleHand(t6, a6);
+          logText += ' → ' + pname(t6) + ' と手札交換';
+        } else {
+          logText += '（対象なし）';
+        }
+      } else if (card === '7') {
+        // Countess
+        logText += '（効果なし）';
+      } else if (card === '8') {
+        // Princess
+        eliminatePlayer(actorId, 'princess');
+        logText += '（姫を捨てた：脱落）';
+      }
+
+      // Write back updated round parts.
+      round.hands = hands;
+      round.discards = discards;
+      round.eliminated = eliminated;
+      round.protected = protectedMap;
+      round.peek = peek;
+
+      var nextRoom = assign({}, room);
+      nextRoom.round = round;
+      nextRoom.log = llAppendLog(nextRoom, logText);
+
+      // Determine end of round.
+      var alive = llAliveIds(nextRoom, round);
+      var deckLeft = Array.isArray(round.deck) ? round.deck.length : 0;
+      if (alive.length <= 1 || deckLeft === 0) {
+        var winners = llRoundWinners(nextRoom, round);
+        round.winners = winners;
+        round.endedAt = serverNowMs();
+        round.state = 'ended';
+
+        var tokens2 = assign({}, nextRoom.tokens || {});
+        for (var wi = 0; wi < winners.length; wi++) {
+          var wpid = winners[wi];
+          tokens2[wpid] = (parseIntSafe(tokens2[wpid], 0) || 0) + 1;
+        }
+        nextRoom.tokens = tokens2;
+        nextRoom.round = round;
+
+        var goal = parseIntSafe(nextRoom.tokenGoal, 0) || llTokenGoalForPlayerCount(llListPlayerIdsByJoin(nextRoom).length);
+        nextRoom.tokenGoal = goal;
+
+        var reached = [];
+        var allIds = llListPlayerIdsByJoin(nextRoom);
+        for (var ti = 0; ti < allIds.length; ti++) {
+          var pid = allIds[ti];
+          if ((parseIntSafe(tokens2[pid], 0) || 0) >= goal) reached.push(pid);
+        }
+
+        if (reached.length) {
+          nextRoom.phase = 'finished';
+          nextRoom.result = { winners: reached, finishedAt: serverNowMs() };
+          nextRoom.log = llAppendLog(nextRoom, 'ゲーム終了');
+        } else {
+          nextRoom.phase = 'round_over';
+          nextRoom.log = llAppendLog(nextRoom, 'ラウンド終了');
+        }
+        return nextRoom;
+      }
+
+      // Advance to next alive player
+      var order = Array.isArray(round.order) ? round.order : llListPlayerIdsByJoin(nextRoom);
+      var next = llFindNextAlive(round, order, parseIntSafe(round.currentIndex, 0));
+      if (!next.id) return nextRoom;
+      round.order = order;
+      round.currentIndex = next.index;
+      round.currentPlayerId = next.id;
+      // Protection ends at start of your next turn.
+      round.protected[next.id] = false;
+      // Draw for next actor
+      var nextHand = Array.isArray(round.hands[next.id]) ? round.hands[next.id].slice() : [];
+      if (nextHand.length < 2) {
+        var drawn2 = llDrawFromRound(round);
+        if (drawn2) nextHand.push(String(drawn2));
+      }
+      round.hands[next.id] = nextHand;
+      // clear peek after turn transition
+      round.peek = null;
+
+      nextRoom.round = round;
+      return nextRoom;
+    });
+  }
+
   // -------------------- UI --------------------
   function render(viewEl, html) {
     viewEl.innerHTML = html;
@@ -3065,7 +3708,7 @@
   function renderHome(viewEl) {
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">B_BoardGames</div>\n      <div class="muted">遊ぶゲームを選びます。</div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">ワードウルフ</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=create">ワードウルフ開始</a>\n          <a class="btn ghost" href="?screen=history">勝敗履歴</a>\n        </div>\n        <div class="muted">参加者はQRを読み取って参加します。</div>\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">コードネーム</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=codenames_create">コードネーム開始</a>\n        </div>\n        <div class="muted">各チームにスパイマスター1人＋諜報員で遊びます。</div>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">B_BoardGames</div>\n      <div class="muted">遊ぶゲームを選びます。</div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">ワードウルフ</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=create">ワードウルフ開始</a>\n          <a class="btn ghost" href="?screen=history">勝敗履歴</a>\n        </div>\n        <div class="muted">参加者はQRを読み取って参加します。</div>\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">コードネーム</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=codenames_create">コードネーム開始</a>\n        </div>\n        <div class="muted">各チームにスパイマスター1人＋諜報員で遊びます。</div>\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">ラブレター</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=loveletter_create">ラブレター開始</a>\n        </div>\n        <div class="muted">手札を1枚使って効果を発動し、最後に残る/強い札で勝ちます。</div>\n      </div>\n    </div>\n  '
     );
   }
 
@@ -4866,6 +5509,780 @@
     });
   }
 
+  // -------------------- loveletter (UI / routes) --------------------
+  function renderLoveLetterCreate(viewEl) {
+    try {
+      if (viewEl && viewEl.classList) {
+        viewEl.classList.remove('cn-turn-actor');
+        viewEl.classList.remove('cn-myturn');
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">ラブレター：部屋を作成</div>\n      <div id="llCreateError" class="form-error" role="alert"></div>\n\n      <div class="field">\n        <label>あなたの名前（表示用）</label>\n        <input id="llHostName" placeholder="例: たろう" />\n      </div>\n\n      <div class="row">\n        <button id="llCreateRoom" class="primary">QRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+    );
+  }
+
+  function readLoveLetterCreateForm() {
+    var n = document.getElementById('llHostName');
+    var name = String((n && n.value) || '').trim();
+    if (!name) throw new Error('名前を入力してください。');
+    return { name: name };
+  }
+
+  function renderLoveLetterJoin(viewEl, roomId) {
+    try {
+      if (viewEl && viewEl.classList) {
+        viewEl.classList.remove('cn-turn-actor');
+        viewEl.classList.remove('cn-myturn');
+      }
+    } catch (e) {
+      // ignore
+    }
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">ラブレター：参加</div>\n      <div class="kv"><span class="muted">ルームID</span><b>' +
+        escapeHtml(roomId) +
+        '</b></div>\n\n      <div id="llJoinError" class="form-error" role="alert"></div>\n\n      <div class="field">\n        <label>名前（表示用）</label>\n        <input id="llPlayerName" placeholder="例: たろう" />\n      </div>\n\n      <div class="row">\n        <button id="llJoin" class="primary">参加する</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+    );
+  }
+
+  function readLoveLetterJoinForm() {
+    var el = document.getElementById('llPlayerName');
+    var name = String((el && el.value) || '').trim();
+    if (!name) throw new Error('名前を入力してください。');
+    return { name: name };
+  }
+
+  function makeLoveLetterJoinUrl(roomId) {
+    var q = {};
+    var v = getCacheBusterParam();
+    if (v) q.v = v;
+    q.room = roomId;
+    q.screen = 'loveletter_join';
+    return baseUrl() + '?' + buildQuery(q);
+  }
+
+  function llFormatCard(rank) {
+    var d = llCardDef(rank);
+    return d.name + '(' + d.rank + ')';
+  }
+
+  function llFormatCardList(arr) {
+    if (!Array.isArray(arr) || !arr.length) return '-';
+    var out = [];
+    for (var i = 0; i < arr.length; i++) out.push(llFormatCard(arr[i]));
+    return out.join(' / ');
+  }
+
+  function renderLoveLetterHost(viewEl, opts) {
+    var roomId = opts.roomId;
+    var joinUrl = opts.joinUrl;
+    var room = opts.room;
+    var hostPlayerId = opts.hostPlayerId;
+
+    var playerCount = room && room.players ? Object.keys(room.players).length : 0;
+    var phase = (room && room.phase) || '-';
+    var canStart = phase === 'lobby' && playerCount >= 2;
+
+    var playersHtml = '';
+    try {
+      var ps = (room && room.players) || {};
+      var keys = Object.keys(ps);
+      keys.sort(function (a, b) {
+        var pa = ps[a] || {};
+        var pb = ps[b] || {};
+        return (pa.joinedAt || 0) - (pb.joinedAt || 0);
+      });
+      for (var i = 0; i < keys.length; i++) {
+        var id = keys[i];
+        var p = ps[id] || {};
+        var nm = escapeHtml(formatPlayerDisplayName(p) || '-');
+        var hostMark = p.isHost ? ' <span class="badge">GM</span>' : '';
+        playersHtml += '<div class="kv"><span class="muted">' + nm + hostMark + '</span><b></b></div>';
+      }
+      if (!playersHtml) playersHtml = '<div class="muted">まだ参加者がいません。</div>';
+    } catch (e) {
+      playersHtml = '<div class="muted">参加者一覧を表示できませんでした。</div>';
+    }
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">ラブレター：QR配布</div>\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="field">\n        <label>参加URL（スマホ以外はこちら）</label>\n        <div class="code" id="joinUrlText">' +
+        escapeHtml(joinUrl || '') +
+        '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
+        escapeHtml(String(playerCount)) +
+        '</b></div>\n      <div class="kv"><span class="muted">フェーズ</span><b>' +
+        escapeHtml(phase) +
+        '</b></div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="big">参加者</div>\n        ' +
+        playersHtml +
+        '\n      </div>\n\n      <hr />\n\n      <div class="row">\n        ' +
+        (canStart ? '<button id="llStart" class="primary">スタート</button>' : '<button class="primary" disabled>スタート</button>') +
+        '\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n\n      <div class="muted">※ スタート後、GM端末もプレイヤー画面に移動します。</div>\n    </div>\n  '
+    );
+
+    // keep host player id in DOM for route handlers if needed
+    try {
+      if (hostPlayerId) {
+        var el = document.getElementById('view');
+        if (el) el.setAttribute('data-ll-hostpid', String(hostPlayerId));
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  function renderLoveLetterPlayer(viewEl, opts) {
+    var roomId = opts.roomId;
+    var playerId = opts.playerId;
+    var room = opts.room;
+    var player = opts.player;
+    var isHost = !!opts.isHost;
+    var ui = opts.ui || {};
+
+    var phase = (room && room.phase) || 'lobby';
+    var tokens = (room && room.tokens) || {};
+    var goal = parseIntSafe(room && room.tokenGoal, 0) || 0;
+    var ps = (room && room.players) || {};
+    var r = room && room.round ? room.round : {};
+
+    var selfName = formatPlayerDisplayName(player) || '';
+    if (player && player.isHost && (phase === 'lobby' || phase === 'round_over' || phase === 'finished')) {
+      selfName = formatPlayerMenuName(player);
+    }
+
+    var order = [];
+    try {
+      order = llListPlayerIdsByJoin(room);
+    } catch (e0) {
+      order = [];
+    }
+
+    var scoreboard = '';
+    for (var i = 0; i < order.length; i++) {
+      var pid = order[i];
+      var p = ps[pid] || {};
+      var nm = escapeHtml(formatPlayerDisplayName(p) || '-');
+      var t = parseIntSafe(tokens[pid], 0) || 0;
+      scoreboard += '<div class="kv"><span class="muted">' + nm + (p.isHost ? ' <span class="badge">GM</span>' : '') + '</span><b>' + t + '</b></div>';
+    }
+    if (!scoreboard) scoreboard = '<div class="muted">-</div>';
+
+    var logHtml = '';
+    try {
+      var log = Array.isArray(room && room.log) ? room.log : [];
+      var start = Math.max(0, log.length - 12);
+      for (var li = start; li < log.length; li++) {
+        var it = log[li] || {};
+        var tx = escapeHtml(String(it.text || ''));
+        if (!tx) continue;
+        logHtml += '<div class="muted">' + tx + '</div>';
+      }
+      if (!logHtml) logHtml = '<div class="muted">-</div>';
+    } catch (e1) {
+      logHtml = '<div class="muted">-</div>';
+    }
+
+    var statusText = '';
+    if (phase === 'lobby') statusText = '待機中：GMがスタートするまでお待ちください。';
+    else if (phase === 'playing') statusText = String(r.currentPlayerId || '') === String(playerId || '') ? 'あなたの番です。' : '待機中：他プレイヤーの手番です。';
+    else if (phase === 'round_over') statusText = 'ラウンド終了：次のラウンドを待っています。';
+    else if (phase === 'finished') statusText = 'ゲーム終了：結果を確認してください。';
+
+    var myHand = r && r.hands && Array.isArray(r.hands[playerId]) ? r.hands[playerId] : [];
+    var myDisc = r && r.discards && Array.isArray(r.discards[playerId]) ? r.discards[playerId] : [];
+    var myElim = !!(r && r.eliminated && r.eliminated[playerId]);
+    var myProt = !!(r && r.protected && r.protected[playerId]);
+
+    var turnName = '';
+    if (phase === 'playing' && r && r.currentPlayerId) {
+      var tp = ps[r.currentPlayerId];
+      turnName = tp ? formatPlayerDisplayName(tp) : String(r.currentPlayerId);
+    }
+
+    var peekHtml = '';
+    try {
+      if (phase === 'playing' && r && r.peek && r.peek.to === playerId && r.peek.until && serverNowMs() <= r.peek.until) {
+        var targetName = r.peek.target && ps[r.peek.target] ? formatPlayerDisplayName(ps[r.peek.target]) : String(r.peek.target || '-');
+        var seenCard = r.peek.card ? llFormatCard(r.peek.card) : '-';
+        peekHtml =
+          '<hr />' +
+          '<div class="stack">' +
+          '<div class="big">僧侶：確認結果</div>' +
+          '<div class="kv"><span class="muted">対象</span><b>' +
+          escapeHtml(targetName) +
+          '</b></div>' +
+          '<div class="kv"><span class="muted">手札</span><b>' +
+          escapeHtml(seenCard) +
+          '</b></div>' +
+          '</div>';
+      }
+    } catch (e2) {
+      peekHtml = '';
+    }
+
+    var actionHtml = '';
+    if (phase === 'playing') {
+      if (myElim) {
+        actionHtml = '<div class="muted">あなたは脱落しています。</div>';
+      } else if (String(r.currentPlayerId || '') !== String(playerId || '')) {
+        actionHtml = turnName ? '<div class="muted">手番：' + escapeHtml(turnName) + '</div>' : '';
+      } else {
+        var must7 = llMustPlayCountess(myHand);
+        var cardsHtml = '';
+        for (var hi = 0; hi < myHand.length; hi++) {
+          var cr = String(myHand[hi]);
+          var cd = llCardDef(cr);
+          var disabled = must7 && cr !== '7';
+          cardsHtml +=
+            '<button class="primary llPickCard" data-rank="' +
+            escapeHtml(cr) +
+            '" ' +
+            (disabled ? 'disabled' : '') +
+            ' style="width:100%">' +
+            escapeHtml(cd.name + '(' + cd.rank + ')') +
+            '</button>' +
+            '<div class="muted" style="margin-top:4px">' +
+            escapeHtml(cd.desc) +
+            '</div>';
+        }
+
+        var pending = ui && ui.pending ? ui.pending : null;
+        var pendingCard = pending && pending.card ? String(pending.card) : '';
+        var pendingTarget = pending && pending.target ? String(pending.target) : '';
+        var pendingGuess = pending && pending.guess ? String(pending.guess) : '';
+
+        var needsTarget = pendingCard === '1' || pendingCard === '2' || pendingCard === '3' || pendingCard === '5' || pendingCard === '6';
+        var allowSelfTarget = pendingCard === '5';
+
+        var targetHtml = '';
+        if (pendingCard) {
+          var eligible = [];
+          for (var pi = 0; pi < order.length; pi++) {
+            var pid = order[pi];
+            if (!pid) continue;
+            if (!allowSelfTarget && pid === playerId) continue;
+            if (r && r.eliminated && r.eliminated[pid]) continue;
+            if (r && r.protected && r.protected[pid]) continue;
+            eligible.push(pid);
+          }
+
+          if (needsTarget) {
+            if (!eligible.length) {
+              targetHtml = '<div class="muted">対象にできるプレイヤーがいません（全員が保護/脱落など）。</div>';
+            } else {
+              var btns = '';
+              for (var ei = 0; ei < eligible.length; ei++) {
+                var tid = eligible[ei];
+                var tnm = ps[tid] ? formatPlayerDisplayName(ps[tid]) : tid;
+                var isSel = pendingTarget && pendingTarget === tid;
+                btns +=
+                  '<button class="ghost llPickTarget" data-target="' +
+                  escapeHtml(tid) +
+                  '" style="width:100%">' +
+                  (isSel ? '✓ ' : '') +
+                  escapeHtml(tnm) +
+                  '</button>';
+              }
+              targetHtml = '<div class="stack">' + btns + '</div>';
+            }
+          }
+        }
+
+        var guessHtml = '';
+        if (pendingCard === '1') {
+          var gBtns = '';
+          for (var gv = 2; gv <= 8; gv++) {
+            var gr = String(gv);
+            var sel = pendingGuess === gr;
+            gBtns +=
+              '<button class="ghost llPickGuess" data-guess="' +
+              escapeHtml(gr) +
+              '" style="width:100%">' +
+              (sel ? '✓ ' : '') +
+              escapeHtml(llFormatCard(gr)) +
+              '</button>';
+          }
+          guessHtml = '<div class="stack">' + gBtns + '</div>';
+        }
+
+        actionHtml =
+          '<div class="stack">' +
+          '<div class="big">行動</div>' +
+          (must7 ? '<div class="muted">※ 伯爵夫人(7)と王様(6)/王子(5)を同時に持つため、伯爵夫人を必ず捨てます。</div>' : '') +
+          (pendingCard ? '<div class="kv"><span class="muted">選択中</span><b>' + escapeHtml(llFormatCard(pendingCard)) + '</b></div>' : '<div class="muted">使うカードを選んでください。</div>') +
+          '<div class="stack">' +
+          cardsHtml +
+          '</div>' +
+          (pendingCard && needsTarget ? '<hr /><div class="big">対象</div>' + targetHtml : '') +
+          (pendingCard === '1' ? '<hr /><div class="big">推測</div>' + guessHtml : '') +
+          (pendingCard
+            ? '<hr /><div class="row">' +
+              '<button id="llConfirmPlay" class="primary">実行</button>' +
+              '<button id="llCancelPlay" class="ghost">キャンセル</button>' +
+              '</div>'
+            : '') +
+          '<div id="llPlayError" class="form-error" role="alert"></div>' +
+          '</div>';
+      }
+    }
+
+    var roundResultHtml = '';
+    if (phase === 'round_over' && r && Array.isArray(r.winners)) {
+      var ws = [];
+      for (var wi = 0; wi < r.winners.length; wi++) {
+        var wpid = r.winners[wi];
+        ws.push(ps[wpid] ? formatPlayerDisplayName(ps[wpid]) : String(wpid));
+      }
+      roundResultHtml =
+        '<div class="card" style="padding:12px">' +
+        '<div class="muted">ラウンド勝者</div>' +
+        '<div class="big">' +
+        escapeHtml(ws.length ? ws.join(' / ') : '-') +
+        '</div>' +
+        '</div>';
+    }
+
+    var finalResultHtml = '';
+    if (phase === 'finished' && room && room.result && Array.isArray(room.result.winners)) {
+      var fs = [];
+      for (var fi = 0; fi < room.result.winners.length; fi++) {
+        var fpid = room.result.winners[fi];
+        fs.push(ps[fpid] ? formatPlayerDisplayName(ps[fpid]) : String(fpid));
+      }
+      finalResultHtml =
+        '<div class="card" style="padding:12px">' +
+        '<div class="muted">勝者</div>' +
+        '<div class="big">' +
+        escapeHtml(fs.length ? fs.join(' / ') : '-') +
+        '</div>' +
+        '</div>';
+    }
+
+    var othersHtml = '';
+    if (phase !== 'lobby' && order.length) {
+      for (var oi = 0; oi < order.length; oi++) {
+        var opid = order[oi];
+        var op = ps[opid] || {};
+        var nm2 = escapeHtml(formatPlayerDisplayName(op) || '-');
+        var elim = !!(r && r.eliminated && r.eliminated[opid]);
+        var prot = !!(r && r.protected && r.protected[opid]);
+        var disc2 = r && r.discards && Array.isArray(r.discards[opid]) ? r.discards[opid] : [];
+        othersHtml +=
+          '<div class="card" style="padding:12px">' +
+          '<div class="big">' +
+          nm2 +
+          (op.isHost ? ' <span class="badge">GM</span>' : '') +
+          '</div>' +
+          '<div class="kv"><span class="muted">状態</span><b>' +
+          escapeHtml(elim ? '脱落' : prot ? '保護中' : '生存') +
+          '</b></div>' +
+          '<div class="kv"><span class="muted">捨て札</span><b>' +
+          escapeHtml(llFormatCardList(disc2)) +
+          '</b></div>' +
+          '</div>';
+      }
+    }
+
+    var controlHtml = '';
+    if (phase === 'round_over' && isHost) {
+      controlHtml = '<div class="row"><button id="llNextRound" class="primary">次のラウンド</button></div>';
+    }
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">' +
+        escapeHtml(selfName) +
+        '</div>\n\n      <div class="card" style="padding:12px">\n        <div class="kv"><span class="muted">ルーム</span><b>' +
+        escapeHtml(roomId) +
+        '</b></div>\n        <div class="kv"><span class="muted">目標</span><b>' +
+        escapeHtml(goal ? String(goal) + ' 点' : '-') +
+        '</b></div>\n        <div class="kv"><span class="muted">フェーズ</span><b>' +
+        escapeHtml(phase) +
+        '</b></div>\n        ' +
+        (phase === 'playing' && turnName ? '<div class="kv"><span class="muted">手番</span><b>' + escapeHtml(turnName) + '</b></div>' : '') +
+        '\n      </div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">スコア</div>\n        <div class="stack">' +
+        scoreboard +
+        '</div>\n      </div>\n\n      <div class="card center" style="padding:12px">\n        <div class="big">' +
+        escapeHtml(statusText) +
+        '</div>\n      </div>\n\n      ' +
+        roundResultHtml +
+        finalResultHtml +
+        '\n\n      <div class="card" style="padding:12px">\n        <div class="muted">あなた</div>\n        <div class="kv"><span class="muted">状態</span><b>' +
+        escapeHtml(myElim ? '脱落' : myProt ? '保護中' : '生存') +
+        '</b></div>\n        <div class="kv"><span class="muted">手札</span><b>' +
+        escapeHtml(myElim ? '-' : llFormatCardList(myHand)) +
+        '</b></div>\n        <div class="kv"><span class="muted">捨て札</span><b>' +
+        escapeHtml(llFormatCardList(myDisc)) +
+        '</b></div>\n      </div>\n\n      <div class="card" style="padding:12px">\n        ' +
+        actionHtml +
+        '\n      </div>\n\n      ' +
+        peekHtml +
+        '\n\n      ' +
+        (controlHtml ? '<hr />' + controlHtml : '') +
+        '\n\n      <hr />\n\n      <div class="stack">\n        <div class="big">ログ</div>\n        <div class="stack">' +
+        logHtml +
+        '</div>\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="big">他プレイヤー</div>\n        <div class="stack">' +
+        (othersHtml || '<div class="muted">-</div>') +
+        '</div>\n      </div>\n\n      <div class="row">\n        <a class="btn ghost" href="./">ホーム</a>\n      </div>\n    </div>\n  '
+    );
+  }
+
+  function routeLoveLetterCreate() {
+    renderLoveLetterCreate(viewEl);
+    clearInlineError('llCreateError');
+    var btn = document.getElementById('llCreateRoom');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var form;
+      try {
+        clearInlineError('llCreateError');
+        form = readLoveLetterCreateForm();
+      } catch (e) {
+        setInlineError('llCreateError', (e && e.message) || '入力を確認してください。');
+        return;
+      }
+      var roomId = makeRoomId();
+      firebaseReady()
+        .then(function () {
+          return createLoveLetterRoom(roomId, {});
+        })
+        .then(function () {
+          var playerId = getOrCreateLoveLetterPlayerId(roomId);
+          return joinPlayerInLoveLetterRoom(roomId, playerId, form.name, true).then(function (room) {
+            if (!room || !room.players || !room.players[playerId]) {
+              throw new Error('ゲームマスターの参加に失敗しました');
+            }
+            return room;
+          });
+        })
+        .then(function () {
+          var q = {};
+          var v = getCacheBusterParam();
+          if (v) q.v = v;
+          q.room = roomId;
+          q.host = '1';
+          q.screen = 'loveletter_host';
+          setQuery(q);
+          route();
+        })
+        .catch(function (e) {
+          renderError(viewEl, (e && e.message) || '作成に失敗しました');
+        });
+    });
+  }
+
+  function routeLoveLetterJoin(roomId, isHost) {
+    renderLoveLetterJoin(viewEl, roomId);
+    clearInlineError('llJoinError');
+    var btn = document.getElementById('llJoin');
+    if (!btn) return;
+
+    btn.addEventListener('click', function () {
+      var form;
+      try {
+        clearInlineError('llJoinError');
+        form = readLoveLetterJoinForm();
+      } catch (e) {
+        setInlineError('llJoinError', (e && e.message) || '入力を確認してください。');
+        return;
+      }
+
+      firebaseReady()
+        .then(function () {
+          var playerId = getOrCreateLoveLetterPlayerId(roomId);
+          return joinPlayerInLoveLetterRoom(roomId, playerId, form.name, false).then(function (room) {
+            if (!room || !room.players || !room.players[playerId]) {
+              throw new Error('参加できません（ゲームが開始済みです）');
+            }
+            return playerId;
+          });
+        })
+        .then(function () {
+          var q = {};
+          var v = getCacheBusterParam();
+          if (v) q.v = v;
+          q.room = roomId;
+          q.screen = 'loveletter_player';
+          q.player = '1';
+          if (isHost) q.host = '1';
+          setQuery(q);
+          route();
+        })
+        .catch(function (e) {
+          renderError(viewEl, (e && e.message) || '参加に失敗しました');
+        });
+    });
+  }
+
+  function routeLoveLetterHost(roomId) {
+    var unsub = null;
+    var joinUrl = makeLoveLetterJoinUrl(roomId);
+    var hostPlayerId = getOrCreateLoveLetterPlayerId(roomId);
+
+    function drawQr() {
+      return new Promise(function (resolve) {
+        var canvas = document.getElementById('qr');
+        var errEl = document.getElementById('qrError');
+        var wrapEl = document.getElementById('qrWrap');
+        if (errEl) errEl.textContent = '';
+        if (!canvas) {
+          if (errEl) errEl.textContent = 'QR表示領域が見つかりません。';
+          return resolve();
+        }
+        var qr = window.QRCode || window.qrcode || window.QR;
+        if (!qr || !qr.toCanvas) {
+          if (errEl) errEl.textContent = 'QRの生成に失敗しました（ライブラリ未読込）。';
+          return resolve();
+        }
+
+        function showAsImage() {
+          if (!qr.toDataURL || !wrapEl) return;
+          try {
+            qr.toDataURL(joinUrl, { margin: 1, width: 240 }, function (err, url) {
+              if (err || !url) {
+                if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+                return resolve();
+              }
+              wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />';
+              if (errEl) errEl.textContent = '（QRは画像で表示しています）';
+              return resolve();
+            });
+          } catch (e) {
+            if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+            return resolve();
+          }
+        }
+
+        function looksBlank(c) {
+          try {
+            var ctx = c.getContext && c.getContext('2d');
+            if (!ctx) return true;
+            var w = c.width || 0;
+            var h = c.height || 0;
+            if (!w || !h) return true;
+            var img = ctx.getImageData(0, 0, Math.min(16, w), Math.min(16, h)).data;
+            var allZero = true;
+            var allWhite = true;
+            for (var i = 0; i < img.length; i += 4) {
+              var r = img[i], g = img[i + 1], b = img[i + 2], a = img[i + 3];
+              if (a !== 0) allZero = false;
+              if (!(a !== 0 && r > 240 && g > 240 && b > 240)) allWhite = false;
+              if (!allZero && !allWhite) return false;
+            }
+            return allZero || allWhite;
+          } catch (e) {
+            return false;
+          }
+        }
+
+        try {
+          qr.toCanvas(canvas, joinUrl, { margin: 1, width: 240 }, function (err) {
+            if (err) {
+              if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+              showAsImage();
+              return;
+            }
+            if (looksBlank(canvas)) {
+              showAsImage();
+              return;
+            }
+            resolve();
+          });
+        } catch (e) {
+          if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+          showAsImage();
+        }
+      });
+    }
+
+    function bindHostButtons(room) {
+      var copyBtn = document.getElementById('copyJoinUrl');
+      if (copyBtn && !copyBtn.__ll_bound) {
+        copyBtn.__ll_bound = true;
+        copyBtn.addEventListener('click', function () {
+          var st = document.getElementById('copyStatus');
+          if (st) st.textContent = 'コピー中...';
+          copyTextToClipboard(joinUrl)
+            .then(function (ok) {
+              if (!st) return;
+              st.textContent = ok ? 'コピーしました' : 'コピーできませんでした（長押しで選択してコピーしてください）';
+            })
+            .catch(function () {
+              if (st) st.textContent = 'コピーできませんでした（長押しで選択してコピーしてください）';
+            });
+        });
+      }
+
+      var startBtn = document.getElementById('llStart');
+      if (startBtn && !startBtn.__ll_bound) {
+        startBtn.__ll_bound = true;
+        startBtn.addEventListener('click', function () {
+          startLoveLetterGame(roomId, hostPlayerId)
+            .then(function () {
+              var q = {};
+              var v = getCacheBusterParam();
+              if (v) q.v = v;
+              q.room = roomId;
+              q.host = '1';
+              q.player = '1';
+              q.screen = 'loveletter_player';
+              setQuery(q);
+              route();
+            })
+            .catch(function (e) {
+              alert((e && e.message) || '失敗');
+            });
+        });
+      }
+    }
+
+    firebaseReady()
+      .then(function () {
+        return subscribeLoveLetterRoom(roomId, function (room) {
+          if (!room) {
+            renderError(viewEl, '部屋が見つかりません');
+            return;
+          }
+          renderLoveLetterHost(viewEl, { roomId: roomId, joinUrl: joinUrl, room: room, hostPlayerId: hostPlayerId });
+          drawQr();
+          bindHostButtons(room);
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+    });
+  }
+
+  function routeLoveLetterPlayer(roomId, isHost) {
+    var playerId = getOrCreateLoveLetterPlayerId(roomId);
+    var unsub = null;
+    var ui = { pending: null };
+
+    function renderNow(room) {
+      var player = room && room.players ? room.players[playerId] : null;
+      renderLoveLetterPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui });
+
+      var cancelBtn = document.getElementById('llCancelPlay');
+      if (cancelBtn) {
+        cancelBtn.addEventListener('click', function () {
+          ui.pending = null;
+          renderNow(room);
+        });
+      }
+
+      var pickCards = document.querySelectorAll('.llPickCard');
+      for (var i = 0; i < pickCards.length; i++) {
+        pickCards[i].addEventListener('click', function (ev) {
+          var el = ev && ev.currentTarget ? ev.currentTarget : null;
+          var r = el ? String(el.getAttribute('data-rank') || '') : '';
+          if (!r) return;
+          ui.pending = { card: r, target: '', guess: '' };
+          renderNow(room);
+        });
+      }
+
+      var pickTargets = document.querySelectorAll('.llPickTarget');
+      for (var t = 0; t < pickTargets.length; t++) {
+        pickTargets[t].addEventListener('click', function (ev) {
+          var el = ev && ev.currentTarget ? ev.currentTarget : null;
+          var tid = el ? String(el.getAttribute('data-target') || '') : '';
+          if (!ui.pending) ui.pending = { card: '', target: '', guess: '' };
+          ui.pending.target = tid;
+          renderNow(room);
+        });
+      }
+
+      var pickGuesses = document.querySelectorAll('.llPickGuess');
+      for (var g = 0; g < pickGuesses.length; g++) {
+        pickGuesses[g].addEventListener('click', function (ev) {
+          var el = ev && ev.currentTarget ? ev.currentTarget : null;
+          var gv = el ? String(el.getAttribute('data-guess') || '') : '';
+          if (!ui.pending) ui.pending = { card: '', target: '', guess: '' };
+          ui.pending.guess = gv;
+          renderNow(room);
+        });
+      }
+
+      var nextRoundBtn = document.getElementById('llNextRound');
+      if (nextRoundBtn) {
+        nextRoundBtn.addEventListener('click', function () {
+          startLoveLetterNextRound(roomId, playerId).catch(function (e) {
+            alert((e && e.message) || '失敗');
+          });
+        });
+      }
+
+      var confirmBtn = document.getElementById('llConfirmPlay');
+      if (confirmBtn) {
+        confirmBtn.addEventListener('click', function () {
+          var errId = 'llPlayError';
+          clearInlineError(errId);
+          if (!ui.pending || !ui.pending.card) {
+            setInlineError(errId, 'カードを選んでください。');
+            return;
+          }
+
+          var card = String(ui.pending.card);
+          var payload = { card: card };
+          if (card === '1') {
+            payload.target = String(ui.pending.target || '');
+            payload.guess = String(ui.pending.guess || '');
+            if (!payload.guess) {
+              setInlineError(errId, '推測を選んでください。');
+              return;
+            }
+          } else if (card === '2' || card === '3' || card === '5' || card === '6') {
+            payload.target = String(ui.pending.target || '');
+          }
+
+          confirmBtn.disabled = true;
+          playLoveLetterAction(roomId, playerId, payload)
+            .then(function () {
+              ui.pending = null;
+            })
+            .catch(function () {
+              setInlineError(errId, '実行に失敗しました');
+            })
+            .finally(function () {
+              confirmBtn.disabled = false;
+            });
+        });
+      }
+    }
+
+    firebaseReady()
+      .then(function () {
+        return subscribeLoveLetterRoom(roomId, function (room) {
+          if (!room) {
+            renderError(viewEl, '部屋が見つかりません');
+            return;
+          }
+          renderNow(room);
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+    });
+  }
+
   function route() {
     var q = parseQuery();
     var screen = q.screen ? String(q.screen) : '';
@@ -4875,10 +6292,24 @@
     var isPlayer = q.player === '1';
 
     if (screen === 'codenames_create') return routeCodenamesCreate();
+    if (screen === 'loveletter_create') return routeLoveLetterCreate();
 
     if (screen === 'setup') return routeSetup();
     if (screen === 'history') return routeHistory();
     if (screen === 'create') return routeCreate();
+
+    if (screen === 'loveletter_join') {
+      if (!roomId) return routeHome();
+      return routeLoveLetterJoin(roomId, isHost);
+    }
+    if (screen === 'loveletter_host') {
+      if (!roomId) return routeHome();
+      return routeLoveLetterHost(roomId);
+    }
+    if (screen === 'loveletter_player') {
+      if (!roomId) return routeHome();
+      return routeLoveLetterPlayer(roomId, isHost);
+    }
 
     if (screen === 'codenames_rejoin') {
       if (!roomId) return routeHome();
@@ -5539,6 +6970,20 @@
         return;
       }
 
+      if (s.indexOf('loveletter_') === 0) {
+        var ll = [];
+        ll.push('【ラブレター ルール（要約）】');
+        ll.push('1) 部屋を作成 → QRで参加');
+        ll.push('2) 各ラウンド：各自は手札1枚から開始（自分の手番で1枚引いて2枚になる）');
+        ll.push('3) 手札2枚のうち1枚を使用し、カード効果を解決する');
+        ll.push('4) 失格条件：姫（8）を捨てる / 効果で脱落する');
+        ll.push('5) ラウンド終了：山札が尽きる or 残り1人');
+        ll.push('6) 勝者：残った人（複数なら手札の強い人）→ 得点（トークン）');
+        ll.push('7) 先に目標点に到達した人がゲーム勝利');
+        alert(ll.join('\n'));
+        return;
+      }
+
       var lines = [];
       lines.push('【ワードウルフ ルール】');
       lines.push('1) ゲームマスターが部屋を作成し、QRを配布');
@@ -5560,7 +7005,7 @@
     var buildInfoEl = document.querySelector('#buildInfo');
     if (buildInfoEl) {
       var assetV = getCacheBusterParam();
-      buildInfoEl.textContent = 'v0.15 (B_BoardGames + codenames)' + (assetV ? ' / assets ' + assetV : '');
+      buildInfoEl.textContent = 'v0.16 (B_BoardGames + codenames + loveletter)' + (assetV ? ' / assets ' + assetV : '');
     }
 
     window.addEventListener('popstate', function () {
