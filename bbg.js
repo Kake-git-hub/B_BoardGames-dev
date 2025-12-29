@@ -3058,14 +3058,14 @@
   // -------------------- loveletter (logic) --------------------
   // Note: Text-based UI for now. Card defs include fields to allow future icon assets.
   var LOVELETTER_CARD_DEFS = {
-    '1': { rank: 1, name: '衛兵', desc: '相手1人を選び、カード名を推測する（衛兵は不可）。当たれば脱落。', icon: '' },
-    '2': { rank: 2, name: '僧侶', desc: '相手1人の手札を見る。', icon: '' },
-    '3': { rank: 3, name: '男爵', desc: '相手1人と手札の強さを比べ、弱い方が脱落。', icon: '' },
-    '4': { rank: 4, name: '侍女', desc: '次の自分の番まで、他プレイヤーの効果を受けない。', icon: '' },
-    '5': { rank: 5, name: '王子', desc: '誰か1人（自分も可）に手札を捨てさせ、1枚引かせる。姫なら脱落。', icon: '' },
-    '6': { rank: 6, name: '王様', desc: '相手1人と手札を交換する。', icon: '' },
-    '7': { rank: 7, name: '伯爵夫人', desc: '王様(6)か王子(5)と同時に持つなら必ず捨てる。', icon: '' },
-    '8': { rank: 8, name: '姫', desc: '捨てたら脱落。', icon: '' }
+    '1': { rank: 1, name: '兵士', desc: '相手1人を選び、カード名を推測する（兵士は不可）。当たれば脱落。', icon: './assets/loveletter/Heishi.png' },
+    '2': { rank: 2, name: '道化', desc: '相手1人の手札を見る。', icon: './assets/loveletter/Douke.png' },
+    '3': { rank: 3, name: '騎士', desc: '相手1人と手札の強さを比べ、弱い方が脱落。', icon: './assets/loveletter/Kishi.png' },
+    '4': { rank: 4, name: '僧侶', desc: '次の自分の番まで、他プレイヤーの効果を受けない。', icon: './assets/loveletter/Souryo.png' },
+    '5': { rank: 5, name: '魔術師', desc: '誰か1人（自分も可）に手札を捨てさせ、1枚引かせる。姫なら脱落。', icon: './assets/loveletter/Mazyutushi.png' },
+    '6': { rank: 6, name: '将軍', desc: '相手1人と手札を交換する。', icon: './assets/loveletter/Shougun.png' },
+    '7': { rank: 7, name: '大臣', desc: '将軍(6)か魔術師(5)と同時に持つなら必ず捨てる。', icon: './assets/loveletter/Daizin.png' },
+    '8': { rank: 8, name: '姫', desc: '捨てたら脱落。', icon: './assets/loveletter/Hime.png' }
   };
 
   function llCardDef(rank) {
@@ -3252,8 +3252,6 @@
       settings: {
         // placeholder for future options
       },
-      tokenGoal: 0,
-      tokens: {},
       log: [],
       round: {
         no: 0,
@@ -3350,23 +3348,15 @@
       var ids = llListPlayerIdsByJoin(room);
       if (ids.length < 2) return room;
 
-      var goal = llTokenGoalForPlayerCount(ids.length);
-      var tokens = assign({}, room.tokens || {});
-      for (var i = 0; i < ids.length; i++) {
-        var pid = ids[i];
-        if (tokens[pid] == null) tokens[pid] = 0;
-      }
-
       var nextRound = llInitRound(room);
       if (!nextRound) return room;
 
       var nextRoom = assign({}, room, {
         phase: 'playing',
-        tokenGoal: goal,
-        tokens: tokens,
         round: nextRound
       });
-      nextRoom.log = llAppendLog(nextRoom, 'ゲーム開始（目標 ' + goal + ' 点）');
+      nextRoom.result = null;
+      nextRoom.log = llAppendLog(nextRoom, 'ゲーム開始');
       nextRoom.log = llAppendLog(nextRoom, 'ラウンド ' + nextRound.no + ' 開始');
       return nextRoom;
     });
@@ -3617,32 +3607,10 @@
         round.endedAt = serverNowMs();
         round.state = 'ended';
 
-        var tokens2 = assign({}, nextRoom.tokens || {});
-        for (var wi = 0; wi < winners.length; wi++) {
-          var wpid = winners[wi];
-          tokens2[wpid] = (parseIntSafe(tokens2[wpid], 0) || 0) + 1;
-        }
-        nextRoom.tokens = tokens2;
+        nextRoom.phase = 'finished';
+        nextRoom.result = { winners: winners, finishedAt: serverNowMs() };
         nextRoom.round = round;
-
-        var goal = parseIntSafe(nextRoom.tokenGoal, 0) || llTokenGoalForPlayerCount(llListPlayerIdsByJoin(nextRoom).length);
-        nextRoom.tokenGoal = goal;
-
-        var reached = [];
-        var allIds = llListPlayerIdsByJoin(nextRoom);
-        for (var ti = 0; ti < allIds.length; ti++) {
-          var pid = allIds[ti];
-          if ((parseIntSafe(tokens2[pid], 0) || 0) >= goal) reached.push(pid);
-        }
-
-        if (reached.length) {
-          nextRoom.phase = 'finished';
-          nextRoom.result = { winners: reached, finishedAt: serverNowMs() };
-          nextRoom.log = llAppendLog(nextRoom, 'ゲーム終了');
-        } else {
-          nextRoom.phase = 'round_over';
-          nextRoom.log = llAppendLog(nextRoom, 'ラウンド終了');
-        }
+        nextRoom.log = llAppendLog(nextRoom, 'ゲーム終了');
         return nextRoom;
       }
 
@@ -5588,38 +5556,13 @@
     var phase = (room && room.phase) || '-';
     var canStart = phase === 'lobby' && playerCount >= 2;
 
-    var playersHtml = '';
-    try {
-      var ps = (room && room.players) || {};
-      var keys = Object.keys(ps);
-      keys.sort(function (a, b) {
-        var pa = ps[a] || {};
-        var pb = ps[b] || {};
-        return (pa.joinedAt || 0) - (pb.joinedAt || 0);
-      });
-      for (var i = 0; i < keys.length; i++) {
-        var id = keys[i];
-        var p = ps[id] || {};
-        var nm = escapeHtml(formatPlayerDisplayName(p) || '-');
-        var hostMark = p.isHost ? ' <span class="badge">GM</span>' : '';
-        playersHtml += '<div class="kv"><span class="muted">' + nm + hostMark + '</span><b></b></div>';
-      }
-      if (!playersHtml) playersHtml = '<div class="muted">まだ参加者がいません。</div>';
-    } catch (e) {
-      playersHtml = '<div class="muted">参加者一覧を表示できませんでした。</div>';
-    }
-
     render(
       viewEl,
       '\n    <div class="stack">\n      <div class="big">ラブレター：QR配布</div>\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="field">\n        <label>参加URL（スマホ以外はこちら）</label>\n        <div class="code" id="joinUrlText">' +
         escapeHtml(joinUrl || '') +
         '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
         escapeHtml(String(playerCount)) +
-        '</b></div>\n      <div class="kv"><span class="muted">フェーズ</span><b>' +
-        escapeHtml(phase) +
-        '</b></div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="big">参加者</div>\n        ' +
-        playersHtml +
-        '\n      </div>\n\n      <hr />\n\n      <div class="row">\n        ' +
+        '</b></div>\n\n      <div class="row">\n        ' +
         (canStart ? '<button id="llStart" class="primary">スタート</button>' : '<button class="primary" disabled>スタート</button>') +
         '\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n\n      <div class="muted">※ スタート後、GM端末もプレイヤー画面に移動します。</div>\n    </div>\n  '
     );
@@ -5644,8 +5587,6 @@
     var ui = opts.ui || {};
 
     var phase = (room && room.phase) || 'lobby';
-    var tokens = (room && room.tokens) || {};
-    var goal = parseIntSafe(room && room.tokenGoal, 0) || 0;
     var ps = (room && room.players) || {};
     var r = room && room.round ? room.round : {};
 
@@ -5661,41 +5602,10 @@
       order = [];
     }
 
-    var scoreboard = '';
-    for (var i = 0; i < order.length; i++) {
-      var pid = order[i];
-      var p = ps[pid] || {};
-      var nm = escapeHtml(formatPlayerDisplayName(p) || '-');
-      var t = parseIntSafe(tokens[pid], 0) || 0;
-      scoreboard += '<div class="kv"><span class="muted">' + nm + (p.isHost ? ' <span class="badge">GM</span>' : '') + '</span><b>' + t + '</b></div>';
-    }
-    if (!scoreboard) scoreboard = '<div class="muted">-</div>';
-
-    var logHtml = '';
-    try {
-      var log = Array.isArray(room && room.log) ? room.log : [];
-      var start = Math.max(0, log.length - 12);
-      for (var li = start; li < log.length; li++) {
-        var it = log[li] || {};
-        var tx = escapeHtml(String(it.text || ''));
-        if (!tx) continue;
-        logHtml += '<div class="muted">' + tx + '</div>';
-      }
-      if (!logHtml) logHtml = '<div class="muted">-</div>';
-    } catch (e1) {
-      logHtml = '<div class="muted">-</div>';
-    }
-
     var statusText = '';
-    if (phase === 'lobby') statusText = '待機中：GMがスタートするまでお待ちください。';
-    else if (phase === 'playing') statusText = String(r.currentPlayerId || '') === String(playerId || '') ? 'あなたの番です。' : '待機中：他プレイヤーの手番です。';
-    else if (phase === 'round_over') statusText = 'ラウンド終了：次のラウンドを待っています。';
-    else if (phase === 'finished') statusText = 'ゲーム終了：結果を確認してください。';
 
     var myHand = r && r.hands && Array.isArray(r.hands[playerId]) ? r.hands[playerId] : [];
-    var myDisc = r && r.discards && Array.isArray(r.discards[playerId]) ? r.discards[playerId] : [];
     var myElim = !!(r && r.eliminated && r.eliminated[playerId]);
-    var myProt = !!(r && r.protected && r.protected[playerId]);
 
     var turnName = '';
     if (phase === 'playing' && r && r.currentPlayerId) {
@@ -5703,231 +5613,173 @@
       turnName = tp ? formatPlayerDisplayName(tp) : String(r.currentPlayerId);
     }
 
-    var peekHtml = '';
-    try {
-      if (phase === 'playing' && r && r.peek && r.peek.to === playerId && r.peek.until && serverNowMs() <= r.peek.until) {
-        var targetName = r.peek.target && ps[r.peek.target] ? formatPlayerDisplayName(ps[r.peek.target]) : String(r.peek.target || '-');
-        var seenCard = r.peek.card ? llFormatCard(r.peek.card) : '-';
-        peekHtml =
-          '<hr />' +
-          '<div class="stack">' +
-          '<div class="big">僧侶：確認結果</div>' +
-          '<div class="kv"><span class="muted">対象</span><b>' +
-          escapeHtml(targetName) +
-          '</b></div>' +
-          '<div class="kv"><span class="muted">手札</span><b>' +
-          escapeHtml(seenCard) +
-          '</b></div>' +
-          '</div>';
+    var isMyTurn = phase === 'playing' && String(r.currentPlayerId || '') === String(playerId || '') && !myElim;
+    if (phase === 'lobby') statusText = '待機中：GMがスタートするまでお待ちください。';
+    else if (phase === 'playing') {
+      if (myElim) statusText = 'あなたは脱落しました。';
+      else if (isMyTurn) statusText = 'あなたの番です。';
+      else statusText = '待機中：' + (turnName || '');
+    } else if (phase === 'finished') statusText = 'ゲーム終了';
+
+    function llCardImgHtml(rank) {
+      var d = llCardDef(rank);
+      var icon = d && d.icon ? String(d.icon) : '';
+      if (icon) {
+        return '<img class="ll-card-img" alt="' + escapeHtml(d.name || '') + '" src="' + escapeHtml(icon) + '" />';
       }
-    } catch (e2) {
-      peekHtml = '';
+      return '<div class="stack" style="height:100%;justify-content:center;align-items:center"><div class="big">' + escapeHtml(d.name || '-') + '</div></div>';
     }
 
-    var actionHtml = '';
-    if (phase === 'playing') {
-      if (myElim) {
-        actionHtml = '<div class="muted">あなたは脱落しています。</div>';
-      } else if (String(r.currentPlayerId || '') !== String(playerId || '')) {
-        actionHtml = turnName ? '<div class="muted">手番：' + escapeHtml(turnName) + '</div>' : '';
-      } else {
-        var must7 = llMustPlayCountess(myHand);
-        var cardsHtml = '';
-        for (var hi = 0; hi < myHand.length; hi++) {
-          var cr = String(myHand[hi]);
-          var cd = llCardDef(cr);
-          var disabled = must7 && cr !== '7';
-          cardsHtml +=
-            '<button class="primary llPickCard" data-rank="' +
-            escapeHtml(cr) +
-            '" ' +
-            (disabled ? 'disabled' : '') +
-            ' style="width:100%">' +
-            escapeHtml(cd.name + '(' + cd.rank + ')') +
-            '</button>' +
-            '<div class="muted" style="margin-top:4px">' +
-            escapeHtml(cd.desc) +
-            '</div>';
-        }
-
-        var pending = ui && ui.pending ? ui.pending : null;
-        var pendingCard = pending && pending.card ? String(pending.card) : '';
-        var pendingTarget = pending && pending.target ? String(pending.target) : '';
-        var pendingGuess = pending && pending.guess ? String(pending.guess) : '';
-
-        var needsTarget = pendingCard === '1' || pendingCard === '2' || pendingCard === '3' || pendingCard === '5' || pendingCard === '6';
-        var allowSelfTarget = pendingCard === '5';
-
-        var targetHtml = '';
-        if (pendingCard) {
-          var eligible = [];
-          for (var pi = 0; pi < order.length; pi++) {
-            var pid = order[pi];
-            if (!pid) continue;
-            if (!allowSelfTarget && pid === playerId) continue;
-            if (r && r.eliminated && r.eliminated[pid]) continue;
-            if (r && r.protected && r.protected[pid]) continue;
-            eligible.push(pid);
-          }
-
-          if (needsTarget) {
-            if (!eligible.length) {
-              targetHtml = '<div class="muted">対象にできるプレイヤーがいません（全員が保護/脱落など）。</div>';
-            } else {
-              var btns = '';
-              for (var ei = 0; ei < eligible.length; ei++) {
-                var tid = eligible[ei];
-                var tnm = ps[tid] ? formatPlayerDisplayName(ps[tid]) : tid;
-                var isSel = pendingTarget && pendingTarget === tid;
-                btns +=
-                  '<button class="ghost llPickTarget" data-target="' +
-                  escapeHtml(tid) +
-                  '" style="width:100%">' +
-                  (isSel ? '✓ ' : '') +
-                  escapeHtml(tnm) +
-                  '</button>';
-              }
-              targetHtml = '<div class="stack">' + btns + '</div>';
-            }
-          }
-        }
-
-        var guessHtml = '';
-        if (pendingCard === '1') {
-          var gBtns = '';
-          for (var gv = 2; gv <= 8; gv++) {
-            var gr = String(gv);
-            var sel = pendingGuess === gr;
-            gBtns +=
-              '<button class="ghost llPickGuess" data-guess="' +
-              escapeHtml(gr) +
-              '" style="width:100%">' +
-              (sel ? '✓ ' : '') +
-              escapeHtml(llFormatCard(gr)) +
-              '</button>';
-          }
-          guessHtml = '<div class="stack">' + gBtns + '</div>';
-        }
-
-        actionHtml =
-          '<div class="stack">' +
-          '<div class="big">行動</div>' +
-          (must7 ? '<div class="muted">※ 伯爵夫人(7)と王様(6)/王子(5)を同時に持つため、伯爵夫人を必ず捨てます。</div>' : '') +
-          (pendingCard ? '<div class="kv"><span class="muted">選択中</span><b>' + escapeHtml(llFormatCard(pendingCard)) + '</b></div>' : '<div class="muted">使うカードを選んでください。</div>') +
-          '<div class="stack">' +
-          cardsHtml +
-          '</div>' +
-          (pendingCard && needsTarget ? '<hr /><div class="big">対象</div>' + targetHtml : '') +
-          (pendingCard === '1' ? '<hr /><div class="big">推測</div>' + guessHtml : '') +
-          (pendingCard
-            ? '<hr /><div class="row">' +
-              '<button id="llConfirmPlay" class="primary">実行</button>' +
-              '<button id="llCancelPlay" class="ghost">キャンセル</button>' +
-              '</div>'
-            : '') +
-          '<div id="llPlayError" class="form-error" role="alert"></div>' +
-          '</div>';
-      }
-    }
-
-    var roundResultHtml = '';
-    if (phase === 'round_over' && r && Array.isArray(r.winners)) {
-      var ws = [];
-      for (var wi = 0; wi < r.winners.length; wi++) {
-        var wpid = r.winners[wi];
-        ws.push(ps[wpid] ? formatPlayerDisplayName(ps[wpid]) : String(wpid));
-      }
-      roundResultHtml =
-        '<div class="card" style="padding:12px">' +
-        '<div class="muted">ラウンド勝者</div>' +
-        '<div class="big">' +
-        escapeHtml(ws.length ? ws.join(' / ') : '-') +
-        '</div>' +
-        '</div>';
-    }
-
-    var finalResultHtml = '';
+    // Winners (single game)
+    var resultHtml = '';
     if (phase === 'finished' && room && room.result && Array.isArray(room.result.winners)) {
       var fs = [];
       for (var fi = 0; fi < room.result.winners.length; fi++) {
         var fpid = room.result.winners[fi];
         fs.push(ps[fpid] ? formatPlayerDisplayName(ps[fpid]) : String(fpid));
       }
-      finalResultHtml =
-        '<div class="card" style="padding:12px">' +
-        '<div class="muted">勝者</div>' +
+      resultHtml = '<div class="card center" style="padding:12px"><div class="muted">勝者</div><div class="big">' + escapeHtml(fs.length ? fs.join(' / ') : '-') + '</div></div>';
+    }
+
+    // Hand (2 overlapped cards)
+    var handHtml = '';
+    if (phase === 'playing' && isMyTurn && Array.isArray(myHand) && myHand.length) {
+      var frontIdx = parseIntSafe(ui.handFrontIndex, 0);
+      if (!(frontIdx === 0 || frontIdx === 1)) frontIdx = myHand.length >= 2 ? 1 : 0;
+      if (myHand.length < 2) frontIdx = 0;
+      var backIdx = myHand.length >= 2 ? (frontIdx === 0 ? 1 : 0) : -1;
+      var frontRank = myHand[frontIdx] ? String(myHand[frontIdx]) : '';
+      var backRank = backIdx >= 0 && myHand[backIdx] ? String(myHand[backIdx]) : '';
+      var must7 = llMustPlayCountess(myHand);
+
+      handHtml =
+        '<div class="ll-hand-wrap">' +
+        '<div class="ll-hand" id="llHand" data-frontidx="' +
+        escapeHtml(String(frontIdx)) +
+        '">' +
+        (backRank
+          ? '<div class="ll-card ll-card-back" id="llCardBack" data-rank="' + escapeHtml(backRank) + '">' + llCardImgHtml(backRank) + '</div>'
+          : '') +
+        '<div class="ll-card ll-card-front" id="llCardFront" data-rank="' + escapeHtml(frontRank) + '">' +
+        llCardImgHtml(frontRank) +
+        '</div>' +
+        '</div>' +
+        '<div class="muted center ll-hint">タップで前後切替 / 長押しで使用</div>' +
+        (must7 ? '<div class="muted center">※ 大臣(7)を必ず使用</div>' : '') +
+        '</div>';
+    }
+
+    // Action modal (target/guess)
+    var modalHtml = '';
+    if (ui && ui.pending && ui.pending.card) {
+      var pending = ui.pending;
+      var pendingCard = String(pending.card);
+      var needsTarget = pendingCard === '1' || pendingCard === '2' || pendingCard === '3' || pendingCard === '5' || pendingCard === '6';
+      var allowSelfTarget = pendingCard === '5';
+      var needsGuess = pendingCard === '1';
+
+      var eligible = [];
+      for (var pi = 0; pi < order.length; pi++) {
+        var pid2 = order[pi];
+        if (!pid2) continue;
+        if (!allowSelfTarget && pid2 === playerId) continue;
+        if (r && r.eliminated && r.eliminated[pid2]) continue;
+        if (r && r.protected && r.protected[pid2]) continue;
+        eligible.push(pid2);
+      }
+
+      var canConfirm = true;
+      if (needsGuess && !pending.guess) canConfirm = false;
+      if (needsTarget && eligible.length && !pending.target) canConfirm = false;
+
+      var targetBtns = '';
+      if (needsTarget) {
+        if (!eligible.length) {
+          targetBtns = '<div class="muted">対象にできる相手がいません。</div>';
+        } else {
+          for (var ti = 0; ti < eligible.length; ti++) {
+            var tid = eligible[ti];
+            var tnm = ps[tid] ? formatPlayerDisplayName(ps[tid]) : tid;
+            var sel = pending.target === tid;
+            targetBtns +=
+              '<button class="ghost llPickTarget" data-target="' +
+              escapeHtml(tid) +
+              '" style="width:100%">' +
+              (sel ? '✓ ' : '') +
+              escapeHtml(tnm) +
+              '</button>';
+          }
+        }
+      }
+
+      var guessBtns = '';
+      if (needsGuess) {
+        for (var gv = 2; gv <= 8; gv++) {
+          var gr = String(gv);
+          var gsel = pending.guess === gr;
+          guessBtns +=
+            '<button class="ghost llPickGuess" data-guess="' +
+            escapeHtml(gr) +
+            '">' +
+            (gsel ? '✓ ' : '') +
+            escapeHtml(llFormatCard(gr)) +
+            '</button>';
+        }
+      }
+
+      modalHtml =
+        '<div class="ll-overlay" role="dialog" aria-modal="true">' +
+        '<div class="ll-overlay-backdrop"></div>' +
+        '<div class="ll-overlay-panel">' +
         '<div class="big">' +
-        escapeHtml(fs.length ? fs.join(' / ') : '-') +
+        escapeHtml(llCardDef(pendingCard).name + ' を使用') +
+        '</div>' +
+        '<div class="ll-modal-card">' +
+        llCardImgHtml(pendingCard) +
+        '</div>' +
+        (needsTarget ? '<div class="muted">対象</div><div class="stack">' + targetBtns + '</div>' : '') +
+        (needsGuess ? '<div class="muted">推測</div><div class="ll-guess-grid">' + guessBtns + '</div>' : '') +
+        '<div id="llPlayError" class="form-error" role="alert"></div>' +
+        '<div class="row" style="justify-content:flex-end">' +
+        '<button id="llCancelPlay" class="ghost">キャンセル</button>' +
+        '<button id="llConfirmPlay" class="primary" ' +
+        (canConfirm ? '' : 'disabled') +
+        '>使用</button>' +
+        '</div>' +
         '</div>' +
         '</div>';
     }
 
-    var othersHtml = '';
-    if (phase !== 'lobby' && order.length) {
-      for (var oi = 0; oi < order.length; oi++) {
-        var opid = order[oi];
-        var op = ps[opid] || {};
-        var nm2 = escapeHtml(formatPlayerDisplayName(op) || '-');
-        var elim = !!(r && r.eliminated && r.eliminated[opid]);
-        var prot = !!(r && r.protected && r.protected[opid]);
-        var disc2 = r && r.discards && Array.isArray(r.discards[opid]) ? r.discards[opid] : [];
-        othersHtml +=
-          '<div class="card" style="padding:12px">' +
-          '<div class="big">' +
-          nm2 +
-          (op.isHost ? ' <span class="badge">GM</span>' : '') +
-          '</div>' +
-          '<div class="kv"><span class="muted">状態</span><b>' +
-          escapeHtml(elim ? '脱落' : prot ? '保護中' : '生存') +
-          '</b></div>' +
-          '<div class="kv"><span class="muted">捨て札</span><b>' +
-          escapeHtml(llFormatCardList(disc2)) +
-          '</b></div>' +
-          '</div>';
-      }
-    }
-
-    var controlHtml = '';
-    if (phase === 'round_over' && isHost) {
-      controlHtml = '<div class="row"><button id="llNextRound" class="primary">次のラウンド</button></div>';
+    // Peek modal (道化)
+    if (ui && ui.modal && ui.modal.type === 'peek') {
+      var m = ui.modal;
+      modalHtml =
+        '<div class="ll-overlay" role="dialog" aria-modal="true">' +
+        '<div class="ll-overlay-backdrop"></div>' +
+        '<div class="ll-overlay-panel">' +
+        '<div class="big">道化：確認</div>' +
+        '<div class="muted">対象：' + escapeHtml(String(m.targetName || '')) + '</div>' +
+        '<div class="ll-modal-card">' + llCardImgHtml(String(m.rank || '')) + '</div>' +
+        '<div class="row" style="justify-content:flex-end">' +
+        '<button id="llModalOk" class="primary">OK</button>' +
+        '</div>' +
+        '</div>' +
+        '</div>';
     }
 
     render(
       viewEl,
       '\n    <div class="stack">\n      <div class="big">' +
         escapeHtml(selfName) +
-        '</div>\n\n      <div class="card" style="padding:12px">\n        <div class="kv"><span class="muted">ルーム</span><b>' +
-        escapeHtml(roomId) +
-        '</b></div>\n        <div class="kv"><span class="muted">目標</span><b>' +
-        escapeHtml(goal ? String(goal) + ' 点' : '-') +
-        '</b></div>\n        <div class="kv"><span class="muted">フェーズ</span><b>' +
-        escapeHtml(phase) +
-        '</b></div>\n        ' +
-        (phase === 'playing' && turnName ? '<div class="kv"><span class="muted">手番</span><b>' + escapeHtml(turnName) + '</b></div>' : '') +
-        '\n      </div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">スコア</div>\n        <div class="stack">' +
-        scoreboard +
-        '</div>\n      </div>\n\n      <div class="card center" style="padding:12px">\n        <div class="big">' +
-        escapeHtml(statusText) +
+        '</div>\n\n      <div class="card center" style="padding:12px">\n        <div class="big">' +
+        escapeHtml(statusText || '') +
         '</div>\n      </div>\n\n      ' +
-        roundResultHtml +
-        finalResultHtml +
-        '\n\n      <div class="card" style="padding:12px">\n        <div class="muted">あなた</div>\n        <div class="kv"><span class="muted">状態</span><b>' +
-        escapeHtml(myElim ? '脱落' : myProt ? '保護中' : '生存') +
-        '</b></div>\n        <div class="kv"><span class="muted">手札</span><b>' +
-        escapeHtml(myElim ? '-' : llFormatCardList(myHand)) +
-        '</b></div>\n        <div class="kv"><span class="muted">捨て札</span><b>' +
-        escapeHtml(llFormatCardList(myDisc)) +
-        '</b></div>\n      </div>\n\n      <div class="card" style="padding:12px">\n        ' +
-        actionHtml +
-        '\n      </div>\n\n      ' +
-        peekHtml +
+        (resultHtml || '') +
         '\n\n      ' +
-        (controlHtml ? '<hr />' + controlHtml : '') +
-        '\n\n      <hr />\n\n      <div class="stack">\n        <div class="big">ログ</div>\n        <div class="stack">' +
-        logHtml +
-        '</div>\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="big">他プレイヤー</div>\n        <div class="stack">' +
-        (othersHtml || '<div class="muted">-</div>') +
-        '</div>\n      </div>\n\n      <div class="row">\n        <a class="btn ghost" href="./">ホーム</a>\n      </div>\n    </div>\n  '
+        (handHtml || '') +
+        '\n\n      <div class="row">\n        <a class="btn ghost" href="./">ホーム</a>\n      </div>\n\n      ' +
+        (modalHtml || '') +
+        '\n    </div>\n  '
     );
   }
 
@@ -6167,11 +6019,45 @@
   function routeLoveLetterPlayer(roomId, isHost) {
     var playerId = getOrCreateLoveLetterPlayerId(roomId);
     var unsub = null;
-    var ui = { pending: null };
+    var ui = { pending: null, modal: null, handFrontIndex: 1, peekDismissedKey: '' };
+
+    function computePeekModal(room) {
+      try {
+        var r = room && room.round ? room.round : null;
+        if (!r || !r.peek) return null;
+        var pk = r.peek;
+        if (String(pk.to || '') !== String(playerId || '')) return null;
+        if (!pk.until || serverNowMs() > pk.until) return null;
+        var key = String(pk.to || '') + '|' + String(pk.until || '') + '|' + String(pk.target || '') + '|' + String(pk.card || '');
+        if (ui.peekDismissedKey && ui.peekDismissedKey === key) return null;
+        var ps = room && room.players ? room.players : {};
+        var targetName = pk.target && ps[pk.target] ? formatPlayerDisplayName(ps[pk.target]) : String(pk.target || '');
+        return { type: 'peek', key: key, targetName: targetName, rank: String(pk.card || '') };
+      } catch (e) {
+        return null;
+      }
+    }
 
     function renderNow(room) {
+      // Show peek modal (道化) on top when applicable.
+      if (!ui.pending) {
+        var pm = computePeekModal(room);
+        if (pm) ui.modal = pm;
+      }
+
       var player = room && room.players ? room.players[playerId] : null;
       renderLoveLetterPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui });
+
+      var okBtn = document.getElementById('llModalOk');
+      if (okBtn) {
+        okBtn.addEventListener('click', function () {
+          if (ui.modal && ui.modal.type === 'peek' && ui.modal.key) {
+            ui.peekDismissedKey = String(ui.modal.key);
+          }
+          ui.modal = null;
+          renderNow(room);
+        });
+      }
 
       var cancelBtn = document.getElementById('llCancelPlay');
       if (cancelBtn) {
@@ -6181,15 +6067,95 @@
         });
       }
 
-      var pickCards = document.querySelectorAll('.llPickCard');
-      for (var i = 0; i < pickCards.length; i++) {
-        pickCards[i].addEventListener('click', function (ev) {
-          var el = ev && ev.currentTarget ? ev.currentTarget : null;
-          var r = el ? String(el.getAttribute('data-rank') || '') : '';
-          if (!r) return;
-          ui.pending = { card: r, target: '', guess: '' };
-          renderNow(room);
+      var hand = document.getElementById('llHand');
+      if (hand && !hand.__ll_bound) {
+        hand.__ll_bound = true;
+        hand.addEventListener('click', function (ev) {
+          if (ui.pending || (ui.modal && ui.modal.type)) return;
+          try {
+            var r = room && room.round ? room.round : {};
+            var myHand = r && r.hands && Array.isArray(r.hands[playerId]) ? r.hands[playerId] : [];
+            if (!Array.isArray(myHand) || myHand.length < 2) return;
+            ui.handFrontIndex = ui.handFrontIndex === 0 ? 1 : 0;
+            renderNow(room);
+          } catch (e) {
+            // ignore
+          }
         });
+      }
+
+      var front = document.getElementById('llCardFront');
+      if (front && !front.__ll_bound) {
+        front.__ll_bound = true;
+
+        (function (btn) {
+          var holdMs = CN_LONG_PRESS_MS;
+          var timer = null;
+          var longFired = false;
+
+          function clearTimer() {
+            if (timer) {
+              clearTimeout(timer);
+              timer = null;
+            }
+          }
+
+          function startHold(ev) {
+            if (ui.pending || (ui.modal && ui.modal.type)) return;
+            if (ev && ev.button != null && ev.button !== 0) return;
+            if (ev && ev.preventDefault) ev.preventDefault();
+            clearTimer();
+            longFired = false;
+
+            var rank = String(btn.getAttribute('data-rank') || '');
+            if (!rank) return;
+
+            // Enforce 大臣(7) mandatory rule on UI side too.
+            try {
+              var rr = room && room.round ? room.round : {};
+              var myHand2 = rr && rr.hands && Array.isArray(rr.hands[playerId]) ? rr.hands[playerId] : [];
+              if (llMustPlayCountess(myHand2) && rank !== '7') return;
+            } catch (e) {
+              // ignore
+            }
+
+            timer = setTimeout(function () {
+              longFired = true;
+              clearTimer();
+              ui.modal = null;
+              ui.pending = { card: rank, target: '', guess: '' };
+              renderNow(room);
+            }, holdMs);
+          }
+
+          btn.addEventListener('click', function (ev) {
+            // Short tap is handled by llHand click (toggle). Ignore if long-press fired.
+            if (longFired) {
+              longFired = false;
+              if (ev && ev.preventDefault) ev.preventDefault();
+              if (ev && ev.stopPropagation) ev.stopPropagation();
+            }
+          });
+
+          if (typeof PointerEvent !== 'undefined') {
+            btn.addEventListener('pointerdown', startHold);
+            btn.addEventListener('pointerup', clearTimer);
+            btn.addEventListener('pointercancel', clearTimer);
+            btn.addEventListener('pointerleave', clearTimer);
+          } else {
+            btn.addEventListener('touchstart', startHold);
+            btn.addEventListener('touchend', clearTimer);
+            btn.addEventListener('touchcancel', clearTimer);
+
+            btn.addEventListener('mousedown', startHold);
+            btn.addEventListener('mouseup', clearTimer);
+            btn.addEventListener('mouseleave', clearTimer);
+          }
+
+          btn.addEventListener('contextmenu', function (ev) {
+            if (ev && ev.preventDefault) ev.preventDefault();
+          });
+        })(front);
       }
 
       var pickTargets = document.querySelectorAll('.llPickTarget');
@@ -6211,15 +6177,6 @@
           if (!ui.pending) ui.pending = { card: '', target: '', guess: '' };
           ui.pending.guess = gv;
           renderNow(room);
-        });
-      }
-
-      var nextRoundBtn = document.getElementById('llNextRound');
-      if (nextRoundBtn) {
-        nextRoundBtn.addEventListener('click', function () {
-          startLoveLetterNextRound(roomId, playerId).catch(function (e) {
-            alert((e && e.message) || '失敗');
-          });
         });
       }
 
@@ -6978,8 +6935,7 @@
         ll.push('3) 手札2枚のうち1枚を使用し、カード効果を解決する');
         ll.push('4) 失格条件：姫（8）を捨てる / 効果で脱落する');
         ll.push('5) ラウンド終了：山札が尽きる or 残り1人');
-        ll.push('6) 勝者：残った人（複数なら手札の強い人）→ 得点（トークン）');
-        ll.push('7) 先に目標点に到達した人がゲーム勝利');
+        ll.push('6) 勝者：残った人（複数なら手札の強い人）');
         alert(ll.join('\n'));
         return;
       }
