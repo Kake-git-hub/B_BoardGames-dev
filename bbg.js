@@ -3122,6 +3122,15 @@
     var v = getCacheBusterParam();
     if (v) q.v = v;
     q.room = roomId;
+    q.screen = 'codenames_join';
+    return baseUrl() + '?' + buildQuery(q);
+  }
+
+  function makeCodenamesRejoinUrl(roomId) {
+    var q = {};
+    var v = getCacheBusterParam();
+    if (v) q.v = v;
+    q.room = roomId;
     q.screen = 'codenames_rejoin';
     return baseUrl() + '?' + buildQuery(q);
   }
@@ -3181,6 +3190,11 @@
     var hostPlayerId = opts.hostPlayerId;
     var qrOnly = !!opts.qrOnly;
     var hostPlayer = (room && room.players && hostPlayerId && room.players[hostPlayerId]) || null;
+
+    var qrTitle = qrOnly ? 'コードネーム：再入場QR' : 'コードネーム：参加QR';
+    var qrDesc = qrOnly
+      ? 'ゲーム中に再入場する人はこのQRを読み取ってください。'
+      : '新規参加者はこのQRを読み取って参加します。';
 
     var playerCount = room && room.players ? Object.keys(room.players).length : 0;
     var phase = (room && room.phase) || '-';
@@ -3264,7 +3278,11 @@
 
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">コードネーム：QR配布</div>\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="field">\n        <label>参加URL（スマホ以外はこちら）</label>\n        <div class="code" id="joinUrlText">' +
+      '\n    <div class="stack">\n      <div class="big">' +
+        escapeHtml(qrTitle) +
+        '</div>\n      <div class="muted">' +
+        escapeHtml(qrDesc) +
+        '</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="field">\n        <label>参加URL（スマホ以外はこちら）</label>\n        <div class="code" id="joinUrlText">' +
         escapeHtml(joinUrl || '') +
         '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
         playerCount +
@@ -4981,6 +4999,19 @@
             return;
           }
 
+          // Rejoin (name picking) is intended for ongoing games.
+          // If the game is still in lobby, guide users to the normal join screen.
+          if (String(room.phase || '') === 'lobby') {
+            var q = {};
+            var v = getCacheBusterParam();
+            if (v) q.v = v;
+            q.room = roomId;
+            q.screen = 'codenames_join';
+            setQuery(q);
+            route();
+            return;
+          }
+
           renderCodenamesRejoin(viewEl, { roomId: roomId, room: room });
           clearInlineError('cnRejoinError');
 
@@ -5046,7 +5077,7 @@
     var unsub = null;
     var q0 = parseQuery();
     var qrOnly = q0 && q0.qr === '1';
-    var joinUrl = makeCodenamesJoinUrl(roomId);
+    var joinUrl = qrOnly ? makeCodenamesRejoinUrl(roomId) : makeCodenamesJoinUrl(roomId);
     var hostPlayerId = getOrCreateCodenamesPlayerId(roomId);
 
     function drawQr() {
