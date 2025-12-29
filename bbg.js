@@ -3150,15 +3150,6 @@
     if (deck.length) {
       return String(deck.pop());
     }
-    var burn = round.burn ? String(round.burn) : '';
-    if (burn) {
-      round.burn = '';
-      return burn;
-    }
-    var setAside = Array.isArray(round.setAside) ? round.setAside : [];
-    if (setAside.length) {
-      return String(setAside.pop());
-    }
     return '';
   }
 
@@ -3287,14 +3278,15 @@
     if (playerCount < 2) return null;
 
     var deck = llShuffle(llBuildDeck());
-    var burn = deck.length ? String(deck.pop()) : '';
+    var grave = [];
+    // Before dealing, discard 1 card face-down to grave.
+    if (deck.length) grave.push(String(deck.pop()));
 
     // 2-player rule: set aside 3 extra cards face-down (common variant).
-    var setAside = [];
     if (playerCount === 2) {
       for (var i = 0; i < 3; i++) {
         if (!deck.length) break;
-        setAside.push(String(deck.pop()));
+        grave.push(String(deck.pop()));
       }
     }
 
@@ -3317,6 +3309,43 @@
     protectedMap[startId] = false;
     if (hands[startId] && deck.length) hands[startId].push(String(deck.pop()));
 
+    // Minister(7) overload rule: if you already have 7 and draw so total >= 12, you immediately lose.
+    // Hold the round until the player acknowledges.
+    var startHand = Array.isArray(hands[startId]) ? hands[startId] : [];
+    if (startHand.length >= 2 && String(startHand[0]) === '7') {
+      var drawn0 = String(startHand[1] || '');
+      var dv0 = parseIntSafe(drawn0, 0);
+      if (dv0 && 7 + dv0 >= 12) {
+        // eliminate and store reveal
+        eliminated[startId] = true;
+        protectedMap[startId] = false;
+        for (var di0 = 0; di0 < startHand.length; di0++) discards[startId].push(String(startHand[di0]));
+        hands[startId] = [];
+        // keep turn on startId until ack
+        return {
+          no: parseIntSafe(room && room.round && room.round.no, 0) + 1,
+          state: 'playing',
+          startedAt: serverNowMs(),
+          endedAt: 0,
+          order: ids,
+          currentIndex: startIndex,
+          currentPlayerId: startId,
+          deck: deck,
+          grave: grave,
+          burn: '',
+          setAside: [],
+          hands: hands,
+          discards: discards,
+          eliminated: eliminated,
+          protected: protectedMap,
+          peek: null,
+          reveal: { type: 'minister_overload', by: startId, had: '7', drew: drawn0 },
+          waitFor: { type: 'minister_overload_ack', by: startId },
+          winners: []
+        };
+      }
+    }
+
     return {
       no: parseIntSafe(room && room.round && room.round.no, 0) + 1,
       state: 'playing',
@@ -3326,13 +3355,16 @@
       currentIndex: startIndex,
       currentPlayerId: startId,
       deck: deck,
-      burn: burn,
-      setAside: setAside,
+      grave: grave,
+      burn: '',
+      setAside: [],
       hands: hands,
       discards: discards,
       eliminated: eliminated,
       protected: protectedMap,
       peek: null,
+      reveal: null,
+      waitFor: null,
       winners: []
     };
   }
@@ -3385,6 +3417,8 @@
       if (room.phase !== 'playing') return room;
       var round = room.round || null;
       if (!round || round.state !== 'playing') return room;
+      // If the round is waiting for an acknowledgement (e.g., Knight/Minister), block actions.
+      if (round.waitFor && round.waitFor.type) return room;
       if (String(round.currentPlayerId || '') !== String(actorId || '')) return room;
       if (round.eliminated && round.eliminated[actorId]) return room;
 
@@ -3436,7 +3470,6 @@
           if (!id) continue;
           if (!allowSelf && String(id) === String(actorId)) continue;
           if (isElim(id)) continue;
-          if (isProtected(id)) continue;
           out.push(id);
         }
         return out;
@@ -3487,7 +3520,9 @@
         if (t) {
           var th = getSingleHand(t);
           logText += ' → 対象 ' + pname(t) + ' / 推測 ' + llCardDef(String(g)).name + '(' + g + ')';
-          if (th && parseIntSafe(th, 0) === g) {
+          if (isProtected(t)) {
+            logText += '（僧侶により保護中：無効）';
+          } else if (th && parseIntSafe(th, 0) === g) {
             eliminatePlayer(t, 'guard');
             logText += '（的中：脱落）';
           } else {
@@ -3497,14 +3532,18 @@
           logText += '（対象なし）';
         }
       } else if (card === '2') {
-        // Priest
+        // Clown: peek
         var t2 = action && action.target ? String(action.target) : '';
         var eligible2 = eligibleTargetIds(false);
         if (eligible2.length && (!t2 || eligible2.indexOf(t2) < 0)) return room;
         if (t2) {
-          var seen = getSingleHand(t2);
-          peek = { to: actorId, target: t2, card: seen, until: serverNowMs() + 60000 };
-          logText += ' → ' + pname(t2) + ' の手札を確認';
+          if (isProtected(t2)) {
+            logText += ' → ' + pname(t2) + '（僧侶により保護中：無効）';
+          } else {
+            var seen = getSingleHand(t2);
+            peek = { to: actorId, target: t2, card: seen, until: serverNowMs() + 60000 };
+            logText += ' → ' + pname(t2) + ' の手札を確認';
+          }
         } else {
           logText += '（対象なし）';
         }
@@ -3514,6 +3553,9 @@
         var eligible3 = eligibleTargetIds(false);
         if (eligible3.length && (!t3 || eligible3.indexOf(t3) < 0)) return room;
         if (t3) {
+          if (isProtected(t3)) {
+            logText += ' → ' + pname(t3) + '（僧侶により保護中：無効）';
+          } else {
           var aCard = getSingleHand(actorId);
           var bCard = getSingleHand(t3);
           var av = parseIntSafe(aCard, 0);
@@ -3530,6 +3572,10 @@
               logText += '（引き分け）';
             }
           }
+          // Show both cards to actor + target, and wait for actor to proceed.
+          round.reveal = { type: 'knight', by: actorId, target: t3, byCard: aCard, targetCard: bCard };
+          round.waitFor = { type: 'knight_ack', by: actorId };
+          }
         } else {
           logText += '（対象なし）';
         }
@@ -3541,10 +3587,12 @@
         // Prince
         var t5 = action && action.target ? String(action.target) : '';
         var allowSelf = true;
-        // Prince can target self, but protected targets are not allowed.
         var eligible5 = eligibleTargetIds(true);
         if (eligible5.length && (!t5 || eligible5.indexOf(t5) < 0)) return room;
         if (t5) {
+          if (isProtected(t5)) {
+            logText += ' → ' + pname(t5) + '（僧侶により保護中：無効）';
+          } else {
           var old = getSingleHand(t5);
           if (old) pushDiscard(t5, old);
           setSingleHand(t5, '');
@@ -3561,6 +3609,7 @@
               logText += '（山札なし）';
             }
           }
+          }
         } else {
           logText += '（対象なし）';
         }
@@ -3570,11 +3619,15 @@
         var eligible6 = eligibleTargetIds(false);
         if (eligible6.length && (!t6 || eligible6.indexOf(t6) < 0)) return room;
         if (t6) {
-          var a6 = getSingleHand(actorId);
-          var b6 = getSingleHand(t6);
-          setSingleHand(actorId, b6);
-          setSingleHand(t6, a6);
-          logText += ' → ' + pname(t6) + ' と手札交換';
+          if (isProtected(t6)) {
+            logText += ' → ' + pname(t6) + '（僧侶により保護中：無効）';
+          } else {
+            var a6 = getSingleHand(actorId);
+            var b6 = getSingleHand(t6);
+            setSingleHand(actorId, b6);
+            setSingleHand(t6, a6);
+            logText += ' → ' + pname(t6) + ' と手札交換';
+          }
         } else {
           logText += '（対象なし）';
         }
@@ -3597,6 +3650,12 @@
       var nextRoom = assign({}, room);
       nextRoom.round = round;
       nextRoom.log = llAppendLog(nextRoom, logText);
+
+      // If waiting for reveal acknowledgement (e.g., Knight), do not advance turn yet.
+      if (round.waitFor && round.waitFor.type) {
+        nextRoom.round = round;
+        return nextRoom;
+      }
 
       // Determine end of round.
       var alive = llAliveIds(nextRoom, round);
@@ -3627,11 +3686,123 @@
       var nextHand = Array.isArray(round.hands[next.id]) ? round.hands[next.id].slice() : [];
       if (nextHand.length < 2) {
         var drawn2 = llDrawFromRound(round);
-        if (drawn2) nextHand.push(String(drawn2));
+        if (drawn2) {
+          var before = nextHand.length ? String(nextHand[0]) : '';
+          nextHand.push(String(drawn2));
+          // Minister overload: if holding 7 and drew so total >= 12, you immediately lose.
+          if (String(before) === '7') {
+            var dv = parseIntSafe(drawn2, 0);
+            if (dv && 7 + dv >= 12) {
+              // eliminate and pause until ack
+              eliminated[next.id] = true;
+              protectedMap[next.id] = false;
+              for (var mdi = 0; mdi < nextHand.length; mdi++) pushDiscard(next.id, nextHand[mdi]);
+              hands[next.id] = [];
+              round.hands = hands;
+              round.discards = discards;
+              round.eliminated = eliminated;
+              round.protected = protectedMap;
+              round.reveal = { type: 'minister_overload', by: next.id, had: '7', drew: String(drawn2) };
+              round.waitFor = { type: 'minister_overload_ack', by: next.id };
+              nextRoom.round = round;
+              return nextRoom;
+            }
+          }
+        }
       }
       round.hands[next.id] = nextHand;
-      // clear peek after turn transition
-      round.peek = null;
+
+      nextRoom.round = round;
+      return nextRoom;
+    });
+  }
+
+  function ackLoveLetter(roomId, playerId) {
+    var base = loveletterRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'playing') return room;
+      var round = room.round || null;
+      if (!round || round.state !== 'playing') return room;
+      var wf = round.waitFor || null;
+      if (!wf || !wf.type) return room;
+      if (String(wf.by || '') !== String(playerId || '')) return room;
+
+      // Clear waiting state
+      round.waitFor = null;
+      round.reveal = null;
+
+      var nextRoom = assign({}, room);
+      nextRoom.round = round;
+
+      // Determine end of round after any elimination that already happened.
+      var alive = llAliveIds(nextRoom, round);
+      var deckLeft = Array.isArray(round.deck) ? round.deck.length : 0;
+      if (alive.length <= 1 || deckLeft === 0) {
+        var winners = llRoundWinners(nextRoom, round);
+        round.winners = winners;
+        round.endedAt = serverNowMs();
+        round.state = 'ended';
+
+        nextRoom.phase = 'finished';
+        nextRoom.result = { winners: winners, finishedAt: serverNowMs() };
+        nextRoom.round = round;
+        nextRoom.log = llAppendLog(nextRoom, 'ゲーム終了');
+        return nextRoom;
+      }
+
+      // Advance to next alive player
+      var order = Array.isArray(round.order) ? round.order : llListPlayerIdsByJoin(nextRoom);
+      var next = llFindNextAlive(round, order, parseIntSafe(round.currentIndex, 0));
+      if (!next.id) return nextRoom;
+      round.order = order;
+      round.currentIndex = next.index;
+      round.currentPlayerId = next.id;
+      if (!round.protected) round.protected = {};
+      round.protected[next.id] = false;
+
+      // Draw for next actor
+      var hands = assign({}, round.hands || {});
+      var discards = assign({}, round.discards || {});
+      var eliminated = assign({}, round.eliminated || {});
+      var protectedMap = assign({}, round.protected || {});
+
+      function pushDiscard(pid, cardRank) {
+        var d = Array.isArray(discards[pid]) ? discards[pid].slice() : [];
+        if (cardRank) d.push(String(cardRank));
+        discards[pid] = d;
+      }
+
+      var nextHand = Array.isArray(hands[next.id]) ? hands[next.id].slice() : [];
+      if (nextHand.length < 2) {
+        var drawn2 = llDrawFromRound(round);
+        if (drawn2) {
+          var before = nextHand.length ? String(nextHand[0]) : '';
+          nextHand.push(String(drawn2));
+          if (String(before) === '7') {
+            var dv = parseIntSafe(drawn2, 0);
+            if (dv && 7 + dv >= 12) {
+              eliminated[next.id] = true;
+              protectedMap[next.id] = false;
+              for (var mdi = 0; mdi < nextHand.length; mdi++) pushDiscard(next.id, nextHand[mdi]);
+              hands[next.id] = [];
+              round.hands = hands;
+              round.discards = discards;
+              round.eliminated = eliminated;
+              round.protected = protectedMap;
+              round.reveal = { type: 'minister_overload', by: next.id, had: '7', drew: String(drawn2) };
+              round.waitFor = { type: 'minister_overload_ack', by: next.id };
+              nextRoom.round = round;
+              return nextRoom;
+            }
+          }
+        }
+      }
+      hands[next.id] = nextHand;
+      round.hands = hands;
+      round.discards = discards;
+      round.eliminated = eliminated;
+      round.protected = protectedMap;
 
       nextRoom.round = round;
       return nextRoom;
@@ -5606,6 +5777,7 @@
 
     var myHand = r && r.hands && Array.isArray(r.hands[playerId]) ? r.hands[playerId] : [];
     var myElim = !!(r && r.eliminated && r.eliminated[playerId]);
+    var myProt = !!(r && r.protected && r.protected[playerId]);
 
     var turnName = '';
     if (phase === 'playing' && r && r.currentPlayerId) {
@@ -5618,8 +5790,11 @@
     else if (phase === 'playing') {
       if (myElim) statusText = 'あなたは脱落しました。';
       else if (isMyTurn) statusText = 'あなたの番です。';
-      else statusText = '待機中：' + (turnName || '-');
+      else statusText = '待機中：' + (turnName || '-') + (myProt ? ' (僧侶により保護中)' : '');
     } else if (phase === 'finished') statusText = 'ゲーム終了';
+
+    var deckLeft = r && Array.isArray(r.deck) ? r.deck.length : 0;
+    var graveCount = r && Array.isArray(r.grave) ? r.grave.length : 0;
 
     function llCardImgHtml(rank) {
       var d = llCardDef(rank);
@@ -5641,9 +5816,9 @@
       resultHtml = '<div class="card center" style="padding:12px"><div class="muted">勝者</div><div class="big">' + escapeHtml(fs.length ? fs.join(' / ') : '-') + '</div></div>';
     }
 
-    // Hand (2 overlapped cards)
+    // Hand (always show your card while waiting)
     var handHtml = '';
-    if (phase === 'playing' && isMyTurn && Array.isArray(myHand) && myHand.length) {
+    if (phase === 'playing' && !myElim && Array.isArray(myHand) && myHand.length) {
       var frontIdx = parseIntSafe(ui.handFrontIndex, 0);
       if (!(frontIdx === 0 || frontIdx === 1)) frontIdx = myHand.length >= 2 ? 1 : 0;
       if (myHand.length < 2) frontIdx = 0;
@@ -5654,9 +5829,7 @@
 
       handHtml =
         '<div class="ll-hand-wrap">' +
-        '<div class="ll-hand" id="llHand" data-frontidx="' +
-        escapeHtml(String(frontIdx)) +
-        '">' +
+        '<div class="ll-hand" id="llHand" data-frontidx="' + escapeHtml(String(frontIdx)) + '">' +
         (backRank
           ? '<div class="ll-card ll-card-back" id="llCardBack" data-rank="' + escapeHtml(backRank) + '">' + llCardImgHtml(backRank) + '</div>'
           : '') +
@@ -5664,8 +5837,10 @@
         llCardImgHtml(frontRank) +
         '</div>' +
         '</div>' +
-        '<div class="muted center ll-hint">タップで前後切替 / 長押しで使用</div>' +
-        (must7 ? '<div class="muted center">※ 大臣(7)を必ず使用</div>' : '') +
+        (isMyTurn
+          ? '<div class="muted center ll-hint">タップで前後切替 / 長押しで使用</div>'
+          : '<div class="muted center ll-hint">あなたの手札</div>') +
+        (isMyTurn && must7 ? '<div class="muted center">※ 大臣(7)を必ず使用</div>' : '') +
         '</div>';
     }
 
@@ -5684,7 +5859,6 @@
         if (!pid2) continue;
         if (!allowSelfTarget && pid2 === playerId) continue;
         if (r && r.eliminated && r.eliminated[pid2]) continue;
-        if (r && r.protected && r.protected[pid2]) continue;
         eligible.push(pid2);
       }
 
@@ -5701,12 +5875,13 @@
             var tid = eligible[ti];
             var tnm = ps[tid] ? formatPlayerDisplayName(ps[tid]) : tid;
             var sel = pending.target === tid;
+            var prot = r && r.protected && r.protected[tid];
             targetBtns +=
               '<button class="ghost llPickTarget" data-target="' +
               escapeHtml(tid) +
               '" style="width:100%">' +
               (sel ? '✓ ' : '') +
-              escapeHtml(tnm) +
+              escapeHtml(tnm + (prot ? ' (僧侶により保護中)' : '')) +
               '</button>';
           }
         }
@@ -5767,17 +5942,64 @@
         '</div>';
     }
 
+    // Reveal modal (騎士/大臣オーバー)
+    if (!modalHtml && phase === 'playing' && r && r.reveal && r.reveal.type) {
+      var rv = r.reveal;
+      if (rv.type === 'knight') {
+        var by = String(rv.by || '');
+        var tg = String(rv.target || '');
+        if (String(playerId) === by || String(playerId) === tg) {
+          var byName = ps[by] ? formatPlayerDisplayName(ps[by]) : by;
+          var tgName = ps[tg] ? formatPlayerDisplayName(ps[tg]) : tg;
+          modalHtml =
+            '<div class="ll-overlay" role="dialog" aria-modal="true">' +
+            '<div class="ll-overlay-backdrop"></div>' +
+            '<div class="ll-overlay-panel">' +
+            '<div class="big">騎士：比較結果</div>' +
+            '<div class="muted">' + escapeHtml(byName) + '</div>' +
+            '<div class="ll-modal-card">' + llCardImgHtml(String(rv.byCard || '')) + '</div>' +
+            '<div class="muted">' + escapeHtml(tgName) + '</div>' +
+            '<div class="ll-modal-card">' + llCardImgHtml(String(rv.targetCard || '')) + '</div>' +
+            '<div class="row" style="justify-content:flex-end">' +
+            (String(playerId) === by ? '<button id="llAck" class="primary">次へ</button>' : '') +
+            '</div>' +
+            '</div>' +
+            '</div>';
+        }
+      } else if (rv.type === 'minister_overload') {
+        var by2 = String(rv.by || '');
+        if (String(playerId) === by2) {
+          modalHtml =
+            '<div class="ll-overlay" role="dialog" aria-modal="true">' +
+            '<div class="ll-overlay-backdrop"></div>' +
+            '<div class="ll-overlay-panel">' +
+            '<div class="big">大臣：合計12以上</div>' +
+            '<div class="muted">引いたカード</div>' +
+            '<div class="ll-modal-card">' + llCardImgHtml(String(rv.drew || '')) + '</div>' +
+            '<div class="row" style="justify-content:flex-end">' +
+            '<button id="llAck" class="primary">脱落</button>' +
+            '</div>' +
+            '</div>' +
+            '</div>';
+        }
+      }
+    }
+
     render(
       viewEl,
       '\n    <div class="stack">\n      <div class="big">' +
         escapeHtml(selfName) +
         '</div>\n\n      <div class="card center" style="padding:12px">\n        <div class="big">' +
         escapeHtml(statusText || '') +
+        '</div>\n        <div class="muted">山札 ' +
+        escapeHtml(String(deckLeft)) +
+        ' / 墓地 ' +
+        escapeHtml(String(graveCount)) +
         '</div>\n      </div>\n\n      ' +
         (resultHtml || '') +
         '\n\n      ' +
         (handHtml || '') +
-        '\n\n      <div class="row">\n        <a class="btn ghost" href="./">ホーム</a>\n      </div>\n\n      ' +
+        '\n\n      ' +
         (modalHtml || '') +
         '\n    </div>\n  '
     );
@@ -5804,12 +6026,7 @@
         })
         .then(function () {
           var playerId = getOrCreateLoveLetterPlayerId(roomId);
-          return joinPlayerInLoveLetterRoom(roomId, playerId, form.name, true).then(function (room) {
-            if (!room || !room.players || !room.players[playerId]) {
-              throw new Error('ゲームマスターの参加に失敗しました');
-            }
-            return room;
-          });
+          return joinPlayerInLoveLetterRoom(roomId, playerId, form.name, true);
         })
         .then(function () {
           var q = {};
@@ -6020,6 +6237,7 @@
     var playerId = getOrCreateLoveLetterPlayerId(roomId);
     var unsub = null;
     var ui = { pending: null, modal: null, handFrontIndex: 1, peekDismissedKey: '' };
+    var lastRoom = null;
 
     function computePeekModal(room) {
       try {
@@ -6039,6 +6257,7 @@
     }
 
     function renderNow(room) {
+      lastRoom = room;
       // Show peek modal (道化) on top when applicable.
       if (!ui.pending) {
         var pm = computePeekModal(room);
@@ -6055,7 +6274,21 @@
             ui.peekDismissedKey = String(ui.modal.key);
           }
           ui.modal = null;
-          renderNow(room);
+          renderNow(lastRoom);
+        });
+      }
+
+      var ackBtn = document.getElementById('llAck');
+      if (ackBtn) {
+        ackBtn.addEventListener('click', function () {
+          ackBtn.disabled = true;
+          ackLoveLetter(roomId, playerId)
+            .catch(function (e) {
+              alert((e && e.message) || '失敗');
+            })
+            .finally(function () {
+              ackBtn.disabled = false;
+            });
         });
       }
 
@@ -6063,7 +6296,7 @@
       if (cancelBtn) {
         cancelBtn.addEventListener('click', function () {
           ui.pending = null;
-          renderNow(room);
+          renderNow(lastRoom);
         });
       }
 
@@ -6073,11 +6306,11 @@
         hand.addEventListener('click', function (ev) {
           if (ui.pending || (ui.modal && ui.modal.type)) return;
           try {
-            var r = room && room.round ? room.round : {};
+            var r = lastRoom && lastRoom.round ? lastRoom.round : {};
             var myHand = r && r.hands && Array.isArray(r.hands[playerId]) ? r.hands[playerId] : [];
             if (!Array.isArray(myHand) || myHand.length < 2) return;
             ui.handFrontIndex = ui.handFrontIndex === 0 ? 1 : 0;
-            renderNow(room);
+            renderNow(lastRoom);
           } catch (e) {
             // ignore
           }
@@ -6102,6 +6335,14 @@
 
           function startHold(ev) {
             if (ui.pending || (ui.modal && ui.modal.type)) return;
+            try {
+              var rr0 = lastRoom && lastRoom.round ? lastRoom.round : null;
+              if (!rr0 || String(rr0.currentPlayerId || '') !== String(playerId || '')) return;
+              if (rr0.waitFor && rr0.waitFor.type) return;
+              if (rr0.eliminated && rr0.eliminated[playerId]) return;
+            } catch (e0) {
+              return;
+            }
             if (ev && ev.button != null && ev.button !== 0) return;
             if (ev && ev.preventDefault) ev.preventDefault();
             clearTimer();
@@ -6112,7 +6353,7 @@
 
             // Enforce 大臣(7) mandatory rule on UI side too.
             try {
-              var rr = room && room.round ? room.round : {};
+              var rr = lastRoom && lastRoom.round ? lastRoom.round : {};
               var myHand2 = rr && rr.hands && Array.isArray(rr.hands[playerId]) ? rr.hands[playerId] : [];
               if (llMustPlayCountess(myHand2) && rank !== '7') return;
             } catch (e) {
@@ -6124,7 +6365,7 @@
               clearTimer();
               ui.modal = null;
               ui.pending = { card: rank, target: '', guess: '' };
-              renderNow(room);
+              renderNow(lastRoom);
             }, holdMs);
           }
 
@@ -6207,7 +6448,7 @@
           playLoveLetterAction(roomId, playerId, payload)
             .then(function () {
               ui.pending = null;
-              renderNow(room);
+              renderNow(lastRoom);
             })
             .catch(function () {
               setInlineError(errId, '実行に失敗しました');
