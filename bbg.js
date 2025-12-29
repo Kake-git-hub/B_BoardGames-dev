@@ -2117,11 +2117,13 @@
         revealed: revealed
       },
       firstTeam: firstTeam,
+      clueLog: [],
       turn: {
         team: firstTeam,
         status: 'awaiting_clue',
         guessesLeft: 0,
-        clue: { word: '', number: 0, by: '', at: 0 }
+        clue: { word: '', number: 0, by: '', at: 0 },
+        pending: {}
       },
       progress: {
         redRemaining: remainRed,
@@ -2205,7 +2207,8 @@
       return assign({}, room, {
         phase: 'lobby',
         players: players,
-        turn: assign({}, room.turn || {}, { status: 'awaiting_clue', guessesLeft: 0, clue: { word: '', number: 0, by: '', at: 0 } }),
+        clueLog: [],
+        turn: assign({}, room.turn || {}, { status: 'awaiting_clue', guessesLeft: 0, clue: { word: '', number: 0, by: '', at: 0 }, pending: {} }),
         progress: { redRemaining: remainRed, blueRemaining: remainBlue },
         result: { winner: '', finishedAt: 0, reason: '' },
         board: assign({}, room.board || {}, { revealed: revealed })
@@ -2241,7 +2244,8 @@
       return assign({}, room, {
         phase: 'lobby',
         players: nextPlayers,
-        turn: assign({}, room.turn || {}, { status: 'awaiting_clue', guessesLeft: 0, clue: { word: '', number: 0, by: '', at: 0 } }),
+        clueLog: [],
+        turn: assign({}, room.turn || {}, { status: 'awaiting_clue', guessesLeft: 0, clue: { word: '', number: 0, by: '', at: 0 }, pending: {} }),
         progress: { redRemaining: remainRed, blueRemaining: remainBlue },
         result: { winner: '', finishedAt: 0, reason: '' },
         board: assign({}, room.board || {}, { revealed: revealed })
@@ -2310,7 +2314,18 @@
       var n = clamp(parseIntSafe(clueNumber, 0), 0, 20);
       if (!w) return room;
 
+      var log = [];
+      try {
+        log = Array.isArray(room.clueLog) ? room.clueLog.slice() : [];
+      } catch (e0) {
+        log = [];
+      }
+      if (log.length > 20) log = log.slice(log.length - 20);
+      log.push({ team: room.turn.team, word: w, number: n, by: playerId, at: serverNowMs() });
+      if (log.length > 20) log = log.slice(log.length - 20);
+
       return assign({}, room, {
+        clueLog: log,
         turn: {
           team: room.turn.team,
           status: 'guessing',
@@ -3152,9 +3167,7 @@
       viewEl,
       '\n    <div class="stack">\n      <div class="big">コードネーム：QR配布</div>\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="field">\n        <label>参加URL（スマホ以外はこちら）</label>\n        <div class="code" id="joinUrlText">' +
         escapeHtml(joinUrl || '') +
-        '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n          <a class="btn ghost" id="openJoinUrl" href="' +
-        escapeHtml(joinUrl || '') +
-        '" target="_blank" rel="noopener">開く</a>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
+        '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
         playerCount +
         '</b></div>\n      <div class="kv"><span class="muted">フェーズ</span><b>' +
         escapeHtml(phase) +
@@ -3369,6 +3382,31 @@
         '</div>';
     }
 
+    var clueHistoryHtml = '';
+    if (phase === 'playing' || phase === 'finished') {
+      var rows = '';
+      try {
+        var log = room && Array.isArray(room.clueLog) ? room.clueLog : [];
+        var start = Math.max(0, log.length - 10);
+        for (var li = start; li < log.length; li++) {
+          var it = log[li] || {};
+          var t = it.team === 'red' ? '赤' : it.team === 'blue' ? '青' : '-';
+          var w = it.word ? String(it.word) : '';
+          var num = it.number != null ? String(it.number) : '0';
+          if (!w) continue;
+          rows += '<div class="kv"><span class="muted">' + escapeHtml(t) + '</span><b>' + escapeHtml(w) + ' / ' + escapeHtml(num) + '</b></div>';
+        }
+      } catch (e2) {
+        rows = '';
+      }
+
+      clueHistoryHtml =
+        '<hr /><div class="stack">' +
+        '<div class="big">ヒント履歴</div>' +
+        (rows || '<div class="muted">（まだありません）</div>') +
+        '</div>';
+    }
+
     render(
       viewEl,
       '\n    <div class="stack">\n      ' +
@@ -3379,6 +3417,7 @@
         (phase === 'playing' ? actionsHtml : '') +
         (phase === 'finished' ? finishedHtml : '') +
         boardHtml +
+        clueHistoryHtml +
         '\n    </div>\n  '
     );
 
@@ -3637,9 +3676,7 @@
       viewEl,
       '\n    <div class="stack">\n      <div class="big">QR配布</div>\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="field">\n        <label>参加URL（スマホ以外はこちら）</label>\n        <div class="code" id="joinUrlText">' +
         escapeHtml(joinUrl || '') +
-        '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n          <a class="btn ghost" id="openJoinUrl" href="' +
-        escapeHtml(joinUrl || '') +
-        '" target="_blank" rel="noopener">開く</a>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
+        '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
         playerCount +
         '</b></div>\n      <div class="kv"><span class="muted">フェーズ</span><b>' +
         escapeHtml(phase) +
@@ -5148,7 +5185,7 @@
     var buildInfoEl = document.querySelector('#buildInfo');
     if (buildInfoEl) {
       var assetV = getCacheBusterParam();
-      buildInfoEl.textContent = 'v0.13 (B_BoardGames + codenames)' + (assetV ? ' / assets ' + assetV : '');
+      buildInfoEl.textContent = 'v0.14 (B_BoardGames + codenames)' + (assetV ? ' / assets ' + assetV : '');
     }
 
     window.addEventListener('popstate', function () {
