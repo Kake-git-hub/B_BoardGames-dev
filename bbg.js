@@ -5173,47 +5173,39 @@
       var normalIdx = idxOf2(normalVals, normalSec);
       var bonusIdx = idxOf2(bonusVals, bonusSec);
 
-      lobbyHtml =
-        '<div class="stack">' +
-        '<div class="big">待機中</div>' +
-        '<div class="muted">チームと役職を選んでください。</div>' +
-        '<div class="field"><label>チーム</label>' +
-        '<select id="cnTeam"><option value="">未選択</option><option value="red">赤</option><option value="blue">青</option></select></div>' +
-        '<div class="field"><label>役職</label>' +
-        '<select id="cnRole"><option value="">未選択</option><option value="spymaster">スパイマスター</option><option value="operative">諜報員</option></select></div>' +
-        '<div id="cnPrefsError" class="form-error" role="alert"></div>' +
-        '<button id="cnSavePrefs" class="primary">保存</button>' +
-        (isGm
-          ? '<hr />' +
-            '<div class="muted">準備: 赤/青それぞれスパイマスター1人＋諜報員1人以上</div>' +
-            '<div class="kv"><span class="muted">赤</span><b>スパイマスター ' +
-            counts.redSpymaster +
-            ' / 諜報員 ' +
-            counts.redOperative +
-            '</b></div>' +
-            '<div class="kv"><span class="muted">青</span><b>スパイマスター ' +
-            counts.blueSpymaster +
-            ' / 諜報員 ' +
-            counts.blueOperative +
-            '</b></div>' +
-            '<hr />' +
-            '<div class="big">タイマー設定</div>' +
-            '<div class="field"><label>通常タイマー <b id="cnTimerNormalLabel">' +
-            escapeHtml(formatMMSS(normalVals[normalIdx])) +
-            '</b></label><input id="cnTimerNormal" type="range" min="0" max="3" step="1" value="' +
-            escapeHtml(String(normalIdx)) +
-            '" /></div>' +
-            '<div class="field"><label>初ターン追加 <b id="cnTimerBonusLabel">' +
-            escapeHtml(formatMMSS(bonusVals[bonusIdx])) +
-            '</b></label><input id="cnTimerBonus" type="range" min="0" max="3" step="1" value="' +
-            escapeHtml(String(bonusIdx)) +
-            '" /></div>' +
-            (canStart ? '<button id="cnStartFromPlayer" class="primary">スタート</button>' : '<button class="primary" disabled>スタート</button>')
-          : (isHost ? '<div class="muted">※ スタートはGMが行います。</div>' : '')) +
-        '<hr />' +
-        '<div class="big">参加者（登録状況）</div>' +
-        playersHtml +
-        '</div>';
+      if (isGm) {
+        lobbyHtml =
+          '<div class="stack">' +
+          '<div class="big">タイマー設定</div>' +
+          '<div class="field"><label>通常タイマー <b id="cnTimerNormalLabel">' +
+          escapeHtml(formatMMSS(normalVals[normalIdx])) +
+          '</b></label><input id="cnTimerNormal" type="range" min="0" max="3" step="1" value="' +
+          escapeHtml(String(normalIdx)) +
+          '" /></div>' +
+          '<div class="field"><label>初ターン追加 <b id="cnTimerBonusLabel">' +
+          escapeHtml(formatMMSS(bonusVals[bonusIdx])) +
+          '</b></label><input id="cnTimerBonus" type="range" min="0" max="3" step="1" value="' +
+          escapeHtml(String(bonusIdx)) +
+          '" /></div>' +
+          (canStart ? '<button id="cnStartFromPlayer" class="primary">スタート</button>' : '<button class="primary" disabled>スタート</button>') +
+          '</div>';
+      } else {
+        lobbyHtml =
+          '<div class="stack">' +
+          '<div class="big">待機中</div>' +
+          '<div class="muted">チームと役職を選んでください。</div>' +
+          '<div class="field"><label>チーム</label>' +
+          '<select id="cnTeam"><option value="">未選択</option><option value="red">赤</option><option value="blue">青</option></select></div>' +
+          '<div class="field"><label>役職</label>' +
+          '<select id="cnRole"><option value="">未選択</option><option value="spymaster">スパイマスター</option><option value="operative">諜報員</option></select></div>' +
+          '<div id="cnPrefsError" class="form-error" role="alert"></div>' +
+          '<button id="cnSavePrefs" class="primary">保存</button>' +
+          (isHost ? '<div class="muted">※ スタートはGMが行います。</div>' : '') +
+          '<hr />' +
+          '<div class="big">参加者（登録状況）</div>' +
+          playersHtml +
+          '</div>';
+      }
     }
 
     var clueRowHtml = '';
@@ -8872,7 +8864,7 @@
             '</div>' +
             '<div class="ll-compare-col">' +
             '<div class="ll-modal-name">引いたカード</div>' +
-            '<div class="ll-compare-card">' + llCardImgHtml(String(rv.drew || '')) + '</div>' +
+            '<div class="ll-compare-card">' + (rv.drew ? llCardImgHtml(String(rv.drew || '')) : llCardBackImgHtml()) + '</div>' +
             '</div>' +
             '</div>' +
             '<div class="row" style="justify-content:flex-end">' +
