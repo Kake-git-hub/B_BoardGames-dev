@@ -3068,9 +3068,13 @@
 
       // Show vote leaders in a modal first (phase=reveal). GM advances next.
       if (leaders.length > 1) {
+        // Cap runoff revotes to at most 2 times.
+        // round: 0 (no runoff yet) -> 1 (1st revote) -> 2 (2nd revote)
+        // If still tied at round>=2, we stop revoting and resolve in advanceAfterVoteReveal.
+        var prevRound0 = room.voting && room.voting.runoff && room.voting.runoff.round ? parseIntSafe(room.voting.runoff.round, 0) : 0;
         return assign({}, room, {
           phase: 'reveal',
-          reveal: { revealedAt: serverNowMs(), votedOutId: '', tieCandidates: leaders }
+          reveal: { revealedAt: serverNowMs(), votedOutId: '', tieCandidates: leaders, tieFinal: prevRound0 >= 2 }
         });
       }
 
@@ -3092,6 +3096,17 @@
       var tieCandidates = rv && Array.isArray(rv.tieCandidates) ? rv.tieCandidates.slice() : null;
       if (tieCandidates && tieCandidates.length > 1) {
         var prevRound = room.voting && room.voting.runoff && room.voting.runoff.round ? parseIntSafe(room.voting.runoff.round, 0) : 0;
+
+        // Re-vote is allowed up to 2 times. If tie persists beyond that, resolve.
+        if (prevRound >= 2) {
+          return assign({}, room, {
+            phase: 'finished',
+            // keep reveal info (tie candidates) so UI can still show the last modal before finishing
+            reveal: { revealedAt: rv.revealedAt || serverNowMs(), votedOutId: '' },
+            result: { winner: 'minority', decidedAt: serverNowMs(), decidedBy: 'runoff_tie_limit' }
+          });
+        }
+
         return assign({}, room, {
           phase: 'voting',
           votes: {},
@@ -4418,6 +4433,7 @@
   function renderLobbyHost(viewEl, opts) {
     var lobbyId = opts.lobbyId;
     var lobby = opts.lobby;
+    var joinUrl = opts.joinUrl || '';
     var currentGame = (lobby && lobby.currentGame) || null;
     var currentLabel = currentGame && currentGame.kind ? String(currentGame.kind) : '';
 
@@ -4537,9 +4553,11 @@
 
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">ロビーログイン</div>\n      <div class="kv"><span class="muted">ロビーID</span><b>' +
+      '\n    <div class="stack">\n      <div class="big">ロビー</div>\n      <div class="kv"><span class="muted">ロビーID</span><b>' +
         escapeHtml(lobbyId) +
-        '</b></div>\n\n      <div class="stack">\n        <div class="muted">参加者</div>\n        ' +
+        '</b></div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">参加用QR（参加者は読み取って名前登録）</div>\n        <div class="row" style="align-items:flex-start;gap:12px">\n          <div class="center" id="qrWrap" style="min-width:168px">\n            <canvas id="qr" width="160" height="160"></canvas>\n          </div>\n          <div class="stack" style="flex:1;min-width:0">\n            <div class="field" style="margin:0">\n              <label>参加URL（スマホ以外はこちら）</label>\n              <div class="code" id="joinUrlText">' +
+        escapeHtml(joinUrl || '') +
+        '</div>\n              <div class="row">\n                <button id="copyJoinUrl" class="ghost">コピー</button>\n              </div>\n              <div class="muted" id="copyStatus"></div>\n            </div>\n          </div>\n        </div>\n        <div class="muted center" id="qrError"></div>\n      </div>\n\n      <div class="stack">\n        <div class="muted">参加者</div>\n        ' +
         lobbyMembersSummaryHtml(lobby) +
         '\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>ゲーム選択</label>\n        <select id="lobbyGameKind">\n          <option value="wordwolf" ' +
         (selectedKind === 'wordwolf' ? 'selected' : '') +
@@ -5744,6 +5762,8 @@
         var rv0 = (room && room.reveal) || {};
         var tie0 = rv0 && Array.isArray(rv0.tieCandidates) ? rv0.tieCandidates : null;
         if (tie0 && tie0.length > 1) {
+          var prevRoundR = room && room.voting && room.voting.runoff && room.voting.runoff.round ? parseIntSafe(room.voting.runoff.round, 0) : 0;
+          var isFinalTie = !!rv0.tieFinal || prevRoundR >= 2;
           var names0 = [];
           for (var ti0 = 0; ti0 < tie0.length; ti0++) {
             var pid0 = String(tie0[ti0] || '');
@@ -5755,12 +5775,18 @@
             '<div class="ll-overlay-backdrop"></div>' +
             '<div class="ll-overlay-panel">' +
             '<div class="big">投票結果：同票</div>' +
-            '<div class="muted">次は同票の人だけで再投票します</div>' +
+            '<div class="muted">' +
+            (isFinalTie ? '同票が続いたため、再投票は行いません' : '次は同票の人だけで再投票します') +
+            '</div>' +
             '<div class="card center" style="padding:14px;margin-top:10px"><div class="big">' +
             escapeHtml(names0.join(' / ') || '-') +
             '</div></div>' +
             '<div class="row" style="justify-content:flex-end;margin-top:12px">' +
-            (isHost ? '<button id="wwVoteRevealNext" class="primary">次へ</button>' : '<div class="muted">ゲームマスターが進めます</div>') +
+            (isHost
+              ? '<button id="wwVoteRevealNext" class="primary">' +
+                (isFinalTie ? '結果へ' : '次へ') +
+                '</button>'
+              : '<div class="muted">ゲームマスターが進めます</div>') +
             '</div>' +
             '</div>' +
             '</div>';
@@ -6032,7 +6058,7 @@
           if (v) q.v = v;
           q.lobby = res.lobbyId;
           q.gmdev = isGmDevice ? '1' : '0';
-          q.screen = 'lobby_login';
+          q.screen = 'lobby_host';
           setQuery(q);
           route();
         })
@@ -6061,209 +6087,9 @@
   }
 
   function routeLobbyLogin(lobbyId) {
-    if (!lobbyId) return routeHome();
-
-    var unsub = null;
-    var joinUrl = makeLobbyJoinUrl(lobbyId);
-    var mid = getOrCreateLobbyMemberId(lobbyId);
-
-    function drawQr() {
-      return new Promise(function (resolve) {
-        var canvas = document.getElementById('qr');
-        var errEl = document.getElementById('qrError');
-        var wrapEl = document.getElementById('qrWrap');
-        if (errEl) errEl.textContent = '';
-        if (!canvas) {
-          if (errEl) errEl.textContent = 'QR表示領域が見つかりません。';
-          return resolve();
-        }
-        var qr = window.QRCode || window.qrcode || window.QR;
-        if (!qr || !qr.toCanvas) {
-          if (errEl) errEl.textContent = 'QRの生成に失敗しました（ライブラリ未読込）。';
-          return resolve();
-        }
-
-        function showAsImage() {
-          if (!qr.toDataURL || !wrapEl) return;
-          try {
-            qr.toDataURL(joinUrl, { margin: 1, width: 240 }, function (err, url) {
-              if (err || !url) {
-                if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-                return resolve();
-              }
-              wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />';
-              if (errEl) errEl.textContent = '（QRは画像で表示しています）';
-              return resolve();
-            });
-          } catch (e) {
-            if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-            return resolve();
-          }
-        }
-
-        function looksBlank(c) {
-          try {
-            var ctx = c.getContext && c.getContext('2d');
-            if (!ctx) return true;
-            var w = c.width || 0;
-            var h = c.height || 0;
-            if (!w || !h) return true;
-            var img = ctx.getImageData(0, 0, Math.min(16, w), Math.min(16, h)).data;
-            var allZero = true;
-            var allWhite = true;
-            for (var i = 0; i < img.length; i += 4) {
-              var r = img[i], g = img[i + 1], b = img[i + 2], a = img[i + 3];
-              if (a !== 0) allZero = false;
-              if (!(a !== 0 && r > 240 && g > 240 && b > 240)) allWhite = false;
-              if (!allZero && !allWhite) return false;
-            }
-            return allZero || allWhite;
-          } catch (e) {
-            return false;
-          }
-        }
-
-        try {
-          qr.toCanvas(canvas, joinUrl, { margin: 1, width: 240 }, function (err) {
-            if (err) {
-              if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-              showAsImage();
-              return;
-            }
-            if (looksBlank(canvas)) {
-              showAsImage();
-              return;
-            }
-            resolve();
-          });
-        } catch (e) {
-          if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-          showAsImage();
-        }
-      });
-    }
-
-    function bindButtons() {
-      var registerBtn = document.getElementById('lobbyRegisterGm');
-      if (registerBtn && !registerBtn.__lobby_bound) {
-        registerBtn.__lobby_bound = true;
-        registerBtn.addEventListener('click', function () {
-          var nameEl = document.getElementById('lobbyGmName');
-          var name = String((nameEl && nameEl.value) || '').trim();
-          if (!name) {
-            setInlineError('lobbyLoginError', '名前を入力してください。');
-            return;
-          }
-
-          clearInlineError('lobbyLoginError');
-          savePersistedName(name);
-          registerBtn.disabled = true;
-
-          var q0 = parseQuery();
-          var isGmDevice = q0.gmdev === '1';
-
-          firebaseReady()
-            .then(function () {
-              return joinLobbyMember(lobbyId, mid, name, isGmDevice);
-            })
-            .then(function () {
-              setActiveLobby(lobbyId, false);
-            })
-            .catch(function (e) {
-              setInlineError('lobbyLoginError', (e && e.message) || '登録に失敗しました');
-            })
-            .finally(function () {
-              registerBtn.disabled = false;
-            });
-        });
-      }
-
-      var copyBtn = document.getElementById('copyJoinUrl');
-      if (copyBtn && !copyBtn.__lobby_bound) {
-        copyBtn.__lobby_bound = true;
-        copyBtn.addEventListener('click', function () {
-          var status = document.getElementById('copyStatus');
-          if (status) status.textContent = '';
-          copyTextToClipboard(joinUrl)
-            .then(function (ok) {
-              if (status) status.textContent = ok ? 'コピーしました' : 'コピーに失敗しました';
-            })
-            .catch(function () {
-              if (status) status.textContent = 'コピーに失敗しました';
-            });
-        });
-      }
-
-      var goBtn = document.getElementById('lobbyGoLobbyLogin');
-      if (goBtn && !goBtn.__lobby_bound) {
-        goBtn.__lobby_bound = true;
-        goBtn.addEventListener('click', function () {
-          var nameEl = document.getElementById('lobbyGmName');
-          var name = String((nameEl && nameEl.value) || '').trim();
-          if (!name) {
-            setInlineError('lobbyLoginError', '名前を入力してください。');
-            return;
-          }
-
-          clearInlineError('lobbyLoginError');
-          savePersistedName(name);
-          goBtn.disabled = true;
-
-          var q0 = parseQuery();
-          var isGmDevice = q0.gmdev === '1';
-
-          firebaseReady()
-            .then(function () {
-              return joinLobbyMember(lobbyId, mid, name, isGmDevice);
-            })
-            .then(function () {
-              setActiveLobby(lobbyId, false);
-              var q = {};
-              var v = getCacheBusterParam();
-              if (v) q.v = v;
-              q.lobby = lobbyId;
-              q.gmdev = isGmDevice ? '1' : '0';
-              q.screen = 'lobby_host';
-              setQuery(q);
-              route();
-            })
-            .catch(function (e) {
-              setInlineError('lobbyLoginError', (e && e.message) || 'ロビーログインに失敗しました');
-            })
-            .finally(function () {
-              goBtn.disabled = false;
-            });
-        });
-      }
-    }
-
-    function renderWithLobby(lobby) {
-      renderLobbyLogin(viewEl, { lobbyId: lobbyId, joinUrl: joinUrl, lobby: lobby });
-      clearInlineError('lobbyLoginError');
-      drawQr();
-      bindButtons();
-    }
-
-    firebaseReady()
-      .then(function () {
-        return subscribeLobby(lobbyId, function (lobby) {
-          if (!lobby) {
-            renderError(viewEl, 'ロビーが見つかりません');
-            return;
-          }
-          renderWithLobby(lobby);
-        });
-      })
-      .then(function (u) {
-        unsub = u;
-      })
-      .catch(function (e) {
-        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
-      });
-
-    window.addEventListener('popstate', function () {
-      if (unsub) unsub();
-    });
+    // `lobby_login` screen has been merged into `lobby_host`.
+    // Keep this route for backward-compatible URLs.
+    return routeLobbyHost(lobbyId);
   }
 
   function routeLobbyCreate() {
@@ -6293,7 +6119,7 @@
           if (v) q.v = v;
           q.lobby = res.lobbyId;
           q.gmdev = '0';
-          q.screen = 'lobby_login';
+          q.screen = 'lobby_host';
           setQuery(q);
           route();
         })
@@ -6366,6 +6192,84 @@
     var unsub = null;
     var mid = getOrCreateLobbyMemberId(lobbyId);
     var ui = { selectedKind: 'wordwolf', lastLobby: null };
+    var joinUrl = makeLobbyJoinUrl(lobbyId);
+
+    function drawQr(size) {
+      var w = clamp(parseIntSafe(size, 160), 120, 240);
+      return new Promise(function (resolve) {
+        var canvas = document.getElementById('qr');
+        var errEl = document.getElementById('qrError');
+        var wrapEl = document.getElementById('qrWrap');
+        if (errEl) errEl.textContent = '';
+        if (!canvas) {
+          if (errEl) errEl.textContent = 'QR表示領域が見つかりません。';
+          return resolve();
+        }
+        var qr = window.QRCode || window.qrcode || window.QR;
+        if (!qr || !qr.toCanvas) {
+          if (errEl) errEl.textContent = 'QRの生成に失敗しました（ライブラリ未読込）。';
+          return resolve();
+        }
+
+        function showAsImage() {
+          if (!qr.toDataURL || !wrapEl) return;
+          try {
+            qr.toDataURL(joinUrl, { margin: 1, width: w }, function (err, url) {
+              if (err || !url) {
+                if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+                return resolve();
+              }
+              wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />';
+              if (errEl) errEl.textContent = '（QRは画像で表示しています）';
+              return resolve();
+            });
+          } catch (e) {
+            if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+            return resolve();
+          }
+        }
+
+        function looksBlank(c) {
+          try {
+            var ctx = c.getContext && c.getContext('2d');
+            if (!ctx) return true;
+            var cw = c.width || 0;
+            var ch = c.height || 0;
+            if (!cw || !ch) return true;
+            var img = ctx.getImageData(0, 0, Math.min(16, cw), Math.min(16, ch)).data;
+            var allZero = true;
+            var allWhite = true;
+            for (var i = 0; i < img.length; i += 4) {
+              var r = img[i], g = img[i + 1], b = img[i + 2], a = img[i + 3];
+              if (a !== 0) allZero = false;
+              if (!(a !== 0 && r > 240 && g > 240 && b > 240)) allWhite = false;
+              if (!allZero && !allWhite) return false;
+            }
+            return allZero || allWhite;
+          } catch (e) {
+            return false;
+          }
+        }
+
+        try {
+          qr.toCanvas(canvas, joinUrl, { margin: 1, width: w }, function (err) {
+            if (err) {
+              if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+              showAsImage();
+              return;
+            }
+            if (looksBlank(canvas)) {
+              showAsImage();
+              return;
+            }
+            resolve();
+          });
+        } catch (e) {
+          if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+          showAsImage();
+        }
+      });
+    }
 
     function redirectToLobbyPlayer() {
       try {
@@ -6437,6 +6341,22 @@
     }
 
     function bindHostButtons(lobby) {
+      var copyBtn = document.getElementById('copyJoinUrl');
+      if (copyBtn && !copyBtn.__lobby_bound) {
+        copyBtn.__lobby_bound = true;
+        copyBtn.addEventListener('click', function () {
+          var status = document.getElementById('copyStatus');
+          if (status) status.textContent = '';
+          copyTextToClipboard(joinUrl)
+            .then(function (ok) {
+              if (status) status.textContent = ok ? 'コピーしました' : 'コピーに失敗しました';
+            })
+            .catch(function () {
+              if (status) status.textContent = 'コピーに失敗しました';
+            });
+        });
+      }
+
       var kindEl = document.getElementById('lobbyGameKind');
       if (kindEl && !kindEl.__lobby_bound) {
         kindEl.__lobby_bound = true;
@@ -6730,8 +6650,9 @@
       if (!ui.selectedKind && !kindFromCg && lobby && lobby.lastKind) ui.selectedKind = String(lobby.lastKind || '');
       if (!ui.selectedKind) ui.selectedKind = 'wordwolf';
 
-      renderLobbyHost(viewEl, { lobbyId: lobbyId, lobby: lobby, selectedKind: ui.selectedKind });
+      renderLobbyHost(viewEl, { lobbyId: lobbyId, lobby: lobby, selectedKind: ui.selectedKind, joinUrl: joinUrl });
       bindHostButtons(lobby);
+      drawQr(160);
     }
 
     firebaseReady()
