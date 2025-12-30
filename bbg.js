@@ -626,6 +626,14 @@
     });
   }
 
+  function getValueOnce(path) {
+    return dbRef(path).then(function (ref) {
+      return ref.once('value').then(function (snap) {
+        return snap.val();
+      });
+    });
+  }
+
   function setValue(path, value) {
     return dbRef(path).then(function (ref) {
       return ref.set(value);
@@ -928,6 +936,23 @@
 
   function setLobbyCurrentGame(lobbyId, currentGame) {
     return setValue(lobbyPath(lobbyId) + '/currentGame', currentGame || null);
+  }
+
+  function setLobbyCodenamesAssign(lobbyId, memberId, team, role) {
+    var mid = String(memberId || '').trim();
+    if (!mid) return Promise.reject(new Error('ID不正'));
+    var t = team === 'red' || team === 'blue' ? team : '';
+    var r = role === 'spymaster' || role === 'operative' ? role : '';
+    var path = lobbyPath(lobbyId) + '/codenamesAssign/' + mid;
+    return runTxn(path, function (cur) {
+      var base = cur && typeof cur === 'object' ? cur : {};
+      return assign({}, base, { team: t, role: r, updatedAt: serverNowMs() });
+    });
+  }
+
+  function setLobbyCodenamesAssignBulk(lobbyId, assignMap) {
+    var m = assignMap && typeof assignMap === 'object' ? assignMap : {};
+    return setValue(lobbyPath(lobbyId) + '/codenamesAssign', m);
   }
 
   function parseWordListText(text) {
@@ -3316,6 +3341,33 @@
       var pb = ps[b] || {};
       return (pa.joinedAt || 0) - (pb.joinedAt || 0);
     });
+
+    // If an explicit order is provided (e.g., from lobby), respect it.
+    try {
+      var preferred = room && room.settings && Array.isArray(room.settings.order) ? room.settings.order : null;
+      if (preferred && preferred.length) {
+        var seen = {};
+        var out = [];
+        for (var i = 0; i < preferred.length; i++) {
+          var id = String(preferred[i] || '');
+          if (!id) continue;
+          if (seen[id]) continue;
+          if (!ps[id]) continue;
+          seen[id] = true;
+          out.push(id);
+        }
+        for (var j = 0; j < keys.length; j++) {
+          var k = String(keys[j] || '');
+          if (!k || seen[k]) continue;
+          seen[k] = true;
+          out.push(k);
+        }
+        return out;
+      }
+    } catch (e) {
+      // ignore and fallback to join order
+    }
+
     return keys;
   }
 
@@ -3451,12 +3503,16 @@
 
   function createLoveLetterRoom(roomId, settings) {
     var base = loveletterRoomPath(roomId);
+    var st = {};
+    try {
+      if (settings && Array.isArray(settings.order)) st.order = settings.order.slice();
+    } catch (e0) {
+      st = {};
+    }
     var room = {
       createdAt: serverNowMs(),
       phase: 'lobby',
-      settings: {
-        // placeholder for future options
-      },
+      settings: st,
       log: [],
       round: {
         no: 0,
@@ -4216,18 +4272,18 @@
 
   function renderLobbyLogin(viewEl, opts) {
     var lobbyId = opts.lobbyId;
-    var joinUrl = opts.joinUrl;
     var persistedName = loadPersistedName();
+    var lobby = opts.lobby;
 
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">ロビーログイン</div>\n      <div class="kv"><span class="muted">ロビーID</span><b>' +
+      '\n    <div class="stack">\n      <div class="big">QR表示</div>\n      <div class="kv"><span class="muted">ロビーID</span><b>' +
         escapeHtml(lobbyId) +
-        '</b></div>\n\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="field">\n        <label>参加URL（スマホ以外はこちら）</label>\n        <div class="code" id="joinUrlText">' +
-        escapeHtml(joinUrl || '') +
-        '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>この端末の名前（表示用）</label>\n        <input id="lobbyLoginName" placeholder="例: たろう" value="' +
+        '</b></div>\n\n      <div class="muted">参加者はこのQRを読み取って名前登録します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="field">\n        <label>GM参加者の名前（この端末）</label>\n        <input id="lobbyGmName" placeholder="例: GM" value="' +
         escapeHtml(persistedName || '') +
-        '" />\n      </div>\n\n      <div class="row">\n        <button id="lobbyShowLobby" class="primary">ロビー表示</button>\n      </div>\n\n      <div id="lobbyLoginError" class="form-error" role="alert"></div>\n    </div>\n  '
+        '" />\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">参加者</div>\n        ' +
+        lobbyMembersSummaryHtml(lobby) +
+        '\n      </div>\n\n      <hr />\n\n      <div class="row">\n        <button id="lobbyGoLobbyLogin" class="primary">ロビーログイン</button>\n      </div>\n      <div class="muted">※ 参加者がそろったら押してください（以降QRは不要）</div>\n\n      <div id="lobbyLoginError" class="form-error" role="alert"></div>\n    </div>\n  '
     );
   }
 
@@ -4295,22 +4351,142 @@
 
   function renderLobbyHost(viewEl, opts) {
     var lobbyId = opts.lobbyId;
-    var joinUrl = opts.joinUrl;
     var lobby = opts.lobby;
     var currentGame = (lobby && lobby.currentGame) || null;
     var currentLabel = currentGame && currentGame.kind ? String(currentGame.kind) : '';
 
+    var selectedKind = opts.selectedKind ? String(opts.selectedKind) : '';
+    if (!selectedKind) selectedKind = 'wordwolf';
+
+    var members = (lobby && lobby.members) || {};
+    var order = (lobby && lobby.order) || [];
+    if (!Array.isArray(order)) order = [];
+
+    var loveletterSetupHtml = '';
+    if (selectedKind === 'loveletter') {
+      var listHtml = '';
+      for (var i = 0; i < order.length; i++) {
+        var mid = String(order[i] || '');
+        if (!mid) continue;
+        var m = members[mid] || {};
+        var nm = String(m.name || '').trim();
+        if (!nm) nm = '（無名）';
+
+        listHtml +=
+          '<div class="row" style="align-items:center; gap:8px">' +
+          '<div class="muted" style="min-width:18px">' +
+          (i + 1) +
+          '</div>' +
+          '<div style="flex:1"><b>' +
+          escapeHtml(nm) +
+          '</b></div>' +
+          '<button class="ghost lobbyOrderUp" data-mid="' +
+          escapeHtml(mid) +
+          '" ' +
+          (i === 0 ? 'disabled' : '') +
+          '>↑</button>' +
+          '<button class="ghost lobbyOrderDown" data-mid="' +
+          escapeHtml(mid) +
+          '" ' +
+          (i === order.length - 1 ? 'disabled' : '') +
+          '>↓</button>' +
+          '</div>';
+      }
+      if (!listHtml) listHtml = '<div class="muted">参加者がいません。</div>';
+
+      loveletterSetupHtml =
+        '<hr />' +
+        '<div class="stack">' +
+        '<div class="muted">順番決め（ラブレター）</div>' +
+        listHtml +
+        '<div class="row">' +
+        '<button id="lobbyShuffle" class="ghost">シャッフル</button>' +
+        '</div>' +
+        '</div>';
+    }
+
+    var codenamesSetupHtml = '';
+    if (selectedKind === 'codenames') {
+      var assign = (lobby && lobby.codenamesAssign) || {};
+      var keys = Object.keys(members);
+      keys.sort();
+      var rows = '';
+      for (var k = 0; k < keys.length; k++) {
+        var mid2 = String(keys[k] || '');
+        if (!mid2) continue;
+        var m2 = members[mid2] || {};
+        var nm2 = String(m2.name || '').trim();
+        if (!nm2) nm2 = '（無名）';
+        var a2 = assign && assign[mid2] ? assign[mid2] : {};
+        var team = String((a2 && a2.team) || '');
+        var role = String((a2 && a2.role) || '');
+
+        rows +=
+          '<div class="stack" style="gap:6px">' +
+          '<b>' +
+          escapeHtml(nm2) +
+          '</b>' +
+          '<div class="row" style="gap:8px">' +
+          '<select class="cnAssignTeam" data-mid="' +
+          escapeHtml(mid2) +
+          '">' +
+          '<option value="" ' +
+          (team === '' ? 'selected' : '') +
+          '>チーム</option>' +
+          '<option value="red" ' +
+          (team === 'red' ? 'selected' : '') +
+          '>赤</option>' +
+          '<option value="blue" ' +
+          (team === 'blue' ? 'selected' : '') +
+          '>青</option>' +
+          '</select>' +
+          '<select class="cnAssignRole" data-mid="' +
+          escapeHtml(mid2) +
+          '">' +
+          '<option value="" ' +
+          (role === '' ? 'selected' : '') +
+          '>役職</option>' +
+          '<option value="spymaster" ' +
+          (role === 'spymaster' ? 'selected' : '') +
+          '>スパイマスター</option>' +
+          '<option value="operative" ' +
+          (role === 'operative' ? 'selected' : '') +
+          '>諜報員</option>' +
+          '</select>' +
+          '</div>' +
+          '</div>';
+      }
+      if (!rows) rows = '<div class="muted">参加者がいません。</div>';
+
+      codenamesSetupHtml =
+        '<hr />' +
+        '<div class="stack">' +
+        '<div class="muted">役職決め（コードネーム）</div>' +
+        rows +
+        '<div class="row">' +
+        '<button id="cnAssignShuffle" class="ghost">シャッフル</button>' +
+        '</div>' +
+        '</div>';
+    }
+
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">ロビー：ホスト</div>\n      <div class="kv"><span class="muted">ロビーID</span><b>' +
+      '\n    <div class="stack">\n      <div class="big">ロビーログイン</div>\n      <div class="kv"><span class="muted">ロビーID</span><b>' +
         escapeHtml(lobbyId) +
-        '</b></div>\n\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="field">\n        <label>参加URL（スマホ以外はこちら）</label>\n        <div class="code" id="joinUrlText">' +
-        escapeHtml(joinUrl || '') +
-        '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">参加者</div>\n        ' +
+        '</b></div>\n\n      <div class="stack">\n        <div class="muted">参加者</div>\n        ' +
         lobbyMembersSummaryHtml(lobby) +
-        '\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>開始するゲーム</label>\n        <select id="lobbyGameKind">\n          <option value="wordwolf">ワードウルフ</option>\n          <option value="codenames">コードネーム</option>\n          <option value="loveletter">ラブレター</option>\n        </select>\n        <div class="muted">現在: ' +
+        '\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>ゲーム選択</label>\n        <select id="lobbyGameKind">\n          <option value="wordwolf" ' +
+        (selectedKind === 'wordwolf' ? 'selected' : '') +
+        '>ワードウルフ</option>\n          <option value="loveletter" ' +
+        (selectedKind === 'loveletter' ? 'selected' : '') +
+        '>ラブレター</option>\n          <option value="codenames" ' +
+        (selectedKind === 'codenames' ? 'selected' : '') +
+        '>コードネーム</option>\n        </select>\n        <div class="muted">現在: ' +
         escapeHtml(currentLabel || '未開始') +
-        '</div>\n      </div>\n\n      <div class="row">\n        <button id="lobbyStartGame" class="primary">開始</button>\n        <a class="btn ghost" href="./">ホーム</a>\n      </div>\n\n      <div id="lobbyHostError" class="form-error" role="alert"></div>\n    </div>\n  '
+        '</div>\n      </div>' +
+        loveletterSetupHtml +
+        codenamesSetupHtml +
+        '\n\n      <hr />\n\n      <div class="row">\n        <button id="lobbyStartGame" class="primary">ゲーム開始</button>\n      </div>\n\n      <div id="lobbyHostError" class="form-error" role="alert"></div>\n    </div>\n  '
     );
   }
 
@@ -5702,9 +5878,9 @@
   function routeLobbyLogin(lobbyId) {
     if (!lobbyId) return routeHome();
 
+    var unsub = null;
     var joinUrl = makeLobbyJoinUrl(lobbyId);
-    renderLobbyLogin(viewEl, { lobbyId: lobbyId, joinUrl: joinUrl });
-    clearInlineError('lobbyLoginError');
+    var mid = getOrCreateLobbyMemberId(lobbyId);
 
     function drawQr() {
       return new Promise(function (resolve) {
@@ -5782,67 +5958,77 @@
       });
     }
 
-    drawQr();
+    function bindButtons() {
+      var goBtn = document.getElementById('lobbyGoLobbyLogin');
+      if (goBtn && !goBtn.__lobby_bound) {
+        goBtn.__lobby_bound = true;
+        goBtn.addEventListener('click', function () {
+          var nameEl = document.getElementById('lobbyGmName');
+          var name = String((nameEl && nameEl.value) || '').trim();
+          if (!name) {
+            setInlineError('lobbyLoginError', '名前を入力してください。');
+            return;
+          }
 
-    var copyBtn = document.getElementById('copyJoinUrl');
-    if (copyBtn && !copyBtn.__lobby_bound) {
-      copyBtn.__lobby_bound = true;
-      copyBtn.addEventListener('click', function () {
-        var st = document.getElementById('copyStatus');
-        if (st) st.textContent = 'コピー中...';
-        copyTextToClipboard(joinUrl)
-          .then(function (ok) {
-            if (!st) return;
-            st.textContent = ok ? 'コピーしました' : 'コピーできませんでした（長押しで選択してコピーしてください）';
-          })
-          .catch(function () {
-            if (st) st.textContent = 'コピーできませんでした（長押しで選択してコピーしてください）';
-          });
-      });
+          clearInlineError('lobbyLoginError');
+          savePersistedName(name);
+          goBtn.disabled = true;
+
+          var q0 = parseQuery();
+          var isGmDevice = q0.gmdev === '1';
+
+          firebaseReady()
+            .then(function () {
+              return joinLobbyMember(lobbyId, mid, name, isGmDevice);
+            })
+            .then(function () {
+              setActiveLobby(lobbyId, false);
+              var q = {};
+              var v = getCacheBusterParam();
+              if (v) q.v = v;
+              q.lobby = lobbyId;
+              q.gmdev = isGmDevice ? '1' : '0';
+              q.screen = 'lobby_host';
+              setQuery(q);
+              route();
+            })
+            .catch(function (e) {
+              setInlineError('lobbyLoginError', (e && e.message) || 'ロビーログインに失敗しました');
+            })
+            .finally(function () {
+              goBtn.disabled = false;
+            });
+        });
+      }
     }
 
-    var showBtn = document.getElementById('lobbyShowLobby');
-    if (showBtn && !showBtn.__lobby_bound) {
-      showBtn.__lobby_bound = true;
-      showBtn.addEventListener('click', function () {
-        var nameEl = document.getElementById('lobbyLoginName');
-        var name = String((nameEl && nameEl.value) || '').trim();
-        if (!name) {
-          setInlineError('lobbyLoginError', '名前を入力してください。');
-          return;
-        }
-
-        clearInlineError('lobbyLoginError');
-        savePersistedName(name);
-        showBtn.disabled = true;
-
-        var q0 = parseQuery();
-        var isGmDevice = q0.gmdev === '1';
-        var mid = getOrCreateLobbyMemberId(lobbyId);
-
-        firebaseReady()
-          .then(function () {
-            return joinLobbyMember(lobbyId, mid, name, isGmDevice);
-          })
-          .then(function () {
-            setActiveLobby(lobbyId, false);
-            var q = {};
-            var v = getCacheBusterParam();
-            if (v) q.v = v;
-            q.lobby = lobbyId;
-            q.gmdev = isGmDevice ? '1' : '0';
-            q.screen = 'lobby_host';
-            setQuery(q);
-            route();
-          })
-          .catch(function (e) {
-            setInlineError('lobbyLoginError', (e && e.message) || 'ロビー表示に失敗しました');
-          })
-          .finally(function () {
-            showBtn.disabled = false;
-          });
-      });
+    function renderWithLobby(lobby) {
+      renderLobbyLogin(viewEl, { lobbyId: lobbyId, joinUrl: joinUrl, lobby: lobby });
+      clearInlineError('lobbyLoginError');
+      drawQr();
+      bindButtons();
     }
+
+    firebaseReady()
+      .then(function () {
+        return subscribeLobby(lobbyId, function (lobby) {
+          if (!lobby) {
+            renderError(viewEl, 'ロビーが見つかりません');
+            return;
+          }
+          renderWithLobby(lobby);
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+    });
   }
 
   function routeLobbyCreate() {
@@ -5936,8 +6122,8 @@
 
   function routeLobbyHost(lobbyId) {
     var unsub = null;
-    var joinUrl = makeLobbyJoinUrl(lobbyId);
     var mid = getOrCreateLobbyMemberId(lobbyId);
+    var ui = { selectedKind: 'wordwolf', lastLobby: null };
 
     function redirectToLobbyPlayer() {
       try {
@@ -5957,97 +6143,184 @@
       route();
     }
 
-    function drawQr() {
-      return new Promise(function (resolve) {
-        var canvas = document.getElementById('qr');
-        var errEl = document.getElementById('qrError');
-        var wrapEl = document.getElementById('qrWrap');
-        if (errEl) errEl.textContent = '';
-        if (!canvas) {
-          if (errEl) errEl.textContent = 'QR表示領域が見つかりません。';
-          return resolve();
-        }
-        var qr = window.QRCode || window.qrcode || window.QR;
-        if (!qr || !qr.toCanvas) {
-          if (errEl) errEl.textContent = 'QRの生成に失敗しました（ライブラリ未読込）。';
-          return resolve();
-        }
+    function normalizeOrder(lobby) {
+      var members = (lobby && lobby.members) || {};
+      var order = (lobby && lobby.order) || [];
+      if (!Array.isArray(order)) order = [];
 
-        function showAsImage() {
-          if (!qr.toDataURL || !wrapEl) return;
-          try {
-            qr.toDataURL(joinUrl, { margin: 1, width: 240 }, function (err, url) {
-              if (err || !url) {
-                if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-                return resolve();
-              }
-              wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />';
-              if (errEl) errEl.textContent = '（QRは画像で表示しています）';
-              return resolve();
-            });
-          } catch (e) {
-            if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-            return resolve();
-          }
-        }
+      var seen = {};
+      var out = [];
 
-        function looksBlank(c) {
-          try {
-            var ctx = c.getContext && c.getContext('2d');
-            if (!ctx) return true;
-            var w = c.width || 0;
-            var h = c.height || 0;
-            if (!w || !h) return true;
-            var img = ctx.getImageData(0, 0, Math.min(16, w), Math.min(16, h)).data;
-            var allZero = true;
-            var allWhite = true;
-            for (var i = 0; i < img.length; i += 4) {
-              var r = img[i], g = img[i + 1], b = img[i + 2], a = img[i + 3];
-              if (a !== 0) allZero = false;
-              if (!(a !== 0 && r > 240 && g > 240 && b > 240)) allWhite = false;
-              if (!allZero && !allWhite) return false;
-            }
-            return allZero || allWhite;
-          } catch (e) {
-            return false;
-          }
-        }
+      for (var i = 0; i < order.length; i++) {
+        var id = String(order[i] || '');
+        if (!id) continue;
+        if (seen[id]) continue;
+        if (!members[id]) continue;
+        seen[id] = true;
+        out.push(id);
+      }
 
-        try {
-          qr.toCanvas(canvas, joinUrl, { margin: 1, width: 240 }, function (err) {
-            if (err) {
-              if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-              showAsImage();
-              return;
-            }
-            if (looksBlank(canvas)) {
-              showAsImage();
-              return;
-            }
-            resolve();
-          });
-        } catch (e) {
-          if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-          showAsImage();
-        }
-      });
+      var keys = Object.keys(members);
+      keys.sort();
+      for (var j = 0; j < keys.length; j++) {
+        var k = String(keys[j] || '');
+        if (!k || seen[k]) continue;
+        seen[k] = true;
+        out.push(k);
+      }
+
+      return out;
+    }
+
+    function swap(order, i, j) {
+      if (i === j) return order;
+      if (i < 0 || j < 0) return order;
+      if (i >= order.length || j >= order.length) return order;
+      var a = order.slice();
+      var t = a[i];
+      a[i] = a[j];
+      a[j] = t;
+      return a;
+    }
+
+    function shuffle(list) {
+      var a = list.slice();
+      for (var i = a.length - 1; i > 0; i--) {
+        var r = randomInt(i + 1);
+        var t = a[i];
+        a[i] = a[r];
+        a[r] = t;
+      }
+      return a;
     }
 
     function bindHostButtons(lobby) {
-      var copyBtn = document.getElementById('copyJoinUrl');
-      if (copyBtn && !copyBtn.__lobby_bound) {
-        copyBtn.__lobby_bound = true;
-        copyBtn.addEventListener('click', function () {
-          var st = document.getElementById('copyStatus');
-          if (st) st.textContent = 'コピー中...';
-          copyTextToClipboard(joinUrl)
-            .then(function (ok) {
-              if (!st) return;
-              st.textContent = ok ? 'コピーしました' : 'コピーできませんでした（長押しで選択してコピーしてください）';
+      var kindEl = document.getElementById('lobbyGameKind');
+      if (kindEl && !kindEl.__lobby_bound) {
+        kindEl.__lobby_bound = true;
+        kindEl.addEventListener('change', function () {
+          ui.selectedKind = String(kindEl.value || 'wordwolf');
+          renderWithLobby(ui.lastLobby);
+        });
+      }
+
+      var shuffleOrderBtn = document.getElementById('lobbyShuffle');
+      if (shuffleOrderBtn && !shuffleOrderBtn.__lobby_bound) {
+        shuffleOrderBtn.__lobby_bound = true;
+        shuffleOrderBtn.addEventListener('click', function () {
+          var order = normalizeOrder(lobby);
+          shuffleOrderBtn.disabled = true;
+          setLobbyOrder(lobbyId, shuffle(order))
+            .catch(function (e) {
+              setInlineError('lobbyHostError', (e && e.message) || 'シャッフルに失敗しました');
             })
-            .catch(function () {
-              if (st) st.textContent = 'コピーできませんでした（長押しで選択してコピーしてください）';
+            .then(function () {
+              shuffleOrderBtn.disabled = false;
             });
+        });
+      }
+
+      var ups = document.querySelectorAll('.lobbyOrderUp');
+      for (var i = 0; i < ups.length; i++) {
+        var upBtn = ups[i];
+        if (!upBtn || upBtn.__lobby_bound) continue;
+        upBtn.__lobby_bound = true;
+        upBtn.addEventListener('click', function (ev) {
+          var mid2 = String((ev && ev.currentTarget && ev.currentTarget.getAttribute('data-mid')) || '');
+          if (!mid2) return;
+          var order = normalizeOrder(lobby);
+          var idx = order.indexOf(mid2);
+          if (idx <= 0) return;
+          setLobbyOrder(lobbyId, swap(order, idx, idx - 1)).catch(function (e) {
+            setInlineError('lobbyHostError', (e && e.message) || '更新に失敗しました');
+          });
+        });
+      }
+
+      var downs = document.querySelectorAll('.lobbyOrderDown');
+      for (var j = 0; j < downs.length; j++) {
+        var downBtn = downs[j];
+        if (!downBtn || downBtn.__lobby_bound) continue;
+        downBtn.__lobby_bound = true;
+        downBtn.addEventListener('click', function (ev2) {
+          var mid3 = String((ev2 && ev2.currentTarget && ev2.currentTarget.getAttribute('data-mid')) || '');
+          if (!mid3) return;
+          var order = normalizeOrder(lobby);
+          var idx2 = order.indexOf(mid3);
+          if (idx2 < 0 || idx2 >= order.length - 1) return;
+          setLobbyOrder(lobbyId, swap(order, idx2, idx2 + 1)).catch(function (e) {
+            setInlineError('lobbyHostError', (e && e.message) || '更新に失敗しました');
+          });
+        });
+      }
+
+      var cnShuffleBtn = document.getElementById('cnAssignShuffle');
+      if (cnShuffleBtn && !cnShuffleBtn.__lobby_bound) {
+        cnShuffleBtn.__lobby_bound = true;
+        cnShuffleBtn.addEventListener('click', function () {
+          var ids = normalizeOrder(lobby);
+          var assign = {};
+          for (var i2 = 0; i2 < ids.length; i2++) {
+            var id2 = ids[i2];
+            var team = i2 % 2 === 0 ? 'red' : 'blue';
+            assign[id2] = { team: team, role: 'operative' };
+          }
+          // ensure one spymaster per team when possible
+          var redSm = '';
+          var blueSm = '';
+          for (var j2 = 0; j2 < ids.length; j2++) {
+            var id3 = ids[j2];
+            if (!id3 || !assign[id3]) continue;
+            if (assign[id3].team === 'red' && !redSm) redSm = id3;
+            if (assign[id3].team === 'blue' && !blueSm) blueSm = id3;
+          }
+          if (redSm) assign[redSm].role = 'spymaster';
+          if (blueSm) assign[blueSm].role = 'spymaster';
+
+          cnShuffleBtn.disabled = true;
+          setLobbyCodenamesAssignBulk(lobbyId, assign)
+            .catch(function (e) {
+              setInlineError('lobbyHostError', (e && e.message) || 'シャッフルに失敗しました');
+            })
+            .then(function () {
+              cnShuffleBtn.disabled = false;
+            });
+        });
+      }
+
+      var teamEls = document.querySelectorAll('.cnAssignTeam');
+      for (var t = 0; t < teamEls.length; t++) {
+        var el = teamEls[t];
+        if (!el || el.__lobby_bound) continue;
+        el.__lobby_bound = true;
+        el.addEventListener('change', function (ev3) {
+          var e = ev3 && ev3.currentTarget ? ev3.currentTarget : null;
+          var mid4 = e ? String(e.getAttribute('data-mid') || '') : '';
+          if (!mid4) return;
+          var team = String(e.value || '');
+          var roleEl = document.querySelector('.cnAssignRole[data-mid="' + mid4 + '"]');
+          var role = String((roleEl && roleEl.value) || '');
+          setLobbyCodenamesAssign(lobbyId, mid4, team, role).catch(function (e2) {
+            setInlineError('lobbyHostError', (e2 && e2.message) || '更新に失敗しました');
+          });
+        });
+      }
+
+      var roleEls = document.querySelectorAll('.cnAssignRole');
+      for (var r2 = 0; r2 < roleEls.length; r2++) {
+        var el2 = roleEls[r2];
+        if (!el2 || el2.__lobby_bound) continue;
+        el2.__lobby_bound = true;
+        el2.addEventListener('change', function (ev4) {
+          var e4 = ev4 && ev4.currentTarget ? ev4.currentTarget : null;
+          var mid5 = e4 ? String(e4.getAttribute('data-mid') || '') : '';
+          if (!mid5) return;
+          var role = String(e4.value || '');
+          var teamEl = document.querySelector('.cnAssignTeam[data-mid="' + mid5 + '"]');
+          var team = String((teamEl && teamEl.value) || '');
+          setLobbyCodenamesAssign(lobbyId, mid5, team, role).catch(function (e3) {
+            setInlineError('lobbyHostError', (e3 && e3.message) || '更新に失敗しました');
+          });
         });
       }
 
@@ -6055,8 +6328,8 @@
       if (startBtn && !startBtn.__lobby_bound) {
         startBtn.__lobby_bound = true;
         startBtn.addEventListener('click', function () {
-          var kindEl = document.getElementById('lobbyGameKind');
-          var kind = String((kindEl && kindEl.value) || 'wordwolf');
+          var kindEl2 = document.getElementById('lobbyGameKind');
+          var kind = String((kindEl2 && kindEl2.value) || ui.selectedKind || 'wordwolf');
 
           clearInlineError('lobbyHostError');
           startBtn.disabled = true;
@@ -6069,22 +6342,32 @@
           firebaseReady()
             .then(function () {
               if (kind === 'codenames') {
-                return createCodenamesRoom(roomId, { name: hostName, size: 5 }).then(function () {
-                  var pid = getOrCreateCodenamesPlayerId(roomId);
-                  return joinPlayerInCodenamesRoom(roomId, pid, hostName, true);
-                });
+                // Use lobby member id as player id for deterministic role assignment.
+                setCodenamesPlayerId(roomId, mid);
+                return createCodenamesRoom(roomId, { name: hostName, size: 5 })
+                  .then(function () {
+                    return joinPlayerInCodenamesRoom(roomId, mid, hostName, true);
+                  })
+                  .then(function () {
+                    var a = lobby && lobby.codenamesAssign && lobby.codenamesAssign[mid] ? lobby.codenamesAssign[mid] : null;
+                    var team = a && a.team ? String(a.team) : '';
+                    var role = a && a.role ? String(a.role) : '';
+                    if (!team && !role) return;
+                    return setCodenamesPlayerProfile(roomId, mid, hostName, team, role);
+                  });
               }
               if (kind === 'loveletter') {
-                return createLoveLetterRoom(roomId, {}).then(function () {
-                  var pid2 = getOrCreateLoveLetterPlayerId(roomId);
-                  return joinPlayerInLoveLetterRoom(roomId, pid2, hostName, true);
-                });
+                setLoveLetterPlayerId(roomId, mid);
+                var order = normalizeOrder(lobby);
+                return createLoveLetterRoom(roomId, { order: order })
+                  .then(function () {
+                    return joinPlayerInLoveLetterRoom(roomId, mid, hostName, true);
+                  });
               }
               // default: wordwolf
               var settings = { gmName: hostName, minorityCount: 1, talkSeconds: 180, reversal: true, topicCategoryId: 'random' };
               return createRoom(roomId, settings).then(function () {
-                var pid3 = getOrCreatePlayerId(roomId);
-                return joinPlayerInRoom(roomId, pid3, hostName, true);
+                return joinPlayerInRoom(roomId, getOrCreatePlayerId(roomId), hostName, true);
               });
             })
             .then(function () {
@@ -6095,6 +6378,8 @@
               var v = getCacheBusterParam();
               if (v) q.v = v;
               q.room = roomId;
+              q.lobby = lobbyId;
+              q.autojoin = '1';
               if (kind === 'codenames') {
                 q.host = '1';
                 q.screen = 'codenames_host';
@@ -6108,46 +6393,22 @@
               setQuery(q);
               route();
             })
-            .catch(function (e) {
+            .catch(function (e5) {
               startBtn.disabled = false;
-              setInlineError('lobbyHostError', (e && e.message) || '開始に失敗しました');
+              setInlineError('lobbyHostError', (e5 && e5.message) || '開始に失敗しました');
             });
-        });
-      }
-
-      var assignBtn = document.getElementById('lobbyGoAssign');
-      if (assignBtn && !assignBtn.__lobby_bound) {
-        assignBtn.__lobby_bound = true;
-        assignBtn.addEventListener('click', function () {
-          var q = {};
-          var v = getCacheBusterParam();
-          if (v) q.v = v;
-          q.lobby = lobbyId;
-          q.screen = 'lobby_assign';
-          setQuery(q);
-          route();
         });
       }
     }
 
     function renderWithLobby(lobby) {
-      renderLobbyHost(viewEl, { lobbyId: lobbyId, joinUrl: joinUrl, lobby: lobby });
+      ui.lastLobby = lobby;
+      var cg = (lobby && lobby.currentGame) || null;
+      var kindFromCg = cg && cg.kind ? String(cg.kind) : '';
+      if (!ui.selectedKind && kindFromCg) ui.selectedKind = kindFromCg;
+      if (!ui.selectedKind) ui.selectedKind = 'wordwolf';
 
-      // Add the assign button next to the start button (no layout redesign).
-      try {
-        var startBtn = document.getElementById('lobbyStartGame');
-        if (startBtn && !document.getElementById('lobbyGoAssign') && startBtn.parentNode) {
-          var b = document.createElement('button');
-          b.id = 'lobbyGoAssign';
-          b.className = 'ghost';
-          b.textContent = '順番割り振り';
-          startBtn.parentNode.insertBefore(b, startBtn);
-        }
-      } catch (e0) {
-        // ignore
-      }
-
-      drawQr();
+      renderLobbyHost(viewEl, { lobbyId: lobbyId, lobby: lobby, selectedKind: ui.selectedKind });
       bindHostButtons(lobby);
     }
 
@@ -6204,6 +6465,7 @@
       var v = getCacheBusterParam();
       if (v) q.v = v;
       q.room = roomId;
+      q.lobby = lobbyId;
 
       var isHostDevice = lobby && String(lobby.hostMid || '') === String(mid);
       var nm = loadPersistedName();
@@ -7671,7 +7933,16 @@
 
       firebaseReady()
         .then(function () {
+          var qx = parseQuery();
+          var lobbyId = qx && qx.lobby ? String(qx.lobby) : '';
           var playerId = getOrCreateLoveLetterPlayerId(roomId);
+
+          if (lobbyId) {
+            var mid = getOrCreateLobbyMemberId(lobbyId);
+            setLoveLetterPlayerId(roomId, mid);
+            playerId = mid;
+          }
+
           return joinPlayerInLoveLetterRoom(roomId, playerId, form.name, false).then(function (room) {
             if (!room || !room.players || !room.players[playerId]) {
               throw new Error('参加できません（ゲームが開始済みです）');
@@ -8420,13 +8691,39 @@
 
       firebaseReady()
         .then(function () {
+          var qx = parseQuery();
+          var lobbyId = qx && qx.lobby ? String(qx.lobby) : '';
           var playerId = getOrCreateCodenamesPlayerId(roomId);
-          return joinPlayerInCodenamesRoom(roomId, playerId, form.name, false).then(function (room) {
-            if (!room || !room.players || !room.players[playerId]) {
-              throw new Error('参加できません（ゲームが開始済みです）');
-            }
-            return playerId;
-          });
+
+          if (lobbyId) {
+            var mid = getOrCreateLobbyMemberId(lobbyId);
+            setCodenamesPlayerId(roomId, mid);
+            playerId = mid;
+          }
+
+          return joinPlayerInCodenamesRoom(roomId, playerId, form.name, false)
+            .then(function (room) {
+              if (!room || !room.players || !room.players[playerId]) {
+                throw new Error('参加できません（ゲームが開始済みです）');
+              }
+              return playerId;
+            })
+            .then(function (pid) {
+              if (!lobbyId) return pid;
+              return getValueOnce(lobbyPath(lobbyId) + '/codenamesAssign/' + pid)
+                .catch(function () {
+                  return null;
+                })
+                .then(function (a) {
+                  if (!a) return pid;
+                  var team = a && a.team ? String(a.team) : '';
+                  var role = a && a.role ? String(a.role) : '';
+                  if (!team && !role) return pid;
+                  return setCodenamesPlayerProfile(roomId, pid, form.name, team, role).then(function () {
+                    return pid;
+                  });
+                });
+            });
         })
         .then(function () {
           var q = {};
@@ -8983,6 +9280,8 @@
   }
 
   function setupRulesButton() {
+    // ルール説明は一旦非表示（要件）。
+    // ボタンがDOMに残っていても操作できないようにする。
     var btn = null;
     try {
       btn = document.getElementById('rulesBtn');
@@ -8990,51 +9289,14 @@
       btn = null;
     }
     if (!btn) return;
-    if (btn.__ww_bound) return;
-    btn.__ww_bound = true;
-
-    btn.addEventListener('click', function () {
-      var q = parseQuery();
-      var s = q && q.screen ? String(q.screen) : '';
-      if (s.indexOf('codenames_') === 0) {
-        var cl = [];
-        cl.push('【コードネーム ルール】');
-        cl.push('1) 部屋を作成 → QRで参加');
-        cl.push('2) 各自でチーム（赤/青）と役職（スパイマスター/諜報員）を選ぶ');
-        cl.push('3) 各チーム「スパイマスター1人 + 諜報員1人以上」が揃ったらスタート');
-        cl.push('4) 手番チームのスパイマスターがヒント（単語・数）を出す');
-        cl.push('5) 諜報員がカードをめくる（自分の色なら続行、違う色/中立なら手番交代）');
-        cl.push('6) 暗殺者をめくると、そのチームの負け');
-        cl.push('7) 自分の色を全てめくったチームの勝ち');
-        alert(cl.join('\n'));
-        return;
-      }
-
-      if (s.indexOf('loveletter_') === 0) {
-        var ll = [];
-        ll.push('【ラブレター ルール（要約）】');
-        ll.push('1) 部屋を作成 → QRで参加');
-        ll.push('2) 各ラウンド：各自は手札1枚から開始（自分の手番で1枚引いて2枚になる）');
-        ll.push('3) 手札2枚のうち1枚を使用し、カード効果を解決する');
-        ll.push('4) 失格条件：姫（8）を捨てる / 効果で脱落する');
-        ll.push('5) ラウンド終了：山札が尽きる or 残り1人');
-        ll.push('6) 勝者：残った人（複数なら手札の強い人）');
-        alert(ll.join('\n'));
-        return;
-      }
-
-      var lines = [];
-      lines.push('【ワードウルフ ルール】');
-      lines.push('1) ゲームマスターが部屋を作成し、QRを配布');
-      lines.push('2) スタート → トーク（少数側を探す）');
-      lines.push('3) 投票（同票なら同票者で再投票）');
-      lines.push('   ※ 再投票でも同票なら少数側の勝ち');
-      lines.push('4) 結果発表');
-      lines.push('   - 多数側が追放されたら少数側の勝ち');
-      lines.push('   - 少数側が追放され、逆転ありの場合：少数側が多数側ワードを入力 → 予想一覧 → ゲームマスターが判定');
-      lines.push('   - 逆転なしの場合：多数側の勝ち');
-      alert(lines.join('\n'));
-    });
+    try {
+      btn.style.display = 'none';
+      btn.disabled = true;
+      btn.setAttribute('aria-hidden', 'true');
+      btn.setAttribute('tabindex', '-1');
+    } catch (e2) {
+      // ignore
+    }
   }
 
   // boot
