@@ -674,6 +674,19 @@
     return id;
   }
 
+  function setPlayerId(roomId, playerId) {
+    var key = 'ww_player_' + roomId;
+    localStorage.setItem(key, String(playerId || ''));
+  }
+
+  function touchPlayer(roomId, playerId) {
+    var path = playerPath(roomId, playerId);
+    return runTxn(path, function (p) {
+      if (!p) return p;
+      return assign({}, p, { lastSeenAt: serverNowMs() });
+    });
+  }
+
   function roomPath(roomId) {
     return 'rooms/' + roomId;
   }
@@ -724,6 +737,14 @@
   function setLoveLetterPlayerId(roomId, playerId) {
     var key = 'll_player_' + roomId;
     localStorage.setItem(key, String(playerId || ''));
+  }
+
+  function touchLoveLetterPlayer(roomId, playerId) {
+    var path = loveletterRoomPath(roomId) + '/players/' + playerId;
+    return runTxn(path, function (p) {
+      if (!p) return p;
+      return assign({}, p, { lastSeenAt: serverNowMs() });
+    });
   }
 
   function loveletterRoomPath(roomId) {
@@ -5080,7 +5101,7 @@
         escapeHtml(wLabel) +
         '</b></div>' +
         (amHost
-          ? '<div class="row"><button id="cnContinue" class="primary">継続</button><button id="cnChangePlayers" class="ghost">参加者変更</button></div>'
+          ? '<div class="row"><button id="cnContinue" class="primary">もう一度</button><button id="cnChangePlayers" class="ghost">参加者変更</button><button id="cnBackToLobby" class="ghost">ロビーに戻る</button></div>'
           : '') +
         '</div>';
     }
@@ -5372,6 +5393,43 @@
       '\n    <div class="stack">\n      <div class="big">参加</div>\n      <div class="kv"><span class="muted">ルームID</span><b>' +
         escapeHtml(roomId) +
         '</b></div>\n\n      <div id="wwJoinError" class="form-error" role="alert"></div>\n\n      <div class="field">\n        <label>名前（表示用）</label>\n        <input id="playerName" placeholder="例: たろう" />\n      </div>\n\n      <div class="row">\n        <button id="join" class="primary">参加する</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+    );
+  }
+
+  function renderWordwolfRejoin(viewEl, opts) {
+    var roomId = opts.roomId;
+    var room = opts.room;
+
+    var items = '';
+    try {
+      var ps = (room && room.players) || {};
+      var keys = Object.keys(ps);
+      if (keys.length) {
+        keys.sort(function (a, b) {
+          var pa = ps[a] || {};
+          var pb = ps[b] || {};
+          var aa = pa.joinedAt || 0;
+          var bb = pb.joinedAt || 0;
+          return aa - bb;
+        });
+        for (var i = 0; i < keys.length; i++) {
+          var id = keys[i];
+          var p = ps[id] || {};
+          var nm = escapeHtml(formatPlayerMenuName(p) || '-');
+          items += '<button class="ghost wwRejoinPick" data-pid="' + escapeHtml(id) + '">' + nm + '</button>';
+        }
+      }
+    } catch (e) {
+      items = '';
+    }
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">再入場</div>\n      <div class="kv"><span class="muted">ルームID</span><b>' +
+        escapeHtml(roomId) +
+        '</b></div>\n\n      <div class="muted">すでに登録済みの名前を選ぶと、そのまま再入場します。</div>\n\n      <div id="wwRejoinError" class="form-error" role="alert"></div>\n\n      <div class="stack">' +
+        (items || '<div class="muted">まだ参加者がいません。新規参加してください。</div>') +
+        '</div>\n\n      <hr />\n      <div class="row">\n        <button id="wwGoNewJoin" class="primary">新規参加</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
     );
   }
 
@@ -5711,8 +5769,9 @@
                 '\n      </div>\n    </div>\n  '
             : '<hr />' +
               '<div class="row">' +
-              '<button id="continueGame" class="primary">ゲーム継続</button>' +
+              '<button id="continueGame" class="primary">もう一度</button>' +
               '<button id="changePlayers" class="ghost">参加者変更</button>' +
+              '<button id="wwBackToLobby" class="ghost">ロビーに戻る</button>' +
               '</div>'
           : '') +
         '</div>';
@@ -6892,23 +6951,64 @@
         return;
       }
 
+      var storedId = '';
+      try {
+        storedId = String(localStorage.getItem('ww_player_' + roomId) || '');
+      } catch (e0) {
+        storedId = '';
+      }
+
       firebaseReady()
         .then(function () {
-          var playerId = getOrCreatePlayerId(roomId);
+          var qx = parseQuery();
+          var lobbyId = qx && qx.lobby ? String(qx.lobby) : '';
+          var playerId = storedId || getOrCreatePlayerId(roomId);
+
+          if (lobbyId) {
+            var mid = getOrCreateLobbyMemberId(lobbyId);
+            setPlayerId(roomId, mid);
+            playerId = mid;
+          }
+
           return joinPlayerInRoom(roomId, playerId, form.name, false).then(function (room) {
-            if (!room || !room.players || !room.players[playerId]) {
-              throw new Error('参加できません（ゲームが開始済みです）');
+            if (!room) throw new Error('部屋が見つかりません');
+
+            if (room.players && room.players[playerId]) return playerId;
+            if (storedId && room.players && room.players[storedId]) {
+              setPlayerId(roomId, storedId);
+              return storedId;
             }
-            return playerId;
+
+            if (String(room.phase || '') !== 'lobby') {
+              var q = {};
+              var v = getCacheBusterParam();
+              if (v) q.v = v;
+              q.room = roomId;
+              q.screen = 'ww_rejoin';
+              if (isHost) q.host = '1';
+              if (lobbyId) q.lobby = lobbyId;
+              setQuery(q);
+              route();
+              return '';
+            }
+
+            throw new Error('参加できません（ゲームが開始済みです）');
           });
         })
-        .then(function () {
+        .then(function (pid) {
+          if (!pid) return;
           var q = {};
           var v = getCacheBusterParam();
           if (v) q.v = v;
           q.room = roomId;
           q.player = '1';
           if (isHost) q.host = '1';
+          try {
+            var qx2 = parseQuery();
+            if (qx2 && qx2.lobby) q.lobby = String(qx2.lobby);
+          } catch (e2) {
+            // ignore
+          }
           setQuery(q);
           route();
         })
@@ -6930,6 +7030,110 @@
     } catch (e1) {
       // ignore
     }
+  }
+
+  function routeWordwolfRejoin(roomId, isHost) {
+    var unsub = null;
+
+    firebaseReady()
+      .then(function () {
+        return subscribeRoom(roomId, function (room) {
+          if (!room) {
+            renderError(viewEl, '部屋が見つかりません');
+            return;
+          }
+
+          // Rejoin is intended for ongoing games.
+          if (String(room.phase || '') === 'lobby') {
+            var q0 = {};
+            var v0 = getCacheBusterParam();
+            if (v0) q0.v = v0;
+            q0.room = roomId;
+            q0.screen = 'join';
+            if (isHost) q0.host = '1';
+            try {
+              var qq0 = parseQuery();
+              if (qq0 && qq0.lobby) q0.lobby = String(qq0.lobby);
+            } catch (e0) {
+              // ignore
+            }
+            setQuery(q0);
+            route();
+            return;
+          }
+
+          renderWordwolfRejoin(viewEl, { roomId: roomId, room: room });
+          clearInlineError('wwRejoinError');
+          stripBackNavLinks(viewEl);
+
+          var goNew = document.getElementById('wwGoNewJoin');
+          if (goNew && !goNew.__ww_bound) {
+            goNew.__ww_bound = true;
+            goNew.addEventListener('click', function () {
+              var q1 = {};
+              var v1 = getCacheBusterParam();
+              if (v1) q1.v = v1;
+              q1.room = roomId;
+              q1.screen = 'join';
+              if (isHost) q1.host = '1';
+              try {
+                var qq1 = parseQuery();
+                if (qq1 && qq1.lobby) q1.lobby = String(qq1.lobby);
+              } catch (e1) {
+                // ignore
+              }
+              setQuery(q1);
+              route();
+            });
+          }
+
+          var picks = document.querySelectorAll('.wwRejoinPick');
+          for (var i = 0; i < picks.length; i++) {
+            var b = picks[i];
+            if (!b || b.__ww_bound) continue;
+            b.__ww_bound = true;
+            b.addEventListener('click', function (ev) {
+              var el = ev && ev.currentTarget ? ev.currentTarget : null;
+              var pid = el ? String(el.getAttribute('data-pid') || '') : '';
+              if (!pid) {
+                setInlineError('wwRejoinError', '選択に失敗しました');
+                return;
+              }
+
+              setPlayerId(roomId, pid);
+              touchPlayer(roomId, pid).catch(function () {
+                // ignore
+              });
+
+              var q2 = {};
+              var v2 = getCacheBusterParam();
+              if (v2) q2.v = v2;
+              q2.room = roomId;
+              q2.player = '1';
+              var p = room && room.players ? room.players[pid] : null;
+              if (isHost || (p && p.isHost)) q2.host = '1';
+              try {
+                var qq2 = parseQuery();
+                if (qq2 && qq2.lobby) q2.lobby = String(qq2.lobby);
+              } catch (e2) {
+                // ignore
+              }
+              setQuery(q2);
+              route();
+            });
+          }
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+    });
   }
 
   function routeHost(roomId) {
@@ -7335,6 +7539,37 @@
     return { name: name };
   }
 
+  function renderLoveLetterRejoin(viewEl, opts) {
+    var roomId = opts.roomId;
+    var room = opts.room;
+    var ps = (room && room.players) || {};
+    var keys = Object.keys(ps);
+    keys.sort(function (a, b) {
+      var pa = ps[a] || {};
+      var pb = ps[b] || {};
+      return (pa.joinedAt || 0) - (pb.joinedAt || 0);
+    });
+
+    var picks = '';
+    for (var i = 0; i < keys.length; i++) {
+      var pid = String(keys[i] || '');
+      if (!pid) continue;
+      var p = ps[pid] || {};
+      var nm = formatPlayerDisplayName(p) || pid;
+      picks += '<button class="ghost llRejoinPick" data-pid="' + escapeHtml(pid) + '">' + escapeHtml(nm) + '</button>';
+    }
+    if (!picks) picks = '<div class="muted">参加者がいません。</div>';
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">ラブレター：再参加</div>\n      <div class="kv"><span class="muted">ルームID</span><b>' +
+        escapeHtml(roomId) +
+        '</b></div>\n\n      <div id="llRejoinError" class="form-error" role="alert"></div>\n\n      <div class="muted">自分の名前を選んでください。</div>\n\n      <div class="stack">' +
+        picks +
+        '</div>\n\n      <div class="row">\n        <button id="llGoNewJoin" class="ghost">新しく参加（名前入力）</button>\n      </div>\n    </div>\n  '
+    );
+  }
+
   function makeLoveLetterJoinUrl(roomId) {
     var q = {};
     var v = getCacheBusterParam();
@@ -7499,7 +7734,9 @@
         '</div>' +
         (isHost
           ? '<div class="row" style="justify-content:center;margin-top:10px">' +
-            '<button id="llNextGame" class="primary">次ゲームへ（参加者変更）</button>' +
+            '<button id="llReplay" class="primary">もう一度</button>' +
+            '<button id="llNextGame" class="ghost">次ゲームへ（参加者変更）</button>' +
+            '<button id="llBackToLobby" class="ghost">ロビーに戻る</button>' +
             '</div>'
           : '') +
         '</div>';
@@ -7931,11 +8168,19 @@
         return;
       }
 
+      // Prefer existing stored id (for rejoin) if present.
+      var storedId = '';
+      try {
+        storedId = String(localStorage.getItem('ll_player_' + roomId) || '');
+      } catch (e0) {
+        storedId = '';
+      }
+
       firebaseReady()
         .then(function () {
           var qx = parseQuery();
           var lobbyId = qx && qx.lobby ? String(qx.lobby) : '';
-          var playerId = getOrCreateLoveLetterPlayerId(roomId);
+          var playerId = storedId || getOrCreateLoveLetterPlayerId(roomId);
 
           if (lobbyId) {
             var mid = getOrCreateLobbyMemberId(lobbyId);
@@ -7944,13 +8189,34 @@
           }
 
           return joinPlayerInLoveLetterRoom(roomId, playerId, form.name, false).then(function (room) {
-            if (!room || !room.players || !room.players[playerId]) {
-              throw new Error('参加できません（ゲームが開始済みです）');
+            if (!room) throw new Error('部屋が見つかりません');
+
+            // If the game already started, joining is blocked; try to re-use the previous id.
+            if (room.players && room.players[playerId]) return playerId;
+            if (storedId && room.players && room.players[storedId]) {
+              setLoveLetterPlayerId(roomId, storedId);
+              return storedId;
             }
-            return playerId;
+
+            // Started game -> guide to rejoin picker.
+            if (String(room.phase || '') !== 'lobby') {
+              var q = {};
+              var v = getCacheBusterParam();
+              if (v) q.v = v;
+              q.room = roomId;
+              q.screen = 'loveletter_rejoin';
+              if (isHost) q.host = '1';
+              if (lobbyId) q.lobby = lobbyId;
+              setQuery(q);
+              route();
+              return '';
+            }
+
+            throw new Error('参加できません（ゲームが開始済みです）');
           });
         })
-        .then(function () {
+        .then(function (pid) {
+          if (!pid) return;
           var q = {};
           var v = getCacheBusterParam();
           if (v) q.v = v;
@@ -7958,6 +8224,12 @@
           q.screen = 'loveletter_player';
           q.player = '1';
           if (isHost) q.host = '1';
+          try {
+            var qx2 = parseQuery();
+            if (qx2 && qx2.lobby) q.lobby = String(qx2.lobby);
+          } catch (e2) {
+            // ignore
+          }
           setQuery(q);
           route();
         })
@@ -7978,6 +8250,109 @@
     } catch (e1) {
       // ignore
     }
+  }
+
+  function routeLoveLetterRejoin(roomId, isHost) {
+    var unsub = null;
+
+    firebaseReady()
+      .then(function () {
+        return subscribeLoveLetterRoom(roomId, function (room) {
+          if (!room) {
+            renderError(viewEl, '部屋が見つかりません');
+            return;
+          }
+
+          if (String(room.phase || '') === 'lobby') {
+            var q0 = {};
+            var v0 = getCacheBusterParam();
+            if (v0) q0.v = v0;
+            q0.room = roomId;
+            q0.screen = 'loveletter_join';
+            if (isHost) q0.host = '1';
+            try {
+              var qq = parseQuery();
+              if (qq && qq.lobby) q0.lobby = String(qq.lobby);
+            } catch (e0) {
+              // ignore
+            }
+            setQuery(q0);
+            route();
+            return;
+          }
+
+          renderLoveLetterRejoin(viewEl, { roomId: roomId, room: room });
+          clearInlineError('llRejoinError');
+          stripBackNavLinks(viewEl);
+
+          var goNew = document.getElementById('llGoNewJoin');
+          if (goNew && !goNew.__ll_bound) {
+            goNew.__ll_bound = true;
+            goNew.addEventListener('click', function () {
+              var q1 = {};
+              var v1 = getCacheBusterParam();
+              if (v1) q1.v = v1;
+              q1.room = roomId;
+              q1.screen = 'loveletter_join';
+              if (isHost) q1.host = '1';
+              try {
+                var qq2 = parseQuery();
+                if (qq2 && qq2.lobby) q1.lobby = String(qq2.lobby);
+              } catch (e1) {
+                // ignore
+              }
+              setQuery(q1);
+              route();
+            });
+          }
+
+          var picks = document.querySelectorAll('.llRejoinPick');
+          for (var i = 0; i < picks.length; i++) {
+            var b = picks[i];
+            if (!b || b.__ll_bound) continue;
+            b.__ll_bound = true;
+            b.addEventListener('click', function (ev) {
+              var el = ev && ev.currentTarget ? ev.currentTarget : null;
+              var pid = el ? String(el.getAttribute('data-pid') || '') : '';
+              if (!pid) {
+                setInlineError('llRejoinError', '選択に失敗しました');
+                return;
+              }
+              setLoveLetterPlayerId(roomId, pid);
+              touchLoveLetterPlayer(roomId, pid).catch(function () {
+                // ignore
+              });
+
+              var q2 = {};
+              var v2 = getCacheBusterParam();
+              if (v2) q2.v = v2;
+              q2.room = roomId;
+              q2.screen = 'loveletter_player';
+              q2.player = '1';
+              var p = room && room.players ? room.players[pid] : null;
+              if (isHost || (p && p.isHost)) q2.host = '1';
+              try {
+                var qq3 = parseQuery();
+                if (qq3 && qq3.lobby) q2.lobby = String(qq3.lobby);
+              } catch (e2) {
+                // ignore
+              }
+              setQuery(q2);
+              route();
+            });
+          }
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+    });
   }
 
   function routeLoveLetterHost(roomId) {
@@ -8241,8 +8616,60 @@
         }
       }
 
+      var replayBtn = document.getElementById('llReplay');
+      if (replayBtn && !replayBtn.__ll_bound) {
+        replayBtn.__ll_bound = true;
+        replayBtn.addEventListener('click', function () {
+          replayBtn.disabled = true;
+          resetLoveLetterToLobby(roomId, playerId)
+            .then(function () {
+              return startLoveLetterGame(roomId, playerId);
+            })
+            .catch(function (e) {
+              alert((e && e.message) || '失敗');
+            })
+            .finally(function () {
+              replayBtn.disabled = false;
+            });
+        });
+      }
+
+      var backBtn = document.getElementById('llBackToLobby');
+      if (backBtn && !backBtn.__ll_bound) {
+        backBtn.__ll_bound = true;
+        backBtn.addEventListener('click', function () {
+          var qx = parseQuery();
+          var lobbyId = qx && qx.lobby ? String(qx.lobby) : '';
+          if (!lobbyId) {
+            alert('ロビーIDがありません');
+            return;
+          }
+          backBtn.disabled = true;
+          firebaseReady()
+            .then(function () {
+              return setLobbyCurrentGame(lobbyId, null);
+            })
+            .then(function () {
+              var q = {};
+              var v = getCacheBusterParam();
+              if (v) q.v = v;
+              q.lobby = lobbyId;
+              q.screen = 'lobby_host';
+              setQuery(q);
+              route();
+            })
+            .catch(function (e) {
+              alert((e && e.message) || '失敗');
+            })
+            .finally(function () {
+              backBtn.disabled = false;
+            });
+        });
+      }
+
       var nextGameBtn = document.getElementById('llNextGame');
-      if (nextGameBtn) {
+      if (nextGameBtn && !nextGameBtn.__ll_bound) {
+        nextGameBtn.__ll_bound = true;
         nextGameBtn.addEventListener('click', function () {
           nextGameBtn.disabled = true;
           resetLoveLetterToLobby(roomId, playerId)
@@ -8529,7 +8956,9 @@
         lobby_player: 1,
         lobby_join: 1,
         join: 1,
+        ww_rejoin: 1,
         loveletter_join: 1,
+        loveletter_rejoin: 1,
         loveletter_player: 1,
         codenames_join: 1,
         codenames_player: 1,
@@ -8585,6 +9014,10 @@
       if (!roomId) return routeHome();
       return routeLoveLetterJoin(roomId, isHost);
     }
+    if (screen === 'loveletter_rejoin') {
+      if (!roomId) return routeHome();
+      return routeLoveLetterRejoin(roomId, isHost);
+    }
     if (screen === 'loveletter_host') {
       if (!roomId) return routeHome();
       return routeLoveLetterHost(roomId);
@@ -8613,6 +9046,7 @@
 
     if (!roomId) return routeHome();
 
+    if (screen === 'ww_rejoin') return routeWordwolfRejoin(roomId, isHost);
     if (screen === 'join') return routeJoin(roomId, isHost);
     if (isPlayer) return routePlayer(roomId, isHost);
     if (isHost) return routeHost(roomId);
@@ -8693,7 +9127,13 @@
         .then(function () {
           var qx = parseQuery();
           var lobbyId = qx && qx.lobby ? String(qx.lobby) : '';
-          var playerId = getOrCreateCodenamesPlayerId(roomId);
+          var storedId = '';
+          try {
+            storedId = String(localStorage.getItem('cn_player_' + roomId) || '');
+          } catch (e0) {
+            storedId = '';
+          }
+          var playerId = storedId || getOrCreateCodenamesPlayerId(roomId);
 
           if (lobbyId) {
             var mid = getOrCreateLobbyMemberId(lobbyId);
@@ -8703,10 +9143,28 @@
 
           return joinPlayerInCodenamesRoom(roomId, playerId, form.name, false)
             .then(function (room) {
-              if (!room || !room.players || !room.players[playerId]) {
-                throw new Error('参加できません（ゲームが開始済みです）');
+              if (!room) throw new Error('部屋が見つかりません');
+
+              if (room.players && room.players[playerId]) return playerId;
+              if (storedId && room.players && room.players[storedId]) {
+                setCodenamesPlayerId(roomId, storedId);
+                return storedId;
               }
-              return playerId;
+
+              if (String(room.phase || '') !== 'lobby') {
+                var q = {};
+                var v = getCacheBusterParam();
+                if (v) q.v = v;
+                q.room = roomId;
+                q.screen = 'codenames_rejoin';
+                if (lobbyId) q.lobby = lobbyId;
+                if (isHost) q.host = '1';
+                setQuery(q);
+                route();
+                return '';
+              }
+
+              throw new Error('参加できません（ゲームが開始済みです）');
             })
             .then(function (pid) {
               if (!lobbyId) return pid;
@@ -8725,7 +9183,8 @@
                 });
             });
         })
-        .then(function () {
+        .then(function (pid) {
+          if (!pid) return;
           var q = {};
           var v = getCacheBusterParam();
           if (v) q.v = v;
@@ -8733,6 +9192,12 @@
           q.screen = 'codenames_player';
           q.player = '1';
           if (isHost) q.host = '1';
+          try {
+            var qx2 = parseQuery();
+            if (qx2 && qx2.lobby) q.lobby = String(qx2.lobby);
+          } catch (e2) {
+            // ignore
+          }
           setQuery(q);
           route();
         })
@@ -9093,6 +9558,39 @@
               resetCodenamesToLobby(roomId).catch(function (e) {
                 alert((e && e.message) || '失敗');
               });
+            });
+          }
+
+          var backBtn = document.getElementById('cnBackToLobby');
+          if (backBtn && !backBtn.__cn_bound) {
+            backBtn.__cn_bound = true;
+            backBtn.addEventListener('click', function () {
+              var qx = parseQuery();
+              var lobbyId = qx && qx.lobby ? String(qx.lobby) : '';
+              if (!lobbyId) {
+                alert('ロビーIDがありません');
+                return;
+              }
+              backBtn.disabled = true;
+              firebaseReady()
+                .then(function () {
+                  return setLobbyCurrentGame(lobbyId, null);
+                })
+                .then(function () {
+                  var q = {};
+                  var v = getCacheBusterParam();
+                  if (v) q.v = v;
+                  q.lobby = lobbyId;
+                  q.screen = 'lobby_host';
+                  setQuery(q);
+                  route();
+                })
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  backBtn.disabled = false;
+                });
             });
           }
 
