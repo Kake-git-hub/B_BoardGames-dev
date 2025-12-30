@@ -9499,6 +9499,19 @@
       // ignore
     }
 
+    // Clear transient view-level classes so visual state doesn't leak across screens.
+    try {
+      if (viewEl && viewEl.classList) {
+        viewEl.classList.remove('result-win');
+        viewEl.classList.remove('result-lose');
+        viewEl.classList.remove('cn-turn-actor');
+        viewEl.classList.remove('ll-turn-actor');
+        viewEl.classList.remove('ll-turn-waiting');
+      }
+    } catch (eView0) {
+      // ignore
+    }
+
     var q = parseQuery();
     var screen = q.screen ? String(q.screen) : '';
     var st = getUrlState();
