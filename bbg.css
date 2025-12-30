@@ -195,6 +195,8 @@ body.ll-player-screen .ll-piles-box{position:fixed;top:4px;right:4px;z-index:100
 
 /* Love Letter: eliminated spectate */
 .ll-spectate-cards{display:flex;gap:10px;justify-content:center;align-items:flex-start;margin-top:6px}
+.ll-spectate-cards.ll-spectate-cards--stack{gap:0}
+.ll-spectate-cards.ll-spectate-cards--stack .ll-spectate-card + .ll-spectate-card{margin-left:clamp(-72px, -18vw, -28px)}
 .ll-spectate-card{width:min(180px, 40vw);aspect-ratio:3/4;border-radius:10px;border:1px solid var(--line);overflow:hidden;background:#0f1520}
 
 /* Modal spacing tweaks */

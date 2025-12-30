@@ -2386,6 +2386,9 @@
     var size = clamp(parseIntSafe(settings && settings.size, 5), 3, 8);
     var total = size * size;
 
+    var timerNormalSec = clamp(parseIntSafe(settings && settings.timerNormalSec, 60), 60, 600);
+    var timerFirstBonusSec = clamp(parseIntSafe(settings && settings.timerFirstBonusSec, 30), 0, 600);
+
     var firstTeam = randomInt(2) === 0 ? 'red' : 'blue';
 
     var pool = getCodenamesWordPool();
@@ -2412,7 +2415,7 @@
     var room = {
       createdAt: serverNowMs(),
       phase: 'lobby',
-      settings: { size: size },
+      settings: { size: size, timerNormalSec: timerNormalSec, timerFirstBonusSec: timerFirstBonusSec },
       board: {
         size: size,
         words: words,
@@ -2426,7 +2429,10 @@
         status: 'awaiting_clue',
         guessesLeft: 0,
         clue: { word: '', number: 0, by: '', at: 0 },
-        pending: {}
+        pending: {},
+        turnNo: 0,
+        startedAt: 0,
+        endsAt: 0
       },
       progress: {
         redRemaining: remainRed,
@@ -2436,6 +2442,31 @@
       players: {}
     };
     return setValue(base, room);
+  }
+
+  function getCodenamesTimerNormalSec(room) {
+    var s = room && room.settings ? room.settings : null;
+    var n = clamp(parseIntSafe(s && s.timerNormalSec, 60), 60, 600);
+    return n || 60;
+  }
+
+  function getCodenamesTimerFirstBonusSec(room) {
+    var s = room && room.settings ? room.settings : null;
+    var b = clamp(parseIntSafe(s && s.timerFirstBonusSec, 30), 0, 600);
+    if (b == null || isNaN(b)) b = 30;
+    return b;
+  }
+
+  function setCodenamesTimerSettings(roomId, normalSec, firstBonusSec) {
+    var base = codenamesRoomPath(roomId);
+    var n = clamp(parseIntSafe(normalSec, 60), 60, 600);
+    var b = clamp(parseIntSafe(firstBonusSec, 30), 0, 600);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'lobby') return room;
+      var settings = assign({}, room.settings || {}, { timerNormalSec: n, timerFirstBonusSec: b });
+      return assign({}, room, { settings: settings });
+    });
   }
 
   function joinPlayerInCodenamesRoom(roomId, playerId, name, isHostPlayer) {
@@ -2519,7 +2550,15 @@
         phase: 'lobby',
         players: players,
         clueLog: [],
-        turn: assign({}, room.turn || {}, { status: 'awaiting_clue', guessesLeft: 0, clue: { word: '', number: 0, by: '', at: 0 }, pending: {} }),
+        turn: assign({}, room.turn || {}, {
+          status: 'awaiting_clue',
+          guessesLeft: 0,
+          clue: { word: '', number: 0, by: '', at: 0 },
+          pending: {},
+          turnNo: 0,
+          startedAt: 0,
+          endsAt: 0
+        }),
         progress: { redRemaining: remainRed, blueRemaining: remainBlue },
         result: { winner: '', finishedAt: 0, reason: '' },
         board: assign({}, room.board || {}, { revealed: revealed })
@@ -2556,7 +2595,15 @@
         phase: 'lobby',
         players: nextPlayers,
         clueLog: [],
-        turn: assign({}, room.turn || {}, { status: 'awaiting_clue', guessesLeft: 0, clue: { word: '', number: 0, by: '', at: 0 }, pending: {} }),
+        turn: assign({}, room.turn || {}, {
+          status: 'awaiting_clue',
+          guessesLeft: 0,
+          clue: { word: '', number: 0, by: '', at: 0 },
+          pending: {},
+          turnNo: 0,
+          startedAt: 0,
+          endsAt: 0
+        }),
         progress: { redRemaining: remainRed, blueRemaining: remainBlue },
         result: { winner: '', finishedAt: 0, reason: '' },
         board: assign({}, room.board || {}, { revealed: revealed })
@@ -2596,6 +2643,11 @@
       if (counts.redSpymaster !== 1 || counts.blueSpymaster !== 1) return room;
       if (counts.redOperative < 1 || counts.blueOperative < 1) return room;
 
+      var now = serverNowMs();
+      var normalSec = getCodenamesTimerNormalSec(room);
+      var bonusSec = getCodenamesTimerFirstBonusSec(room);
+      var firstEndsAt = now + (normalSec + bonusSec) * 1000;
+
       return assign({}, room, {
         phase: 'playing',
         turn: assign({}, room.turn || {}, {
@@ -2603,7 +2655,10 @@
           status: 'awaiting_clue',
           guessesLeft: 0,
           clue: { word: '', number: 0, by: '', at: 0 },
-          pending: {}
+          pending: {},
+          turnNo: 1,
+          startedAt: now,
+          endsAt: firstEndsAt
         }),
         result: { winner: '', finishedAt: 0, reason: '' }
       });
@@ -2687,13 +2742,20 @@
       if (room.phase !== 'playing') return room;
       var team = room.turn && room.turn.team ? room.turn.team : 'red';
       var nextTeam = team === 'red' ? 'blue' : 'red';
+
+      var now = serverNowMs();
+      var normalSec = getCodenamesTimerNormalSec(room);
+      var nextTurnNo = clamp(parseIntSafe(room.turn && room.turn.turnNo, 1) + 1, 1, 9999);
       return assign({}, room, {
         turn: {
           team: nextTeam,
           status: 'awaiting_clue',
           guessesLeft: 0,
           clue: { word: '', number: 0, by: '', at: 0 },
-          pending: {}
+          pending: {},
+          turnNo: nextTurnNo,
+          startedAt: now,
+          endsAt: now + normalSec * 1000
         }
       });
     });
@@ -2757,12 +2819,18 @@
 
       if (shouldSwitch) {
         var nextTeam = room.turn.team === 'red' ? 'blue' : 'red';
+        var now = serverNowMs();
+        var normalSec = getCodenamesTimerNormalSec(room);
+        var nextTurnNo = clamp(parseIntSafe(room.turn && room.turn.turnNo, 1) + 1, 1, 9999);
         nextRoom.turn = {
           team: nextTeam,
           status: 'awaiting_clue',
           guessesLeft: 0,
           clue: { word: '', number: 0, by: '', at: 0 },
-          pending: {}
+          pending: {},
+          turnNo: nextTurnNo,
+          startedAt: now,
+          endsAt: now + normalSec * 1000
         };
         return nextRoom;
       }
@@ -2770,12 +2838,18 @@
       var left = Math.max(0, (room.turn.guessesLeft || 0) - 1);
       if (left === 0) {
         var nt = room.turn.team === 'red' ? 'blue' : 'red';
+        var now2 = serverNowMs();
+        var normalSec2 = getCodenamesTimerNormalSec(room);
+        var nextTurnNo2 = clamp(parseIntSafe(room.turn && room.turn.turnNo, 1) + 1, 1, 9999);
         nextRoom.turn = {
           team: nt,
           status: 'awaiting_clue',
           guessesLeft: 0,
           clue: { word: '', number: 0, by: '', at: 0 },
-          pending: {}
+          pending: {},
+          turnNo: nextTurnNo2,
+          startedAt: now2,
+          endsAt: now2 + normalSec2 * 1000
         };
         return nextRoom;
       }
@@ -4796,6 +4870,17 @@
     var canStart = phase === 'lobby' && counts.redSpymaster === 1 && counts.blueSpymaster === 1 && counts.redOperative >= 1 && counts.blueOperative >= 1;
     var actionHtml = '';
     if (!qrOnly && phase === 'lobby') {
+      var normalSec = getCodenamesTimerNormalSec(room);
+      var bonusSec = getCodenamesTimerFirstBonusSec(room);
+      var normalVals = [60, 90, 120, 150];
+      var bonusVals = [30, 60, 90, 120];
+      function idxOf(arr, v) {
+        for (var i = 0; i < arr.length; i++) if (arr[i] === v) return i;
+        return 0;
+      }
+      var normalIdx = idxOf(normalVals, normalSec);
+      var bonusIdx = idxOf(bonusVals, bonusSec);
+
       actionHtml =
         '<div class="stack">' +
         '<div class="muted">準備: 赤/青それぞれスパイマスター1人＋諜報員1人以上</div>' +
@@ -4809,6 +4894,18 @@
         ' / 諜報員 ' +
         counts.blueOperative +
         '</b></div>' +
+        '<hr />' +
+        '<div class="big">タイマー設定</div>' +
+        '<div class="field"><label>通常タイマー <b id="cnTimerNormalLabel">' +
+        escapeHtml(formatMMSS(normalVals[normalIdx])) +
+        '</b></label><input id="cnTimerNormal" type="range" min="0" max="3" step="1" value="' +
+        escapeHtml(String(normalIdx)) +
+        '" /></div>' +
+        '<div class="field"><label>初ターン追加 <b id="cnTimerBonusLabel">' +
+        escapeHtml(formatMMSS(bonusVals[bonusIdx])) +
+        '</b></label><input id="cnTimerBonus" type="range" min="0" max="3" step="1" value="' +
+        escapeHtml(String(bonusIdx)) +
+        '" /></div>' +
         (canStart ? '<button id="cnStart" class="primary">スタート</button>' : '<button class="primary" disabled>スタート</button>') +
         '</div>';
     }
@@ -5007,6 +5104,11 @@
     } catch (e) {
       // ignore
     }
+    var timerTopHtml = '';
+    if (phase === 'playing') {
+      timerTopHtml = '<div class="cn-timer">残り: <b id="cnTimer">-:--</b></div>';
+    }
+
     var topLine =
       '<div class="cn-topline">' +
       '<div class="cn-me">' +
@@ -5021,9 +5123,10 @@
       escapeHtml(turnLabel) +
       (who ? '（' + escapeHtml(who) + '）' : '') +
       '</div>' +
+      timerTopHtml +
       '</div>';
 
-    var gmToolsHtml = player && player.isHost ? '<div class="row"><button id="cnShowQr" class="ghost">QR再表示</button></div>' : '';
+    var gmToolsHtml = '';
 
     var lobbyHtml = '';
     if (phase === 'lobby') {
@@ -5059,6 +5162,17 @@
       var canStart = counts.redSpymaster === 1 && counts.blueSpymaster === 1 && counts.redOperative >= 1 && counts.blueOperative >= 1;
       var isGm = !!(player && player.isHost);
 
+      var normalSec = getCodenamesTimerNormalSec(room);
+      var bonusSec = getCodenamesTimerFirstBonusSec(room);
+      var normalVals = [60, 90, 120, 150];
+      var bonusVals = [30, 60, 90, 120];
+      function idxOf2(arr, v) {
+        for (var i = 0; i < arr.length; i++) if (arr[i] === v) return i;
+        return 0;
+      }
+      var normalIdx = idxOf2(normalVals, normalSec);
+      var bonusIdx = idxOf2(bonusVals, bonusSec);
+
       lobbyHtml =
         '<div class="stack">' +
         '<div class="big">待機中</div>' +
@@ -5082,6 +5196,18 @@
             ' / 諜報員 ' +
             counts.blueOperative +
             '</b></div>' +
+            '<hr />' +
+            '<div class="big">タイマー設定</div>' +
+            '<div class="field"><label>通常タイマー <b id="cnTimerNormalLabel">' +
+            escapeHtml(formatMMSS(normalVals[normalIdx])) +
+            '</b></label><input id="cnTimerNormal" type="range" min="0" max="3" step="1" value="' +
+            escapeHtml(String(normalIdx)) +
+            '" /></div>' +
+            '<div class="field"><label>初ターン追加 <b id="cnTimerBonusLabel">' +
+            escapeHtml(formatMMSS(bonusVals[bonusIdx])) +
+            '</b></label><input id="cnTimerBonus" type="range" min="0" max="3" step="1" value="' +
+            escapeHtml(String(bonusIdx)) +
+            '" /></div>' +
             (canStart ? '<button id="cnStartFromPlayer" class="primary">スタート</button>' : '<button class="primary" disabled>スタート</button>')
           : (isHost ? '<div class="muted">※ スタートはGMが行います。</div>' : '')) +
         '<hr />' +
@@ -5151,7 +5277,7 @@
     if (phase === 'playing') {
       var ttt = room.turn || {};
       var myTurn = myTeam && ttt.team === myTeam;
-      if (myTurn && ttt.status === 'guessing') {
+      if (myTurn && ttt.status === 'guessing' && myRole === 'operative') {
         actionsHtml = '<hr /><div class="row"><button id="cnEndTurn" class="ghost">ターン終了</button></div>';
       }
     }
@@ -6194,7 +6320,7 @@
   function routeLobbyHost(lobbyId) {
     var unsub = null;
     var mid = getOrCreateLobbyMemberId(lobbyId);
-    var ui = { selectedKind: 'wordwolf', lastLobby: null };
+    var ui = { selectedKind: '', lastLobby: null };
     var joinUrl = makeLobbyJoinUrl(lobbyId);
 
     function drawQr(size) {
@@ -6343,6 +6469,136 @@
       return a;
     }
 
+    function shuffleDifferent(list) {
+      var base = list.slice();
+      if (base.length <= 1) return base;
+      var baseKey = base.join('|');
+      for (var i = 0; i < 10; i++) {
+        var out = shuffle(base);
+        if (out.join('|') !== baseKey) return out;
+      }
+      var a = base.slice();
+      var t = a[0];
+      a[0] = a[1];
+      a[1] = t;
+      return a;
+    }
+
+    function normalizeCnAssign(a) {
+      var out = {};
+      if (!a || typeof a !== 'object') return out;
+      var keys = Object.keys(a);
+      for (var i = 0; i < keys.length; i++) {
+        var k = String(keys[i] || '');
+        if (!k) continue;
+        var v = a[k] || {};
+        out[k] = { team: String(v.team || ''), role: String(v.role || '') };
+      }
+      return out;
+    }
+
+    function cnAssignEquals(a, b, ids) {
+      var aa = normalizeCnAssign(a);
+      var bb = normalizeCnAssign(b);
+      var list = Array.isArray(ids) ? ids : Object.keys(assign({}, aa, bb));
+      for (var i = 0; i < list.length; i++) {
+        var id = String(list[i] || '');
+        if (!id) continue;
+        var xa = aa[id] || { team: '', role: '' };
+        var xb = bb[id] || { team: '', role: '' };
+        if (String(xa.team || '') !== String(xb.team || '')) return false;
+        if (String(xa.role || '') !== String(xb.role || '')) return false;
+      }
+      return true;
+    }
+
+    function buildRandomCnAssign(ids) {
+      var shuffled = shuffleDifferent(ids);
+      var assignMap = {};
+
+      // Balanced team assignment by shuffled order.
+      for (var i = 0; i < shuffled.length; i++) {
+        var id = String(shuffled[i] || '');
+        if (!id) continue;
+        assignMap[id] = { team: i % 2 === 0 ? 'red' : 'blue', role: 'operative' };
+      }
+
+      // Choose one spymaster per team.
+      var redIds = [];
+      var blueIds = [];
+      for (var j = 0; j < shuffled.length; j++) {
+        var id2 = String(shuffled[j] || '');
+        if (!id2 || !assignMap[id2]) continue;
+        if (assignMap[id2].team === 'red') redIds.push(id2);
+        if (assignMap[id2].team === 'blue') blueIds.push(id2);
+      }
+      if (redIds.length) {
+        var redSm = redIds[randomInt(redIds.length)];
+        if (redSm && assignMap[redSm]) assignMap[redSm].role = 'spymaster';
+      }
+      if (blueIds.length) {
+        var blueSm = blueIds[randomInt(blueIds.length)];
+        if (blueSm && assignMap[blueSm]) assignMap[blueSm].role = 'spymaster';
+      }
+
+      return assignMap;
+    }
+
+    function forceDifferentCnAssign(prevAssign, ids) {
+      // Guaranteed change fallback: flip one member's team (and rebuild roles validly).
+      var next = normalizeCnAssign(prevAssign);
+
+      var list = Array.isArray(ids) ? ids.slice() : Object.keys(next);
+      if (list.length < 2) return buildRandomCnAssign(list);
+
+      // Ensure all ids exist in map (so flip works even when missing)
+      for (var i = 0; i < list.length; i++) {
+        var id = String(list[i] || '');
+        if (!id) continue;
+        if (!next[id]) next[id] = { team: '', role: '' };
+        if (!next[id].team) next[id].team = i % 2 === 0 ? 'red' : 'blue';
+        if (!next[id].role) next[id].role = 'operative';
+      }
+
+      // Pick a member and flip their team.
+      var pickId = '';
+      for (var t = 0; t < list.length; t++) {
+        var id2 = String(list[t] || '');
+        if (!id2) continue;
+        pickId = id2;
+        break;
+      }
+      if (pickId) {
+        next[pickId].team = next[pickId].team === 'red' ? 'blue' : 'red';
+      }
+
+      // Rebuild roles: all operative first
+      for (var k = 0; k < list.length; k++) {
+        var id3 = String(list[k] || '');
+        if (!id3 || !next[id3]) continue;
+        next[id3].role = 'operative';
+      }
+
+      // Assign spymasters again.
+      var redIds = [];
+      var blueIds = [];
+      for (var m = 0; m < list.length; m++) {
+        var id4 = String(list[m] || '');
+        if (!id4 || !next[id4]) continue;
+        if (next[id4].team === 'red') redIds.push(id4);
+        if (next[id4].team === 'blue') blueIds.push(id4);
+      }
+      if (redIds.length) {
+        var redSm = redIds[randomInt(redIds.length)];
+        if (redSm && next[redSm]) next[redSm].role = 'spymaster';
+      }
+      if (blueIds.length) {
+        var blueSm = blueIds[randomInt(blueIds.length)];
+        if (blueSm && next[blueSm]) next[blueSm].role = 'spymaster';
+      }
+      return next;
+    }
+
     function bindHostButtons(lobby) {
       function currentLobby() {
         return ui && ui.lastLobby ? ui.lastLobby : lobby;
@@ -6418,7 +6674,7 @@
         shuffleOrderBtn.addEventListener('click', function () {
           var order = normalizeOrder(currentLobby());
           shuffleOrderBtn.disabled = true;
-          setLobbyOrder(lobbyId, shuffle(order))
+          setLobbyOrder(lobbyId, shuffleDifferent(order))
             .catch(function (e) {
               setInlineError('lobbyHostError', (e && e.message) || 'シャッフルに失敗しました');
             })
@@ -6466,24 +6722,22 @@
       if (cnShuffleBtn && !cnShuffleBtn.__lobby_bound) {
         cnShuffleBtn.__lobby_bound = true;
         cnShuffleBtn.addEventListener('click', function () {
-          var ids = normalizeOrder(currentLobby());
-          var assign = {};
-          for (var i2 = 0; i2 < ids.length; i2++) {
-            var id2 = ids[i2];
-            var team = i2 % 2 === 0 ? 'red' : 'blue';
-            assign[id2] = { team: team, role: 'operative' };
+          var lob = currentLobby();
+          var ids = normalizeOrder(lob);
+          var prevAssign = (lob && lob.codenamesAssign) || {};
+
+          // Try multiple times to ensure we actually change the assignment.
+          var assign = null;
+          for (var tries = 0; tries < 20; tries++) {
+            var cand = buildRandomCnAssign(ids);
+            if (!cnAssignEquals(prevAssign, cand, ids)) {
+              assign = cand;
+              break;
+            }
           }
-          // ensure one spymaster per team when possible
-          var redSm = '';
-          var blueSm = '';
-          for (var j2 = 0; j2 < ids.length; j2++) {
-            var id3 = ids[j2];
-            if (!id3 || !assign[id3]) continue;
-            if (assign[id3].team === 'red' && !redSm) redSm = id3;
-            if (assign[id3].team === 'blue' && !blueSm) blueSm = id3;
+          if (!assign) {
+            assign = forceDifferentCnAssign(prevAssign, ids);
           }
-          if (redSm) assign[redSm].role = 'spymaster';
-          if (blueSm) assign[blueSm].role = 'spymaster';
 
           cnShuffleBtn.disabled = true;
           setLobbyCodenamesAssignBulk(lobbyId, assign)
@@ -6918,6 +7172,21 @@
       return a;
     }
 
+    function shuffleDifferent(list) {
+      var base = list.slice();
+      if (base.length <= 1) return base;
+      var baseKey = base.join('|');
+      for (var i = 0; i < 10; i++) {
+        var out = shuffle(base);
+        if (out.join('|') !== baseKey) return out;
+      }
+      var a = base.slice();
+      var t = a[0];
+      a[0] = a[1];
+      a[1] = t;
+      return a;
+    }
+
     firebaseReady()
       .then(function () {
         return subscribeLobby(lobbyId, function (lobby) {
@@ -6943,7 +7212,7 @@
             shuffleBtn.addEventListener('click', function () {
               shuffleBtn.disabled = true;
               var order = normalizeOrder(lobby);
-              setLobbyOrder(lobbyId, shuffle(order))
+              setLobbyOrder(lobbyId, shuffleDifferent(order))
                 .catch(function (e) {
                   setInlineError('lobbyAssignError', (e && e.message) || 'シャッフルに失敗しました');
                 })
@@ -8364,7 +8633,7 @@
         gridSp +=
           '<div class="ll-showdown-item">' +
           '<div class="ll-modal-name">' + escapeHtml(snm) + '</div>' +
-          '<div class="ll-spectate-cards">' + cardsHtml + '</div>' +
+          '<div class="ll-spectate-cards' + (sh.length >= 2 ? ' ll-spectate-cards--stack' : '') + '">' + cardsHtml + '</div>' +
           '</div>';
       }
       if (gridSp) {
@@ -10135,6 +10404,46 @@
         });
       }
 
+      var normalVals = [60, 90, 120, 150];
+      var bonusVals = [30, 60, 90, 120];
+
+      function updateTimerLabels() {
+        var nEl = document.getElementById('cnTimerNormal');
+        var bEl = document.getElementById('cnTimerBonus');
+        var nl = document.getElementById('cnTimerNormalLabel');
+        var bl = document.getElementById('cnTimerBonusLabel');
+        var ni = clamp(parseIntSafe(nEl && nEl.value, 0), 0, 3);
+        var bi = clamp(parseIntSafe(bEl && bEl.value, 0), 0, 3);
+        if (nl) nl.textContent = formatMMSS(normalVals[ni] || 60);
+        if (bl) bl.textContent = formatMMSS(bonusVals[bi] || 30);
+      }
+
+      var nSlider = document.getElementById('cnTimerNormal');
+      var bSlider = document.getElementById('cnTimerBonus');
+      if (nSlider && !nSlider.__cn_bound) {
+        nSlider.__cn_bound = true;
+        nSlider.addEventListener('input', updateTimerLabels);
+        nSlider.addEventListener('change', function () {
+          var ni = clamp(parseIntSafe(nSlider.value, 0), 0, 3);
+          var bi = clamp(parseIntSafe(bSlider && bSlider.value, 0), 0, 3);
+          setCodenamesTimerSettings(roomId, normalVals[ni], bonusVals[bi]).catch(function () {
+            // ignore
+          });
+        });
+      }
+      if (bSlider && !bSlider.__cn_bound) {
+        bSlider.__cn_bound = true;
+        bSlider.addEventListener('input', updateTimerLabels);
+        bSlider.addEventListener('change', function () {
+          var ni = clamp(parseIntSafe(nSlider && nSlider.value, 0), 0, 3);
+          var bi = clamp(parseIntSafe(bSlider.value, 0), 0, 3);
+          setCodenamesTimerSettings(roomId, normalVals[ni], bonusVals[bi]).catch(function () {
+            // ignore
+          });
+        });
+      }
+      updateTimerLabels();
+
       var backBtn = document.getElementById('cnBackToGame');
       if (backBtn) {
         backBtn.addEventListener('click', function () {
@@ -10215,6 +10524,7 @@
   function routeCodenamesPlayer(roomId, isHost) {
     var playerId = getOrCreateCodenamesPlayerId(roomId);
     var unsub = null;
+    var timerHandle = null;
     var ui = { lobbyReturnWatching: false, lobbyUnsub: null };
 
     var lobbyId = '';
@@ -10274,6 +10584,24 @@
           var player = room.players ? room.players[playerId] : null;
           renderCodenamesPlayer(viewEl, { roomId: roomId, playerId: playerId, room: room, player: player, isHost: isHost, lobbyId: lobbyId });
 
+          function rerenderCnTimer() {
+            var el = document.getElementById('cnTimer');
+            if (!el) return;
+            if (!room || room.phase !== 'playing') return;
+            var endAt = room.turn && room.turn.endsAt ? room.turn.endsAt : 0;
+            if (!endAt) {
+              el.textContent = '-:--';
+              return;
+            }
+            var remain = Math.max(0, Math.floor((endAt - serverNowMs()) / 1000));
+            el.textContent = formatMMSS(remain);
+          }
+
+          if (timerHandle) clearInterval(timerHandle);
+          timerHandle = setInterval(function () {
+            rerenderCnTimer();
+          }, 250);
+
           var saveBtn = document.getElementById('cnSavePrefs');
           if (saveBtn && !saveBtn.__cn_bound) {
             saveBtn.__cn_bound = true;
@@ -10302,6 +10630,45 @@
               });
             });
           }
+
+          var normalVals = [60, 90, 120, 150];
+          var bonusVals = [30, 60, 90, 120];
+          function updateTimerLabels() {
+            var nEl = document.getElementById('cnTimerNormal');
+            var bEl = document.getElementById('cnTimerBonus');
+            var nl = document.getElementById('cnTimerNormalLabel');
+            var bl = document.getElementById('cnTimerBonusLabel');
+            var ni = clamp(parseIntSafe(nEl && nEl.value, 0), 0, 3);
+            var bi = clamp(parseIntSafe(bEl && bEl.value, 0), 0, 3);
+            if (nl) nl.textContent = formatMMSS(normalVals[ni] || 60);
+            if (bl) bl.textContent = formatMMSS(bonusVals[bi] || 30);
+          }
+
+          var nSlider = document.getElementById('cnTimerNormal');
+          var bSlider = document.getElementById('cnTimerBonus');
+          if (nSlider && !nSlider.__cn_bound) {
+            nSlider.__cn_bound = true;
+            nSlider.addEventListener('input', updateTimerLabels);
+            nSlider.addEventListener('change', function () {
+              var ni = clamp(parseIntSafe(nSlider.value, 0), 0, 3);
+              var bi = clamp(parseIntSafe(bSlider && bSlider.value, 0), 0, 3);
+              setCodenamesTimerSettings(roomId, normalVals[ni], bonusVals[bi]).catch(function () {
+                // ignore
+              });
+            });
+          }
+          if (bSlider && !bSlider.__cn_bound) {
+            bSlider.__cn_bound = true;
+            bSlider.addEventListener('input', updateTimerLabels);
+            bSlider.addEventListener('change', function () {
+              var ni = clamp(parseIntSafe(nSlider && nSlider.value, 0), 0, 3);
+              var bi = clamp(parseIntSafe(bSlider.value, 0), 0, 3);
+              setCodenamesTimerSettings(roomId, normalVals[ni], bonusVals[bi]).catch(function () {
+                // ignore
+              });
+            });
+          }
+          updateTimerLabels();
 
           var contBtn = document.getElementById('cnContinue');
           if (contBtn && !contBtn.__cn_bound) {
@@ -10394,21 +10761,6 @@
             });
           }
 
-          var showQrBtn = document.getElementById('cnShowQr');
-          if (showQrBtn && !showQrBtn.__cn_bound) {
-            showQrBtn.__cn_bound = true;
-            showQrBtn.addEventListener('click', function () {
-              var q = {};
-              var v = getCacheBusterParam();
-              if (v) q.v = v;
-              q.room = roomId;
-              q.host = '1';
-              q.qr = '1';
-              q.screen = 'codenames_host';
-              setQuery(q);
-              route();
-            });
-          }
 
           var clueBtn = document.getElementById('cnSubmitClue');
           if (clueBtn && !clueBtn.__cn_bound) {
@@ -10558,6 +10910,7 @@
       } catch (e) {
         // ignore
       }
+      if (timerHandle) clearInterval(timerHandle);
     });
   }
 
