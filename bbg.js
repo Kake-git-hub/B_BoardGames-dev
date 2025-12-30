@@ -3323,13 +3323,16 @@
     protectedMap[startId] = false;
     if (hands[startId] && deck.length) hands[startId].push(String(deck.pop()));
 
-    // Minister(7) overload rule: if you already have 7 and draw so total >= 12, you immediately lose.
+    // Minister(7) overload rule: if you have 7 and your 2-card total >= 12, you immediately lose.
     // Hold the round until the player acknowledges.
     var startHand = Array.isArray(hands[startId]) ? hands[startId] : [];
-    if (startHand.length >= 2 && String(startHand[0]) === '7') {
-      var drawn0 = String(startHand[1] || '');
-      var dv0 = parseIntSafe(drawn0, 0);
-      if (dv0 && 7 + dv0 >= 12) {
+    if (startHand.length >= 2) {
+      var a0 = String(startHand[0] || '');
+      var b0 = String(startHand[1] || '');
+      var av0 = parseIntSafe(a0, 0);
+      var bv0 = parseIntSafe(b0, 0);
+      var total0 = (av0 || 0) + (bv0 || 0);
+      if ((a0 === '7' || b0 === '7') && total0 >= 12) {
         // eliminate and store reveal
         eliminated[startId] = true;
         protectedMap[startId] = false;
@@ -3353,7 +3356,7 @@
           eliminated: eliminated,
           protected: protectedMap,
           peek: null,
-          reveal: { type: 'minister_overload', by: startId, had: '7', drew: drawn0 },
+          reveal: { type: 'minister_overload', by: startId, had: '7', drew: b0 },
           waitFor: { type: 'minister_overload_ack', by: startId },
           winners: []
         };
@@ -3606,7 +3609,7 @@
         protectedMap[actorId] = true;
         logText += '（保護）';
       } else if (card === '5') {
-        // Prince
+        // Wizard
         var t5 = action && action.target ? String(action.target) : '';
         var allowSelf = true;
         var eligible5 = eligibleTargetIds(true);
@@ -3615,22 +3618,28 @@
           if (isProtected(t5)) {
             logText += ' → ' + pname(t5) + '（僧侶により保護中：無効）';
           } else {
-          var old = getSingleHand(t5);
-          if (old) pushDiscard(t5, old);
-          setSingleHand(t5, '');
-          logText += ' → ' + pname(t5) + ' に捨て札';
-          if (String(old) === '8') {
-            eliminatePlayer(t5, 'prince_princess');
-            logText += '（姫：脱落）';
-          } else {
-            var drawn = llDrawFromRound(round);
-            if (drawn) {
-              setSingleHand(t5, drawn);
-              logText += '（引き直し）';
+            var old = getSingleHand(t5);
+            if (old) pushDiscard(t5, old);
+            setSingleHand(t5, '');
+            logText += ' → ' + pname(t5) + ' に捨て札';
+            var drawn = '';
+            if (String(old) === '8') {
+              eliminatePlayer(t5, 'wizard_princess');
+              logText += '（姫：脱落）';
             } else {
-              logText += '（山札なし）';
+              var d5 = llDrawFromRound(round);
+              if (d5) {
+                drawn = String(d5);
+                setSingleHand(t5, drawn);
+                logText += '（引き直し）';
+              } else {
+                logText += '（山札なし）';
+              }
             }
-          }
+
+            // Show discarded card (and drawn card if any), and wait for actor to proceed.
+            round.reveal = { type: 'wizard_discard', by: actorId, target: t5, discarded: String(old || ''), drew: String(drawn || '') };
+            round.waitFor = { type: 'wizard_ack', by: actorId };
           }
         } else {
           logText += '（対象なし）';
@@ -3661,9 +3670,8 @@
         // Countess
         logText += '（効果なし）';
       } else if (card === '8') {
-        // Princess
-        eliminatePlayer(actorId, 'princess');
-        logText += '（姫を捨てた：脱落）';
+        // Princess (cannot be played by choice)
+        return room;
       }
 
       // Write back updated round parts.
@@ -3726,10 +3734,9 @@
         if (drawn2) {
           var before = nextHand.length ? String(nextHand[0]) : '';
           nextHand.push(String(drawn2));
-          // Minister overload: if holding 7 and drew so total >= 12, you immediately lose.
-          if (String(before) === '7') {
-            var dv = parseIntSafe(drawn2, 0);
-            if (dv && 7 + dv >= 12) {
+          // Minister overload: if you have 7 and your 2-card total >= 12, you immediately lose.
+          var total = (parseIntSafe(before, 0) || 0) + (parseIntSafe(drawn2, 0) || 0);
+          if ((String(before) === '7' || String(drawn2) === '7') && total >= 12) {
               // eliminate and pause until ack
               eliminated[next.id] = true;
               protectedMap[next.id] = false;
@@ -3743,7 +3750,6 @@
               round.waitFor = { type: 'minister_overload_ack', by: next.id };
               nextRoom.round = round;
               return nextRoom;
-            }
           }
         }
       }
@@ -3839,9 +3845,8 @@
         if (drawn2) {
           var before = nextHand.length ? String(nextHand[0]) : '';
           nextHand.push(String(drawn2));
-          if (String(before) === '7') {
-            var dv = parseIntSafe(drawn2, 0);
-            if (dv && 7 + dv >= 12) {
+          var total = (parseIntSafe(before, 0) || 0) + (parseIntSafe(drawn2, 0) || 0);
+          if ((String(before) === '7' || String(drawn2) === '7') && total >= 12) {
               eliminated[next.id] = true;
               protectedMap[next.id] = false;
               for (var mdi = 0; mdi < nextHand.length; mdi++) pushDiscard(next.id, nextHand[mdi]);
@@ -3854,7 +3859,6 @@
               round.waitFor = { type: 'minister_overload_ack', by: next.id };
               nextRoom.round = round;
               return nextRoom;
-            }
           }
         }
       }
@@ -6168,6 +6172,42 @@
           '</div>' +
           '</div>' +
           '</div>';
+      } else if (rv.type === 'wizard_discard') {
+        var by3 = String(rv.by || '');
+        if (String(playerId) === by3) {
+          var tId = String(rv.target || '');
+          var tName = ps[tId] ? formatPlayerDisplayName(ps[tId]) : tId;
+          var discarded = String(rv.discarded || '');
+          var drew = String(rv.drew || '');
+          modalHtml =
+            '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
+            '<div class="ll-overlay-backdrop"></div>' +
+            '<div class="ll-overlay-panel">' +
+            '<div class="big">魔術師：捨て札</div>' +
+            '<div class="ll-compare-row">' +
+            '<div class="ll-compare-col">' +
+            '<div class="ll-modal-name">' +
+            escapeHtml(tName) +
+            '</div>' +
+            '<div class="ll-compare-card">' +
+            llCardImgHtml(discarded) +
+            '</div>' +
+            '</div>' +
+            (drew
+              ? '<div class="ll-compare-col">' +
+                '<div class="ll-modal-name">引いたカード</div>' +
+                '<div class="ll-compare-card">' +
+                llCardImgHtml(drew) +
+                '</div>' +
+                '</div>'
+              : '') +
+            '</div>' +
+            '<div class="row" style="justify-content:flex-end">' +
+            '<button id="llAck" class="primary">次へ</button>' +
+            '</div>' +
+            '</div>' +
+            '</div>';
+        }
       }
     }
 
@@ -6175,9 +6215,9 @@
       viewEl,
       '\n    <div class="stack ll-player">\n      <div class="big ll-player-name">' +
         escapeHtml(selfName) +
-        '</div>\n\n      <div class="card ll-status-card" style="padding:10px">\n        ' +
+        '</div>\n\n      ' +
         pilesHtml +
-        '\n        <div class="ll-topline">\n          <div class="ll-status">' +
+        '\n\n      <div class="card ll-status-card" style="padding:10px">\n        <div class="ll-topline">\n          <div class="ll-status">' +
         escapeHtml(statusText || '') +
         '</div>\n        </div>\n      </div>\n\n      ' +
         (resultHtml || '') +
@@ -6592,6 +6632,7 @@
 
             var rank = String(btn.getAttribute('data-rank') || '');
             if (!rank) return;
+            if (rank === '8') return;
 
             // Enforce 大臣(7) mandatory rule on UI side too.
             try {
