@@ -4434,6 +4434,7 @@
     var lobbyId = opts.lobbyId;
     var lobby = opts.lobby;
     var joinUrl = opts.joinUrl || '';
+    var myName = opts.myName || '';
     var currentGame = (lobby && lobby.currentGame) || null;
     var currentLabel = currentGame && currentGame.kind ? String(currentGame.kind) : '';
 
@@ -4483,7 +4484,7 @@
         listHtml +
         '<div class="row">' +
         '<button id="lobbyShuffle" class="ghost">シャッフル</button>' +
-          '\n      </div>\n    </div>\n  '
+        '</div>' +
         '</div>';
     }
 
@@ -4559,7 +4560,9 @@
         escapeHtml(joinUrl || '') +
         '</div>\n              <div class="row">\n                <button id="copyJoinUrl" class="ghost">コピー</button>\n              </div>\n              <div class="muted" id="copyStatus"></div>\n            </div>\n          </div>\n        </div>\n        <div class="muted center" id="qrError"></div>\n      </div>\n\n      <div class="stack">\n        <div class="muted">参加者</div>\n        ' +
         lobbyMembersSummaryHtml(lobby) +
-        '\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>ゲーム選択</label>\n        <select id="lobbyGameKind">\n          <option value="wordwolf" ' +
+        '\n      </div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">この端末（GM）の名前</div>\n        <div class="row" style="gap:8px;align-items:center">\n          <input id="lobbyMyName" placeholder="例: GM" value="' +
+        escapeHtml(myName || loadPersistedName() || '') +
+        '" style="flex:1" />\n          <button id="lobbyUpdateMyName" class="ghost">変更</button>\n        </div>\n        <div class="muted">※ 参加者一覧に反映されます。</div>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>ゲーム選択</label>\n        <select id="lobbyGameKind">\n          <option value="wordwolf" ' +
         (selectedKind === 'wordwolf' ? 'selected' : '') +
         '>ワードウルフ</option>\n          <option value="loveletter" ' +
         (selectedKind === 'loveletter' ? 'selected' : '') +
@@ -6341,6 +6344,10 @@
     }
 
     function bindHostButtons(lobby) {
+      function currentLobby() {
+        return ui && ui.lastLobby ? ui.lastLobby : lobby;
+      }
+
       var copyBtn = document.getElementById('copyJoinUrl');
       if (copyBtn && !copyBtn.__lobby_bound) {
         copyBtn.__lobby_bound = true;
@@ -6353,6 +6360,45 @@
             })
             .catch(function () {
               if (status) status.textContent = 'コピーに失敗しました';
+            });
+        });
+      }
+
+      var updateNameBtn = document.getElementById('lobbyUpdateMyName');
+      if (updateNameBtn && !updateNameBtn.__lobby_bound) {
+        updateNameBtn.__lobby_bound = true;
+        updateNameBtn.addEventListener('click', function () {
+          var nameEl = document.getElementById('lobbyMyName');
+          var name = String((nameEl && nameEl.value) || '').trim();
+          if (!name) {
+            setInlineError('lobbyHostError', '名前を入力してください。');
+            return;
+          }
+
+          clearInlineError('lobbyHostError');
+          savePersistedName(name);
+          updateNameBtn.disabled = true;
+
+          var lob = currentLobby();
+          var hostMid = lob && lob.hostMid ? String(lob.hostMid) : '';
+          var me = lob && lob.members && mid ? lob.members[mid] : null;
+          var isGmDevice = true;
+          try {
+            // Preserve GM-device flag when present; treat host as GM-capable.
+            isGmDevice = !!(String(hostMid) === String(mid) || (me && me.isGmDevice));
+          } catch (e0) {
+            isGmDevice = true;
+          }
+
+          firebaseReady()
+            .then(function () {
+              return joinLobbyMember(lobbyId, mid, name, isGmDevice);
+            })
+            .catch(function (e) {
+              setInlineError('lobbyHostError', (e && e.message) || '更新に失敗しました');
+            })
+            .finally(function () {
+              updateNameBtn.disabled = false;
             });
         });
       }
@@ -6370,7 +6416,7 @@
       if (shuffleOrderBtn && !shuffleOrderBtn.__lobby_bound) {
         shuffleOrderBtn.__lobby_bound = true;
         shuffleOrderBtn.addEventListener('click', function () {
-          var order = normalizeOrder(lobby);
+          var order = normalizeOrder(currentLobby());
           shuffleOrderBtn.disabled = true;
           setLobbyOrder(lobbyId, shuffle(order))
             .catch(function (e) {
@@ -6390,7 +6436,7 @@
         upBtn.addEventListener('click', function (ev) {
           var mid2 = String((ev && ev.currentTarget && ev.currentTarget.getAttribute('data-mid')) || '');
           if (!mid2) return;
-          var order = normalizeOrder(lobby);
+          var order = normalizeOrder(currentLobby());
           var idx = order.indexOf(mid2);
           if (idx <= 0) return;
           setLobbyOrder(lobbyId, swap(order, idx, idx - 1)).catch(function (e) {
@@ -6407,7 +6453,7 @@
         downBtn.addEventListener('click', function (ev2) {
           var mid3 = String((ev2 && ev2.currentTarget && ev2.currentTarget.getAttribute('data-mid')) || '');
           if (!mid3) return;
-          var order = normalizeOrder(lobby);
+          var order = normalizeOrder(currentLobby());
           var idx2 = order.indexOf(mid3);
           if (idx2 < 0 || idx2 >= order.length - 1) return;
           setLobbyOrder(lobbyId, swap(order, idx2, idx2 + 1)).catch(function (e) {
@@ -6420,7 +6466,7 @@
       if (cnShuffleBtn && !cnShuffleBtn.__lobby_bound) {
         cnShuffleBtn.__lobby_bound = true;
         cnShuffleBtn.addEventListener('click', function () {
-          var ids = normalizeOrder(lobby);
+          var ids = normalizeOrder(currentLobby());
           var assign = {};
           for (var i2 = 0; i2 < ids.length; i2++) {
             var id2 = ids[i2];
@@ -6650,7 +6696,14 @@
       if (!ui.selectedKind && !kindFromCg && lobby && lobby.lastKind) ui.selectedKind = String(lobby.lastKind || '');
       if (!ui.selectedKind) ui.selectedKind = 'wordwolf';
 
-      renderLobbyHost(viewEl, { lobbyId: lobbyId, lobby: lobby, selectedKind: ui.selectedKind, joinUrl: joinUrl });
+      var myName = '';
+      try {
+        myName = lobby && lobby.members && mid && lobby.members[mid] ? String(lobby.members[mid].name || '').trim() : '';
+      } catch (e0) {
+        myName = '';
+      }
+
+      renderLobbyHost(viewEl, { lobbyId: lobbyId, lobby: lobby, selectedKind: ui.selectedKind, joinUrl: joinUrl, myName: myName });
       bindHostButtons(lobby);
       drawQr(160);
     }
@@ -6884,13 +6937,12 @@
           renderLobbyAssign(viewEl, { lobbyId: lobbyId, lobby: lobby, canEdit: canEdit });
           clearInlineError('lobbyAssignError');
 
-          var order = normalizeOrder(lobby);
-
           var shuffleBtn = document.getElementById('lobbyShuffle');
           if (shuffleBtn && !shuffleBtn.__lobby_bound) {
             shuffleBtn.__lobby_bound = true;
             shuffleBtn.addEventListener('click', function () {
               shuffleBtn.disabled = true;
+              var order = normalizeOrder(lobby);
               setLobbyOrder(lobbyId, shuffle(order))
                 .catch(function (e) {
                   setInlineError('lobbyAssignError', (e && e.message) || 'シャッフルに失敗しました');
@@ -6909,6 +6961,7 @@
             upBtn.addEventListener('click', function (ev) {
               var mid2 = String((ev && ev.currentTarget && ev.currentTarget.getAttribute('data-mid')) || '');
               if (!mid2) return;
+              var order = normalizeOrder(lobby);
               var idx = order.indexOf(mid2);
               if (idx <= 0) return;
               setLobbyOrder(lobbyId, swap(order, idx, idx - 1)).catch(function (e) {
@@ -6925,6 +6978,7 @@
             downBtn.addEventListener('click', function (ev2) {
               var mid3 = String((ev2 && ev2.currentTarget && ev2.currentTarget.getAttribute('data-mid')) || '');
               if (!mid3) return;
+              var order = normalizeOrder(lobby);
               var idx2 = order.indexOf(mid3);
               if (idx2 < 0 || idx2 >= order.length - 1) return;
               setLobbyOrder(lobbyId, swap(order, idx2, idx2 + 1)).catch(function (e) {

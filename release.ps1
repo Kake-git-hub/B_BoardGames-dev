@@ -7,7 +7,7 @@ param(
   # - dev: push to dev remote (GitHub Pages dev URL)
   # - both: push to both remotes
   [ValidateSet('stable', 'dev', 'both')]
-  [string]$Channel = 'stable',
+  [string]$Channel = 'dev',
 
   # Remote names (defaults assume origin=stable, dev=dev).
   [string]$StableRemote = 'origin',
