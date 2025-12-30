@@ -3542,14 +3542,22 @@
         if (t) {
           var th = getSingleHand(t);
           logText += ' → 対象 ' + pname(t) + ' / 推測 ' + llCardDef(String(g)).name + '(' + g + ')';
+          var protectedHit = false;
+          var hit = false;
           if (isProtected(t)) {
             logText += '（僧侶により保護中：無効）';
+            protectedHit = true;
           } else if (th && parseIntSafe(th, 0) === g) {
             eliminatePlayer(t, 'guard');
             logText += '（的中：脱落）';
+            hit = true;
           } else {
             logText += '（外れ）';
           }
+
+          // Show guess + result to everyone, and wait for actor to proceed.
+          round.reveal = { type: 'guard', by: actorId, target: t, guess: String(g), result: hit ? 'hit' : 'miss', protected: !!protectedHit };
+          round.waitFor = { type: 'guard_ack', by: actorId };
         } else {
           logText += '（対象なし）';
         }
@@ -3580,12 +3588,13 @@
           if (isProtected(t3)) {
             logText += ' → ' + pname(t3) + '（僧侶により保護中：無効）';
           } else {
-            var aCard = '3';
+            // Compare actor's remaining hand vs target's hand.
+            var aCard = getSingleHand(actorId);
             var bCard = getSingleHand(t3);
-            var av = 3;
+            var av = parseIntSafe(aCard, 0);
             var bv = parseIntSafe(bCard, 0);
             logText += ' → ' + pname(t3) + ' と比較';
-            if (bv) {
+            if (av && bv) {
               // Smaller number loses.
               if (av === bv) {
                 logText += '（引き分け）';
@@ -3633,7 +3642,16 @@
                 setSingleHand(t5, drawn);
                 logText += '（引き直し）';
               } else {
-                logText += '（山札なし）';
+                // Special rule: if deck is empty, give the initial face-down grave card (burn) to the last discarded player.
+                var burnCard = grave && Array.isArray(grave) && grave.length ? String(grave[0] || '') : '';
+                if (burnCard) {
+                  grave.shift();
+                  drawn = burnCard;
+                  setSingleHand(t5, drawn);
+                  logText += '（山札なし→伏せ札を受け取り）';
+                } else {
+                  logText += '（山札なし）';
+                }
               }
             }
 
@@ -5885,7 +5903,8 @@
     try {
       if (viewEl && viewEl.classList) {
         viewEl.classList.toggle('ll-turn-actor', !!isMyTurn);
-        viewEl.classList.toggle('ll-turn-waiting', phase === 'playing' && !isMyTurn);
+        // Do not dim the whole view for eliminated players (spectate mode).
+        viewEl.classList.toggle('ll-turn-waiting', phase === 'playing' && !isMyTurn && !myElim);
       }
     } catch (eTurn) {
       // ignore
@@ -5893,9 +5912,9 @@
 
     if (phase === 'lobby') statusText = '待機中：GMがスタートするまでお待ちください。';
     else if (phase === 'playing') {
-      if (myElim) statusText = 'あなたは脱落しました。';
+      if (myElim) statusText = 'あなたは脱落しました（観戦中）。';
       else if (isMyTurn) statusText = 'あなたの番です。';
-      else statusText = '待機中：' + (turnName || '-') + (myProt ? ' (僧侶により保護中)' : '');
+      else statusText = '待機中：' + (turnName || '-') + ' の番です' + (myProt ? ' (僧侶により保護中)' : '');
     } else if (phase === 'finished') statusText = 'ゲーム終了';
 
     var deckLeft = r && Array.isArray(r.deck) ? r.deck.length : 0;
@@ -5943,6 +5962,42 @@
             '</div>'
           : '') +
         '</div>';
+    }
+
+    // Spectate (eliminated players can see alive players' hands)
+    var spectateHtml = '';
+    if (phase === 'playing' && myElim) {
+      var gridSp = '';
+      for (var spi = 0; spi < order.length; spi++) {
+        var spid = order[spi];
+        if (!spid) continue;
+        if (r && r.eliminated && r.eliminated[spid]) continue;
+        var sh = r && r.hands && Array.isArray(r.hands[spid]) ? r.hands[spid] : [];
+        if (!sh || !sh.length) continue;
+        var snm = ps[spid] ? formatPlayerDisplayName(ps[spid]) : String(spid);
+        var cardsHtml = '';
+        for (var sj = 0; sj < sh.length && sj < 2; sj++) {
+          var sr = String(sh[sj] || '');
+          if (!sr) continue;
+          cardsHtml += '<div class="ll-spectate-card">' + llCardImgHtml(sr) + '</div>';
+        }
+        if (!cardsHtml) continue;
+        gridSp +=
+          '<div class="ll-showdown-item">' +
+          '<div class="ll-modal-name">' + escapeHtml(snm) + '</div>' +
+          '<div class="ll-spectate-cards">' + cardsHtml + '</div>' +
+          '</div>';
+      }
+      if (gridSp) {
+        spectateHtml =
+          '<div class="card" style="padding:10px">' +
+          '<div class="big">観戦</div>' +
+          '<div class="muted">生存者の手札</div>' +
+          '<div class="ll-showdown-grid">' +
+          gridSp +
+          '</div>' +
+          '</div>';
+      }
     }
 
     // Hand (always show your card while waiting)
@@ -6079,10 +6134,32 @@
         '</div>';
     }
 
-    // Reveal modal (騎士/将軍交換/大臣オーバー/全員公開)
-      if (!ui.ackInFlight && !modalHtml && phase === 'playing' && r && r.reveal && r.reveal.type) {
+    // Reveal modal (兵士/騎士/将軍交換/大臣オーバー/全員公開)
+    if (!ui.ackInFlight && !modalHtml && phase === 'playing' && r && r.reveal && r.reveal.type) {
       var rv = r.reveal;
-      if (rv.type === 'knight' || rv.type === 'general_swap') {
+      if (rv.type === 'guard') {
+        var by0 = String(rv.by || '');
+        var tg0 = String(rv.target || '');
+        var byName0 = ps[by0] ? formatPlayerDisplayName(ps[by0]) : by0;
+        var tgName0 = ps[tg0] ? formatPlayerDisplayName(ps[tg0]) : tg0;
+        var guess0 = String(rv.guess || '');
+        var res0 = String(rv.result || '');
+        var resText0 = res0 === 'hit' ? '該当（脱落）' : res0 === 'miss' ? '非該当' : '不明';
+        if (rv.protected) resText0 = '無効（保護中）';
+        modalHtml =
+          '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
+          '<div class="ll-overlay-backdrop"></div>' +
+          '<div class="ll-overlay-panel">' +
+          '<div class="big">兵士：推測結果</div>' +
+          '<div class="muted">' + escapeHtml(byName0 + ' → ' + tgName0) + '</div>' +
+          '<div class="ll-reveal-card">' + llCardImgHtml(guess0) + '</div>' +
+          '<div class="big center">' + escapeHtml(resText0) + '</div>' +
+          '<div class="row" style="justify-content:flex-end">' +
+          (String(playerId) === by0 ? '<button id="llAck" class="primary">次へ</button>' : '<div class="muted">' + escapeHtml(byName0) + ' が進めます</div>') +
+          '</div>' +
+          '</div>' +
+          '</div>';
+      } else if (rv.type === 'knight' || rv.type === 'general_swap') {
         var by = String(rv.by || '');
         var tg = String(rv.target || '');
         if (String(playerId) === by || String(playerId) === tg) {
@@ -6221,6 +6298,8 @@
         escapeHtml(statusText || '') +
         '</div>\n        </div>\n      </div>\n\n      ' +
         (resultHtml || '') +
+        '\n\n      ' +
+        (spectateHtml || '') +
         '\n\n      ' +
         (handHtml || '') +
         '\n\n      ' +

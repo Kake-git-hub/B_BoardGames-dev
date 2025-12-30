@@ -169,7 +169,7 @@ body.ll-player-screen .ll-piles-box{position:fixed;top:4px;right:4px;z-index:100
 .ll-action-card{width:min(240px, 64vw);margin:8px auto;aspect-ratio:3/4}
 .ll-reveal-card{width:min(300px, 76vw);margin:8px auto;aspect-ratio:3/4}
 .ll-modal-name{font-weight:900;text-align:center;font-size:16px;margin:6px 0 0}
-.ll-modal-actions{gap:16px}
+.ll-modal-actions{gap:16px;margin-top:22px}
 .ll-modal-actions button{min-width:120px}
 .ll-guess-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .ll-guess-grid button{width:100%}
@@ -192,6 +192,10 @@ body.ll-player-screen .ll-piles-box{position:fixed;top:4px;right:4px;z-index:100
 .ll-showdown-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .ll-showdown-item{display:flex;flex-direction:column;gap:6px;align-items:center}
 .ll-showdown-card{width:min(220px, 44vw);aspect-ratio:3/4}
+
+/* Love Letter: eliminated spectate */
+.ll-spectate-cards{display:flex;gap:10px;justify-content:center;align-items:flex-start;margin-top:6px}
+.ll-spectate-card{width:min(180px, 40vw);aspect-ratio:3/4;border-radius:10px;border:1px solid var(--line);overflow:hidden;background:#0f1520}
 
 /* Modal spacing tweaks */
 .ll-overlay-panel .stack{gap:14px}
