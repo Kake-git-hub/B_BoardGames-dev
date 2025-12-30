@@ -3599,15 +3599,18 @@
   }
 
   function llMustPlayCountess(hand) {
+    // Extra card rule (7:countess):
+    // If you have the Countess and your hand total is 12 or more, you must play the Countess.
     if (!Array.isArray(hand) || hand.length < 2) return false;
-    var has7 = false;
-    var has5or6 = false;
+    var hasCountess = false;
+    var total = 0;
     for (var i = 0; i < hand.length; i++) {
-      var r = llCardRankStr(hand[i]);
-      if (r === '7') has7 = true;
-      if (r === '5' || r === '6') has5or6 = true;
+      var cid = String(hand[i] || '');
+      if (!cid) continue;
+      if (cid === '7:countess') hasCountess = true;
+      total += llCardRank(cid) || 0;
     }
-    return has7 && has5or6;
+    return hasCountess && total >= 12;
   }
 
   function llDrawFromRound(round) {
@@ -3779,7 +3782,7 @@
     protectedMap[startId] = false;
     if (hands[startId] && deck.length) hands[startId].push(String(deck.pop()));
 
-    // Minister(7) overload rule: if you have 7 and your 2-card total >= 12, you immediately lose.
+    // Minister(7) overload rule: if you have the base Minister card ('7') and your 2-card total >= 12, you immediately lose.
     // Hold the round until the player acknowledges.
     var startHand = Array.isArray(hands[startId]) ? hands[startId] : [];
     if (startHand.length >= 2) {
@@ -3788,7 +3791,7 @@
       var av0 = llCardRank(a0);
       var bv0 = llCardRank(b0);
       var total0 = (av0 || 0) + (bv0 || 0);
-      if ((llCardRankStr(a0) === '7' || llCardRankStr(b0) === '7') && total0 >= 12) {
+      if ((a0 === '7' || b0 === '7') && total0 >= 12) {
         // eliminate and store reveal
         eliminated[startId] = true;
         protectedMap[startId] = false;
@@ -3904,8 +3907,8 @@
       var idx = myHand.indexOf(card);
       if (idx < 0) return room;
 
-      // Countess rule.
-      if (llMustPlayCountess(myHand) && llCardRankStr(card) !== '7') return room;
+      // Countess rule (extra card): force playing 7:countess.
+      if (llMustPlayCountess(myHand) && String(card) !== '7:countess') return room;
 
       // Remove played card from hand.
       myHand.splice(idx, 1);
@@ -3968,17 +3971,52 @@
         if (cardRank) grave.push(String(cardRank));
       }
 
-      function eliminatePlayer(pid, reason) {
-        if (eliminated[pid]) return;
+      function eliminatePlayer(pid, reason, opts) {
+        if (eliminated[pid]) return { eliminated: false, revived: false, drew: '' };
+
+        var h = hands && Array.isArray(hands[pid]) ? hands[pid].slice() : [];
+        var reviveByMegane = !!(opts && opts.megane);
+        if (!reviveByMegane) {
+          for (var mi = 0; mi < h.length; mi++) {
+            if (String(h[mi] || '') === '8:megane') {
+              reviveByMegane = true;
+              break;
+            }
+          }
+        }
+
         eliminated[pid] = true;
         protectedMap[pid] = false;
+
         // move remaining hand to discard (public)
-        var h = hands && Array.isArray(hands[pid]) ? hands[pid].slice() : [];
         for (var i = 0; i < h.length; i++) pushDiscard(pid, h[i]);
         hands[pid] = [];
+
+        if (reviveByMegane) {
+          // Revive: draw 1 card from deck; if empty, take the face-down burn card (grave[0]).
+          var drew = '';
+          var d = llDrawFromRound(round);
+          if (d) {
+            drew = String(d);
+            hands[pid] = [drew];
+          } else {
+            var burnCard = grave && Array.isArray(grave) && grave.length ? String(grave[0] || '') : '';
+            if (burnCard) {
+              grave.shift();
+              drew = burnCard;
+              hands[pid] = [drew];
+            }
+          }
+
+          eliminated[pid] = false;
+          protectedMap[pid] = false;
+          return { eliminated: true, revived: true, drew: drew };
+        }
+
         if (reason) {
           // reserved
         }
+        return { eliminated: true, revived: false, drew: '' };
       }
 
       var actorName = pname(actorId);
@@ -4005,8 +4043,8 @@
             logText += '（僧侶により保護中：無効）';
             protectedHit = true;
           } else if (th && parseIntSafe(th, 0) === g) {
-            eliminatePlayer(t, 'guard');
-            logText += '（的中：脱落）';
+            var er1 = eliminatePlayer(t, 'guard');
+            logText += er1 && er1.revived ? '（的中：脱落→復帰）' : '（的中：脱落）';
             hit = true;
           } else {
             logText += '（外れ）';
@@ -4056,11 +4094,11 @@
               if (av === bv) {
                 logText += '（引き分け）';
               } else if (av < bv) {
-                eliminatePlayer(actorId, 'knight');
-                logText += '（' + pname(t3) + ' 勝ち：' + actorName + ' 脱落）';
+                var erK1 = eliminatePlayer(actorId, 'knight');
+                logText += '（' + pname(t3) + ' 勝ち：' + actorName + (erK1 && erK1.revived ? ' 脱落→復帰）' : ' 脱落）');
               } else {
-                eliminatePlayer(t3, 'knight');
-                logText += '（' + actorName + ' 勝ち：' + pname(t3) + ' 脱落）';
+                var erK2 = eliminatePlayer(t3, 'knight');
+                logText += '（' + actorName + ' 勝ち：' + pname(t3) + (erK2 && erK2.revived ? ' 脱落→復帰）' : ' 脱落）');
               }
             }
             // Show both cards to everyone, and wait for actor to proceed.
@@ -4090,8 +4128,9 @@
             logText += ' → ' + pname(t5) + ' に捨て札';
             var drawn = '';
             if (llCardRankStr(old) === '8') {
-              eliminatePlayer(t5, 'wizard_princess');
-              logText += '（姫：脱落）';
+              var isMegane = String(old) === '8:megane';
+              var erP = eliminatePlayer(t5, 'wizard_princess', isMegane ? { megane: true } : null);
+              logText += isMegane ? '（姫(眼鏡)：脱落→復帰）' : '（姫：脱落）';
             } else {
               var d5 = llDrawFromRound(round);
               if (d5) {
@@ -4145,8 +4184,13 @@
         // Countess
         logText += '（効果なし）';
       } else if (cardRankStr === '8') {
-        // Princess (cannot be played by choice)
-        return room;
+        // Princess: base '8' cannot be played by choice, but 8:megane can.
+        if (String(card) === '8:megane') {
+          eliminatePlayer(actorId, 'megane_play', { megane: true });
+          logText += '（姫(眼鏡)：脱落→復帰）';
+        } else {
+          return room;
+        }
       }
 
       // Write back updated round parts.
@@ -4209,9 +4253,9 @@
         if (drawn2) {
           var before = nextHand.length ? String(nextHand[0]) : '';
           nextHand.push(String(drawn2));
-          // Minister overload: if you have 7 and your 2-card total >= 12, you immediately lose.
+          // Minister overload: if you have base '7' and your 2-card total >= 12, you immediately lose.
             var total = (llCardRank(before) || 0) + (llCardRank(drawn2) || 0);
-            if ((llCardRankStr(before) === '7' || llCardRankStr(drawn2) === '7') && total >= 12) {
+            if ((before === '7' || String(drawn2) === '7') && total >= 12) {
               // eliminate and pause until ack
               eliminated[next.id] = true;
               protectedMap[next.id] = false;
@@ -4321,7 +4365,7 @@
           var before = nextHand.length ? String(nextHand[0]) : '';
           nextHand.push(String(drawn2));
             var total = (llCardRank(before) || 0) + (llCardRank(drawn2) || 0);
-            if ((llCardRankStr(before) === '7' || llCardRankStr(drawn2) === '7') && total >= 12) {
+            if ((before === '7' || String(drawn2) === '7') && total >= 12) {
               eliminated[next.id] = true;
               protectedMap[next.id] = false;
               for (var mdi = 0; mdi < nextHand.length; mdi++) pushDiscard(next.id, nextHand[mdi]);
@@ -8743,7 +8787,7 @@
         (isMyTurn
           ? '<div class="muted center ll-hint">タップで前後切替 / 長押しで使用</div>'
           : '<div class="muted center ll-hint">あなたの手札</div>') +
-        (isMyTurn && must7 ? '<div class="muted center">※ 大臣(7)を必ず使用</div>' : '') +
+        (isMyTurn && must7 ? '<div class="muted center">※ 女侯爵(7)を必ず使用（合計12以上）</div>' : '') +
         '</div>';
     }
 
@@ -9923,11 +9967,11 @@
             if (!rank) return;
             if (rank === '8') return;
 
-            // Enforce 大臣(7) mandatory rule on UI side too.
+            // Enforce 女侯爵(7:countess) mandatory rule on UI side too.
             try {
               var rr = lastRoom && lastRoom.round ? lastRoom.round : {};
               var myHand2 = rr && rr.hands && Array.isArray(rr.hands[playerId]) ? rr.hands[playerId] : [];
-              if (llMustPlayCountess(myHand2) && rank !== '7') return;
+              if (llMustPlayCountess(myHand2) && rank !== '7:countess') return;
             } catch (e) {
               // ignore
             }
