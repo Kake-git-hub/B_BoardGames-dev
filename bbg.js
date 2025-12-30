@@ -5942,6 +5942,11 @@
       return '<div class="stack" style="height:100%;justify-content:center;align-items:center"><div class="big">' + escapeHtml(d.name || '-') + '</div></div>';
     }
 
+    function llCardBackImgHtml() {
+      var backIcon = './assets/loveletter/Uramen.png';
+      return '<img class="ll-card-img" alt="裏面" src="' + escapeHtml(backIcon) + '" />';
+    }
+
     // Winners (single game)
     var resultHtml = '';
     if (phase === 'finished' && room && room.result && Array.isArray(room.result.winners)) {
@@ -6132,6 +6137,20 @@
         '</div>' +
         '</div>' +
         '</div>';
+    } else if (!ui.ackInFlight && ui && ui.modal && ui.modal.type === 'peek_wait') {
+      // Show to other players while someone is peeking.
+      var mw = ui.modal;
+      modalHtml =
+        '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
+        '<div class="ll-overlay-backdrop"></div>' +
+        '<div class="ll-overlay-panel">' +
+        '<div class="big">道化：確認中</div>' +
+        '<div class="muted">' +
+        escapeHtml(String(mw.byName || '') + ' が ' + String(mw.targetName || '') + ' の手札を確認中') +
+        '</div>' +
+        '<div class="muted center" style="margin-top:10px">（処理が終わるまでお待ちください）</div>' +
+        '</div>' +
+        '</div>';
     }
 
     // Reveal modal (兵士/騎士/将軍交換/大臣オーバー/全員公開)
@@ -6274,7 +6293,7 @@
               ? '<div class="ll-compare-col">' +
                 '<div class="ll-modal-name">引いたカード</div>' +
                 '<div class="ll-compare-card">' +
-                llCardImgHtml(drew) +
+                llCardBackImgHtml() +
                 '</div>' +
                 '</div>'
               : '') +
@@ -6567,12 +6586,34 @@
       }
     }
 
+    function computePeekWaitModal(room) {
+      try {
+        var r = room && room.round ? room.round : null;
+        if (!r || !r.peek) return null;
+        var pk = r.peek;
+        if (!pk.until || serverNowMs() > pk.until) return null;
+        // Only show to non-peekers.
+        if (String(pk.to || '') === String(playerId || '')) return null;
+        var ps = room && room.players ? room.players : {};
+        var byName = pk.to && ps[pk.to] ? formatPlayerDisplayName(ps[pk.to]) : String(pk.to || '');
+        var targetName = pk.target && ps[pk.target] ? formatPlayerDisplayName(ps[pk.target]) : String(pk.target || '');
+        if (!byName && !targetName) return null;
+        return { type: 'peek_wait', byName: byName, targetName: targetName };
+      } catch (e) {
+        return null;
+      }
+    }
+
     function renderNow(room) {
       lastRoom = room;
       // Show peek modal (道化) on top when applicable.
       if (!ui.ackInFlight && !ui.pending) {
         var pm = computePeekModal(room);
         if (pm) ui.modal = pm;
+        else {
+          var pmo = computePeekWaitModal(room);
+          ui.modal = pmo ? pmo : null;
+        }
       }
 
       var player = room && room.players ? room.players[playerId] : null;
