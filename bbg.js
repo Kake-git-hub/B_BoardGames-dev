@@ -5583,6 +5583,15 @@
     else if (phase === 'judge') statusText = isHost ? '判定：勝敗を決定してください。' : '待機中：ゲームマスターの判定を待っています。';
     else if (phase === 'finished') statusText = 'ゲーム終了：結果を確認してください。';
 
+    // Short status for top line (prevents huge blocks after voting).
+    var statusShort = '';
+    if (phase === 'lobby') statusShort = '待機中';
+    else if (phase === 'discussion') statusShort = 'トーク中';
+    else if (phase === 'voting') statusShort = votedTo ? '待機中' : '投票してください';
+    else if (phase === 'guess') statusShort = role === 'minority' ? '推理入力' : '待機中';
+    else if (phase === 'judge') statusShort = isHost ? '判定' : '待機中';
+    else if (phase === 'finished') statusShort = '終了';
+
     var votedOutId = room && room.reveal && room.reveal.votedOutId ? room.reveal.votedOutId : '';
     var votedOutName = votedOutId && players && players[votedOutId] ? formatPlayerDisplayName(players[votedOutId]) : '';
     var votedOutLine = votedOutId ? votedOutName || votedOutId : '';
@@ -5671,7 +5680,49 @@
         var r = tally[ti];
         rows += '<div class="kv"><span class="muted">' + escapeHtml(r.name) + '</span><b>' + r.count + '</b></div>';
       }
-      voteResultHtml = '<hr /><div class="big">投票結果</div><div class="stack">' + rows + '</div>';
+
+      // Keep post-vote screens minimal: put required actions inside the vote result frame.
+      var extraHtml = '';
+      if (phase === 'guess') {
+        var myGuess0 = room && room.guess && room.guess.guesses && room.guess.guesses[playerId] ? room.guess.guesses[playerId].text : '';
+        if (role === 'minority') {
+          extraHtml +=
+            '<hr />' +
+            '<div class="muted">少数側：多数側ワードを入力</div>' +
+            (myGuess0
+              ? '<div class="kv"><span class="muted">送信済み</span><b>' + escapeHtml(myGuess0) + '</b></div>'
+              : '<div class="stack"><input id="guessText" placeholder="多数側ワード" /><button id="submitGuess" class="primary">送信</button></div>');
+        }
+      } else if (phase === 'judge') {
+        // No "予想一覧". Show only the keyword(s) and GM decision.
+        var guessesObj0 = (room && room.guess && room.guess.guesses) || {};
+        var gKeys0 = Object.keys(guessesObj0);
+        var uniq = {};
+        var uniqList = [];
+        for (var gi0 = 0; gi0 < gKeys0.length; gi0++) {
+          var entry0 = guessesObj0[gKeys0[gi0]];
+          var txt0 = entry0 && entry0.text ? String(entry0.text).trim() : '';
+          if (!txt0) continue;
+          var key0 = txt0.toLowerCase();
+          if (uniq[key0]) continue;
+          uniq[key0] = true;
+          uniqList.push(txt0);
+        }
+        if (uniqList.length) {
+          extraHtml += '<hr /><div class="kv"><span class="muted">少数側予想</span><b>' + escapeHtml(uniqList.join(' / ')) + '</b></div>';
+        }
+        if (isHost) {
+          extraHtml +=
+            '<hr />' +
+            '<div class="muted">ゲームマスターが勝敗を決定します</div>' +
+            '<div class="row">' +
+            '<button id="decideMinority" class="primary">少数側の勝ち</button>' +
+            '<button id="decideMajority" class="danger">多数側の勝ち</button>' +
+            '</div>';
+        }
+      }
+
+      voteResultHtml = '<div class="card" style="padding:12px"><div class="big">投票結果</div><div class="stack">' + rows + '</div>' + extraHtml + '</div>';
     }
 
     var minorityNames = [];
@@ -5683,53 +5734,54 @@
     var minorityLine = minorityNames.length ? minorityNames.join(' / ') : '（未確定）';
 
     var guessHtml = '';
-    if (phase === 'guess') {
-      var myGuess = room && room.guess && room.guess.guesses && room.guess.guesses[playerId] ? room.guess.guesses[playerId].text : '';
-      guessHtml =
-        '<div class="stack">' +
-        '<div class="big">推理</div>' +
-        (votedOutLine
-          ? '<div class="kv"><span class="muted">追放</span><b>' + escapeHtml(votedOutLine) + '</b></div>'
-          : '') +
-        '<div class="muted">少数側が多数側ワードを予想します。</div>' +
-        (role === 'minority'
-          ? myGuess
-            ? '<div class="muted">送信済み：' + escapeHtml(myGuess) + '</div>'
-            : '<div class="stack"><input id="guessText" placeholder="多数側ワード" />' +
-              '<button id="submitGuess" class="primary">送信</button></div>'
-          : '<div class="muted">待機中：少数側の送信を待っています。</div>') +
-        '</div>';
-    }
 
     var judgeHtml = '';
-    if (phase === 'judge') {
-      var guessesObj = (room && room.guess && room.guess.guesses) || {};
-      var gKeys = Object.keys(guessesObj);
-      var lines = '';
-      for (var gi = 0; gi < gKeys.length; gi++) {
-        var gpid = gKeys[gi];
-        var entry = guessesObj[gpid];
-        var pname = room && room.players && room.players[gpid] ? formatPlayerDisplayName(room.players[gpid]) : gpid;
-        lines += '<div class="kv"><span class="muted">' + escapeHtml(pname) + '</span><b>' + escapeHtml((entry && entry.text) || '') + '</b></div>';
-      }
 
-      judgeHtml =
-        '<div class="stack">' +
-        '<div class="big">予想一覧</div>' +
-        (votedOutLine
-          ? '<div class="kv"><span class="muted">追放</span><b>' + escapeHtml(votedOutLine) + '</b></div>'
-          : '') +
-        '<div class="muted">少数側が入力した予想です。</div>' +
-        '<div class="stack">' +
-        (lines || '<div class="muted">（まだありません）</div>') +
-        '</div>' +
-        (isHost
-          ? '<hr /><div class="muted">ゲームマスターが勝敗を決定します。</div><div class="row">' +
-            '<button id="decideMinority" class="primary">少数側の勝ち</button>' +
-            '<button id="decideMajority" class="danger">多数側の勝ち</button>' +
-            '</div>'
-          : '<div class="muted">待機中：ゲームマスターの判定を待っています。</div>') +
-        '</div>';
+    // Guess success modal (reversal path): show keyword clearly to all.
+    var guessWinModalHtml = '';
+    try {
+      var decidedBy = room && room.result && room.result.decidedBy ? String(room.result.decidedBy) : '';
+      var winner0 = room && room.result && room.result.winner ? String(room.result.winner) : '';
+      if (phase === 'finished' && decidedBy === 'gm' && winner0 === 'minority') {
+        var gObj = (room && room.guess && room.guess.guesses) || {};
+        var gk = Object.keys(gObj);
+        var uniq2 = {};
+        var list2 = [];
+        for (var gi2 = 0; gi2 < gk.length; gi2++) {
+          var e2 = gObj[gk[gi2]];
+          var tx = e2 && e2.text ? String(e2.text).trim() : '';
+          if (!tx) continue;
+          var kk = tx.toLowerCase();
+          if (uniq2[kk]) continue;
+          uniq2[kk] = true;
+          list2.push(tx);
+        }
+        if (list2.length) {
+          var k2 = String(room && room.result && room.result.decidedAt ? room.result.decidedAt : '') + '|' + list2.join('|');
+          if (!ui.guessWinDismissedKey || ui.guessWinDismissedKey !== k2) {
+            guessWinModalHtml =
+              '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true" id="wwGuessWinModal" data-key="' +
+              escapeHtml(k2) +
+              '">' +
+              '<div class="ll-overlay-backdrop"></div>' +
+              '<div class="ll-overlay-panel">' +
+              '<div class="big">少数側が当てました</div>' +
+              '<div class="muted">推測キーワード</div>' +
+              '<div class="card center" style="padding:12px;margin-top:10px"><div class="big">' +
+              escapeHtml(list2.join(' / ')) +
+              '</div></div>' +
+              '<div class="row" style="justify-content:flex-end;margin-top:12px">' +
+              (isHost
+                ? '<button id="wwGuessWinClose" class="ghost">閉じる</button>' + (lobbyId ? '<button id="wwGuessWinNext" class="primary">次へ</button>' : '<button id="wwGuessWinOk" class="primary">OK</button>')
+                : '<button id="wwGuessWinOk" class="primary">OK</button>') +
+              '</div>' +
+              '</div>' +
+              '</div>';
+          }
+        }
+      }
+    } catch (eM) {
+      // ignore
     }
 
     var finishedHtml = '';
@@ -5814,22 +5866,12 @@
       selfName = formatPlayerMenuName(player);
     }
 
-    var statusCardHtml = '';
+    var timerCardHtml = '';
     if (phase === 'discussion') {
-      statusCardHtml =
+      timerCardHtml =
         '<div class="card center" style="padding:12px">' +
         '<div class="timer" id="timer">' +
         escapeHtml(formatMMSS(remain)) +
-        '</div>' +
-        '<div class="big">' +
-        escapeHtml(statusText) +
-        '</div>' +
-        '</div>';
-    } else {
-      statusCardHtml =
-        '<div class="card center" style="padding:12px">' +
-        '<div class="big">' +
-        escapeHtml(statusText) +
         '</div>' +
         '</div>';
     }
@@ -5852,18 +5894,24 @@
 
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">' +
+      '\n    <div class="stack">\n      <div class="row" style="justify-content:space-between;align-items:center">' +
+        '<div class="big">' +
         escapeHtml(selfName) +
+        '</div>' +
+        '<div class="muted" style="text-align:right">' +
+        escapeHtml(statusShort || '') +
+        '</div>' +
         '</div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">あなたのワード</div>\n        ' +
         wordHtml +
         '\n      </div>\n\n      ' +
-        statusCardHtml +
+        (timerCardHtml || '') +
         '\n\n      ' +
         votingHtml +
         guessHtml +
         judgeHtml +
         finishedHtml +
         voteResultHtml +
+        guessWinModalHtml +
         '\n\n      <div class="row">' +
         (isHost && phase === 'voting' && isVotingComplete(room) ? '<button id="revealNext" class="primary">結果発表</button>' : '') +
         '</div>\n    </div>\n  '
@@ -6488,6 +6536,25 @@
         startBtn.addEventListener('click', function () {
           var kindEl2 = document.getElementById('lobbyGameKind');
           var kind = String((kindEl2 && kindEl2.value) || ui.selectedKind || 'wordwolf');
+
+          // Minimum player gate (prevent proceeding from lobby when人数不足)
+          try {
+            var ids0 = normalizeOrder(lobby);
+            var n0 = Array.isArray(ids0) ? ids0.length : 0;
+            var min = 0;
+            if (kind === 'loveletter') min = 2;
+            else if (kind === 'codenames') min = 4;
+            else min = 3; // wordwolf
+
+            if (n0 < min) {
+              clearInlineError('lobbyHostError');
+              var gameLabel = kind === 'loveletter' ? 'ラブレター' : kind === 'codenames' ? 'コードネーム' : 'ワードウルフ';
+              setInlineError('lobbyHostError', '参加者が足りません（' + gameLabel + 'は' + String(min) + '人以上必要です）');
+              return;
+            }
+          } catch (eMin) {
+            // ignore (fallback to existing flow)
+          }
 
           // Wordwolf requires the legacy settings screen.
           if (kind !== 'codenames' && kind !== 'loveletter') {
@@ -7869,6 +7936,59 @@
                 })
                 .finally(function () {
                   nextBtn.disabled = false;
+                });
+            });
+          }
+
+          // Guess-win modal (minority guessed correctly) controls.
+          var guessModal = document.getElementById('wwGuessWinModal');
+          var guessModalKey = '';
+          try {
+            guessModalKey = guessModal ? String(guessModal.getAttribute('data-key') || '') : '';
+          } catch (eKey) {
+            guessModalKey = '';
+          }
+
+          function dismissGuessWinModal() {
+            if (guessModalKey) ui.guessWinDismissedKey = guessModalKey;
+            renderPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui, lobbyId: lobbyId });
+          }
+
+          var okBtn = document.getElementById('wwGuessWinOk');
+          if (okBtn && !okBtn.__ww_bound) {
+            okBtn.__ww_bound = true;
+            okBtn.addEventListener('click', function () {
+              dismissGuessWinModal();
+            });
+          }
+
+          var closeBtn = document.getElementById('wwGuessWinClose');
+          if (closeBtn && !closeBtn.__ww_bound) {
+            closeBtn.__ww_bound = true;
+            closeBtn.addEventListener('click', function () {
+              dismissGuessWinModal();
+            });
+          }
+
+          var nextModalBtn = document.getElementById('wwGuessWinNext');
+          if (nextModalBtn && !nextModalBtn.__ww_bound) {
+            nextModalBtn.__ww_bound = true;
+            nextModalBtn.addEventListener('click', function () {
+              dismissGuessWinModal();
+              if (!lobbyId) return;
+              nextModalBtn.disabled = true;
+              firebaseReady()
+                .then(function () {
+                  return setLobbyCurrentGame(lobbyId, null);
+                })
+                .then(function () {
+                  redirectToLobby();
+                })
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  nextModalBtn.disabled = false;
                 });
             });
           }

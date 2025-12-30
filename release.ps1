@@ -1,6 +1,21 @@
 param(
   [string]$Message = "release",
-  [switch]$NoCommit
+  [switch]$NoCommit,
+
+  # Where to publish.
+  # - stable: push to origin (GitHub Pages stable URL)
+  # - dev: push to dev remote (GitHub Pages dev URL)
+  # - both: push to both remotes
+  [ValidateSet('stable', 'dev', 'both')]
+  [string]$Channel = 'stable',
+
+  # Remote names (defaults assume origin=stable, dev=dev).
+  [string]$StableRemote = 'origin',
+  [string]$DevRemote = 'dev',
+
+  # Optional: if set and dev remote is missing, it will be added automatically.
+  # Example: https://github.com/<user>/B_BoardGames-dev.git
+  [string]$DevRemoteUrl = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,6 +45,28 @@ function Replace-AssetV([string]$path) {
 
 Replace-AssetV "index.html"
 
+function Ensure-Remote([string]$name, [string]$urlIfMissing) {
+  $existing = git remote 2>$null | Where-Object { $_ -eq $name }
+  if ($existing) { return }
+  if (-not $urlIfMissing) {
+    throw "Git remote '$name' is not configured. Add it with: git remote add $name <url>"
+  }
+  git remote add $name $urlIfMissing
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to add git remote '$name' ($urlIfMissing)"
+  }
+}
+
+$pushStable = $Channel -eq 'stable' -or $Channel -eq 'both'
+$pushDev = $Channel -eq 'dev' -or $Channel -eq 'both'
+
+if ($pushStable) {
+  Ensure-Remote $StableRemote ""
+}
+if ($pushDev) {
+  Ensure-Remote $DevRemote $DevRemoteUrl
+}
+
 git add -A
 
 # If nothing changed, avoid empty commits
@@ -41,9 +78,23 @@ if (-not $st) {
 
 if (-not $NoCommit) {
   git commit -m "$Message (assets $assetV)"
+  if ($LASTEXITCODE -ne 0) {
+    throw "git commit failed"
+  }
 }
 
-# Always push (per request)
-git push origin main
+# Push to selected channel(s)
+if ($pushStable) {
+  git push $StableRemote main
+  if ($LASTEXITCODE -ne 0) {
+    throw "git push $StableRemote main failed"
+  }
+}
+if ($pushDev) {
+  git push $DevRemote main
+  if ($LASTEXITCODE -ne 0) {
+    throw "git push $DevRemote main failed"
+  }
+}
 
-Write-Host "Released: assets=$assetV"
+Write-Host "Released: channel=$Channel assets=$assetV"

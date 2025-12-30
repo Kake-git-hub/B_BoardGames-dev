@@ -1,6 +1,6 @@
 # B_BoardGames
 
-対面で集まって遊ぶボードゲームを、各自スマホのブラウザで補助するための最小アプリです（現在: ワードウルフ / コードネーム）。
+対面で集まって遊ぶボードゲームを、各自スマホのブラウザで補助するための最小アプリです（現在: ワードウルフ / コードネーム / ラブレター）。
 
 - ゲームマスター（GM）が設定 → ルーム作成 → QR生成
 - 参加者はQRを読み取って参加
@@ -52,7 +52,7 @@
 PowerShell 例（Python がある場合）:
 
 ```powershell
-cd "c:\Users\B\Desktop\自作ソフト\wordwolf-web"
+cd "c:\Users\B\Desktop\自作ソフト\B_BoardGames"
 python -m http.server 8000
 ```
 
@@ -68,6 +68,22 @@ python -m http.server 8000
 3. 公開URL（例: `https://<user>.github.io/<repo>/`）を開いて利用
 
 公開URLで動かすと、QRにそのURLが入るため参加者もアクセスできます。
+
+### `release.ps1` で公開（stable/dev を分ける）
+
+このリポジトリには、公開用に `index.html` の `?v=`（キャッシュバスター）を更新して commit/push するスクリプト [release.ps1](release.ps1) が入っています。
+
+- stable（通常の公開URL）へ push:
+  - `./release.ps1 -Channel stable -Message "release"`
+- dev（開発用の別リポジトリ/別URL）へ push:
+  - 初回だけ dev リモートを追加（例）:
+    - `git remote add dev https://github.com/<user>/B_BoardGames-dev.git`
+  - その後:
+    - `./release.ps1 -Channel dev -Message "dev"`
+- 両方へ push:
+  - `./release.ps1 -Channel both -Message "release"`
+
+※ dev リモートが未設定の場合は `-DevRemoteUrl` で自動追加もできます。
 
 ## 2.2) いちばん簡単な配り方（おすすめ）
 
