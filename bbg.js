@@ -5890,6 +5890,15 @@
 
     function startCreate(isGmDevice) {
       disableHomeButtons(true);
+
+      // If this device was previously a restricted participant, clear it before creating a new lobby.
+      // (Otherwise the host can be forced back to a waiting screen.)
+      try {
+        setActiveLobby('', false);
+      } catch (e0) {
+        // ignore
+      }
+
       var nm = loadPersistedName();
       if (!nm) nm = 'GM';
 
@@ -5918,7 +5927,8 @@
     if (btnJoin && !btnJoin.__home_bound) {
       btnJoin.__home_bound = true;
       btnJoin.addEventListener('click', function () {
-        startCreate(false);
+        // Creator should always be treated as GM-capable device.
+        startCreate(true);
       });
     }
 
@@ -8988,10 +8998,20 @@
     }
 
     if (restricted) {
-      // If URL has a different lobby, force back.
+      // If URL has a different lobby, allow switching ONLY when opening the join screen.
+      // This enables scanning a new lobby QR without asking users to clear site data.
       if (lobbyId && String(lobbyId) !== String(activeLobbyId)) {
-        redirectRestrictedToLobbyPlayer();
-        return;
+        if (screen === 'lobby_join') {
+          try {
+            setActiveLobby(lobbyId, true);
+            activeLobbyId = String(lobbyId);
+          } catch (eSw) {
+            // ignore
+          }
+        } else {
+          redirectRestrictedToLobbyPlayer();
+          return;
+        }
       }
 
       // Allowed screens for restricted devices.
