@@ -3449,12 +3449,45 @@
     '5': { rank: 5, name: '魔術師', desc: '誰か1人（自分も可）に手札を捨てさせ、1枚引かせる。姫なら脱落。', icon: './assets/loveletter/Mazyutushi.png' },
     '6': { rank: 6, name: '将軍', desc: '相手1人と手札を交換する。', icon: './assets/loveletter/Shougun.png' },
     '7': { rank: 7, name: '大臣', desc: '将軍(6)か魔術師(5)と同時に持つなら必ず捨てる。', icon: './assets/loveletter/Daizin.png' },
-    '8': { rank: 8, name: '姫', desc: '捨てたら脱落。', icon: './assets/loveletter/Hime.png' }
+    '8': { rank: 8, name: '姫', desc: '捨てたら脱落。', icon: './assets/loveletter/Hime.png' },
+    // Optional extra cards (variants). These behave as rank 7/8 but have different artwork.
+    '7:countess': { rank: 7, name: '女侯爵', desc: '将軍(6)か魔術師(5)と同時に持つなら必ず捨てる。', icon: './assets/loveletter/Onnakoushaku.png' },
+    '8:megane': { rank: 8, name: '姫（眼鏡）', desc: '捨てたら脱落。', icon: './assets/loveletter/Himemegane.png' }
   };
+
+  function llCardRankStr(cardId) {
+    var s = String(cardId || '');
+    // Card IDs may include variants like "7:countess". Base rank is the leading number.
+    var m = /^([0-9]+)/.exec(s);
+    return m ? String(m[1] || '') : s;
+  }
+
+  function llCardRank(cardId) {
+    return parseIntSafe(llCardRankStr(cardId), 0) || 0;
+  }
 
   function llCardDef(rank) {
     var k = String(rank || '');
-    return LOVELETTER_CARD_DEFS[k] || { rank: parseIntSafe(k, 0) || 0, name: k || '-', desc: '', icon: '' };
+    var direct = LOVELETTER_CARD_DEFS[k];
+    if (direct) return direct;
+    var base = llCardRankStr(k);
+    return LOVELETTER_CARD_DEFS[base] || { rank: parseIntSafe(base, 0) || 0, name: k || '-', desc: '', icon: '' };
+  }
+
+  function llNormalizeExtraCards(extraCards) {
+    if (!Array.isArray(extraCards) || !extraCards.length) return [];
+    var allowed = { '7:countess': 1, '8:megane': 1 };
+    var out = [];
+    var seen = {};
+    for (var i = 0; i < extraCards.length; i++) {
+      var id = String(extraCards[i] || '').trim();
+      if (!id) continue;
+      if (!allowed[id]) continue;
+      if (seen[id]) continue;
+      seen[id] = true;
+      out.push(id);
+    }
+    return out;
   }
 
   function llTokenGoalForPlayerCount(n) {
@@ -3464,7 +3497,7 @@
     return 4;
   }
 
-  function llBuildDeck() {
+  function llBuildDeck(settings) {
     var out = [];
     function pushMany(rank, count) {
       for (var i = 0; i < count; i++) out.push(String(rank));
@@ -3478,6 +3511,14 @@
     pushMany(6, 1);
     pushMany(7, 1);
     pushMany(8, 1);
+
+    // Optional extra cards (each max 1)
+    try {
+      var extras = llNormalizeExtraCards(settings && settings.extraCards);
+      for (var e = 0; e < extras.length; e++) out.push(String(extras[e]));
+    } catch (e0) {
+      // ignore
+    }
     return out;
   }
 
@@ -3562,7 +3603,7 @@
     var has7 = false;
     var has5or6 = false;
     for (var i = 0; i < hand.length; i++) {
-      var r = String(hand[i]);
+      var r = llCardRankStr(hand[i]);
       if (r === '7') has7 = true;
       if (r === '5' || r === '6') has5or6 = true;
     }
@@ -3631,7 +3672,7 @@
     for (var i = 0; i < ids.length; i++) {
       var pid = ids[i];
       var hand = round && round.hands && Array.isArray(round.hands[pid]) ? round.hands[pid] : [];
-      var v = hand.length ? parseIntSafe(hand[0], 0) : 0;
+      var v = hand.length ? llCardRank(hand[0]) : 0;
       if (v > bestHand) {
         bestHand = v;
         best = [pid];
@@ -3649,7 +3690,7 @@
       var pid2 = best[j];
       var disc = round && round.discards && Array.isArray(round.discards[pid2]) ? round.discards[pid2] : [];
       var s = 0;
-      for (var k = 0; k < disc.length; k++) s += parseIntSafe(disc[k], 0) || 0;
+      for (var k = 0; k < disc.length; k++) s += llCardRank(disc[k]) || 0;
       if (s > bestSum) {
         bestSum = s;
         best2 = [pid2];
@@ -3706,7 +3747,7 @@
     var playerCount = ids.length;
     if (playerCount < 2) return null;
 
-    var deck = llShuffle(llBuildDeck());
+    var deck = llShuffle(llBuildDeck(room && room.settings));
     var grave = [];
     // Before dealing, discard 1 card face-down to grave.
     if (deck.length) grave.push(String(deck.pop()));
@@ -3744,10 +3785,10 @@
     if (startHand.length >= 2) {
       var a0 = String(startHand[0] || '');
       var b0 = String(startHand[1] || '');
-      var av0 = parseIntSafe(a0, 0);
-      var bv0 = parseIntSafe(b0, 0);
+      var av0 = llCardRank(a0);
+      var bv0 = llCardRank(b0);
       var total0 = (av0 || 0) + (bv0 || 0);
-      if ((a0 === '7' || b0 === '7') && total0 >= 12) {
+      if ((llCardRankStr(a0) === '7' || llCardRankStr(b0) === '7') && total0 >= 12) {
         // eliminate and store reveal
         eliminated[startId] = true;
         protectedMap[startId] = false;
@@ -3864,7 +3905,7 @@
       if (idx < 0) return room;
 
       // Countess rule.
-      if (llMustPlayCountess(myHand) && card !== '7') return room;
+      if (llMustPlayCountess(myHand) && llCardRankStr(card) !== '7') return room;
 
       // Remove played card from hand.
       myHand.splice(idx, 1);
@@ -3942,11 +3983,12 @@
 
       var actorName = pname(actorId);
       var cardDef = llCardDef(card);
+      var cardRankStr = llCardRankStr(card);
 
       var logText = actorName + ' が ' + cardDef.name + '(' + cardDef.rank + ') を使用';
 
       // Apply effects
-      if (card === '1') {
+      if (cardRankStr === '1') {
         // Guard: choose target + guess (2-8)
         var t = action && action.target ? String(action.target) : '';
         var guess = action && action.guess ? String(action.guess) : '';
@@ -3976,7 +4018,7 @@
         } else {
           logText += '（対象なし）';
         }
-      } else if (card === '2') {
+      } else if (cardRankStr === '2') {
         // Clown: peek
         var t2 = action && action.target ? String(action.target) : '';
         var eligible2 = eligibleTargetIds(false);
@@ -3994,7 +4036,7 @@
         } else {
           logText += '（対象なし）';
         }
-      } else if (card === '3') {
+      } else if (cardRankStr === '3') {
         // Knight
         var t3 = action && action.target ? String(action.target) : '';
         var eligible3 = eligibleTargetIds(false);
@@ -4006,8 +4048,8 @@
             // Compare actor's remaining hand vs target's hand.
             var aCard = getSingleHand(actorId);
             var bCard = getSingleHand(t3);
-            var av = parseIntSafe(aCard, 0);
-            var bv = parseIntSafe(bCard, 0);
+            var av = llCardRank(aCard);
+            var bv = llCardRank(bCard);
             logText += ' → ' + pname(t3) + ' と比較';
             if (av && bv) {
               // Smaller number loses.
@@ -4028,11 +4070,11 @@
         } else {
           logText += '（対象なし）';
         }
-      } else if (card === '4') {
+      } else if (cardRankStr === '4') {
         // Handmaid
         protectedMap[actorId] = true;
         logText += '（保護）';
-      } else if (card === '5') {
+      } else if (cardRankStr === '5') {
         // Wizard
         var t5 = action && action.target ? String(action.target) : '';
         var allowSelf = true;
@@ -4047,7 +4089,7 @@
             setSingleHand(t5, '');
             logText += ' → ' + pname(t5) + ' に捨て札';
             var drawn = '';
-            if (String(old) === '8') {
+            if (llCardRankStr(old) === '8') {
               eliminatePlayer(t5, 'wizard_princess');
               logText += '（姫：脱落）';
             } else {
@@ -4077,7 +4119,7 @@
         } else {
           logText += '（対象なし）';
         }
-      } else if (card === '6') {
+      } else if (cardRankStr === '6') {
         // General (swap)
         var t6 = action && action.target ? String(action.target) : '';
         var eligible6 = eligibleTargetIds(false);
@@ -4099,10 +4141,10 @@
         } else {
           logText += '（対象なし）';
         }
-      } else if (card === '7') {
+      } else if (cardRankStr === '7') {
         // Countess
         logText += '（効果なし）';
-      } else if (card === '8') {
+      } else if (cardRankStr === '8') {
         // Princess (cannot be played by choice)
         return room;
       }
@@ -4168,8 +4210,8 @@
           var before = nextHand.length ? String(nextHand[0]) : '';
           nextHand.push(String(drawn2));
           // Minister overload: if you have 7 and your 2-card total >= 12, you immediately lose.
-          var total = (parseIntSafe(before, 0) || 0) + (parseIntSafe(drawn2, 0) || 0);
-          if ((String(before) === '7' || String(drawn2) === '7') && total >= 12) {
+            var total = (llCardRank(before) || 0) + (llCardRank(drawn2) || 0);
+            if ((llCardRankStr(before) === '7' || llCardRankStr(drawn2) === '7') && total >= 12) {
               // eliminate and pause until ack
               eliminated[next.id] = true;
               protectedMap[next.id] = false;
@@ -4278,8 +4320,8 @@
         if (drawn2) {
           var before = nextHand.length ? String(nextHand[0]) : '';
           nextHand.push(String(drawn2));
-          var total = (parseIntSafe(before, 0) || 0) + (parseIntSafe(drawn2, 0) || 0);
-          if ((String(before) === '7' || String(drawn2) === '7') && total >= 12) {
+            var total = (llCardRank(before) || 0) + (llCardRank(drawn2) || 0);
+            if ((llCardRankStr(before) === '7' || llCardRankStr(drawn2) === '7') && total >= 12) {
               eliminated[next.id] = true;
               protectedMap[next.id] = false;
               for (var mdi = 0; mdi < nextHand.length; mdi++) pushDiscard(next.id, nextHand[mdi]);
@@ -6900,7 +6942,7 @@
                     return seq2;
                   })
                   .then(function () {
-                    return startLoveLetterGame(roomId, mid);
+                    return;
                   });
               }
               return;
@@ -6921,7 +6963,7 @@
               } else if (kind === 'loveletter') {
                 q.host = '1';
                 q.player = '1';
-                q.screen = 'loveletter_player';
+                q.screen = 'loveletter_extras';
               }
               setQuery(q);
               route();
@@ -8486,6 +8528,43 @@
     }
   }
 
+  function setLoveLetterExtraCards(roomId, extraCards) {
+    var base = loveletterRoomPath(roomId);
+    var nextExtras = llNormalizeExtraCards(extraCards);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'lobby') return room;
+      var settings = assign({}, room.settings || {}, { extraCards: nextExtras });
+      return assign({}, room, { settings: settings });
+    });
+  }
+
+  function renderLoveLetterExtras(viewEl, opts) {
+    var roomId = opts.roomId;
+    var room = opts.room;
+    var extras = llNormalizeExtraCards(room && room.settings ? room.settings.extraCards : []);
+
+    var noneChecked = extras.length === 0;
+    var hasMegane = extras.indexOf('8:megane') >= 0;
+    var hasCountess = extras.indexOf('7:countess') >= 0;
+
+    function cardPreview(cardId) {
+      var d = llCardDef(cardId);
+      var icon = d && d.icon ? String(d.icon) : '';
+      if (icon) {
+        return '<div class="ll-spectate-card" style="width:140px">' +
+          '<img class="ll-card-img" alt="' + escapeHtml(d.name || '') + '" src="' + escapeHtml(icon) + '" />' +
+          '</div>';
+      }
+      return '<div class="ll-spectate-card" style="width:140px"><div class="stack" style="height:100%;justify-content:center;align-items:center"><div class="big">' + escapeHtml(d.name || '-') + '</div></div></div>';
+    }
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">ラブレター：追加カード</div>\n      <div class="muted">ゲーム開始前に、山札に追加するカードを選びます（GMのみ）。</div>\n\n      <div id="llExtrasError" class="form-error" role="alert"></div>\n\n      <div class="card" style="padding:12px">\n        <div class="stack">\n          <label style="display:flex;gap:10px;align-items:center">\n            <input type="radio" name="llExtraMode" value="none" ' + (noneChecked ? 'checked' : '') + ' />\n            <div><b>追加カードなし</b></div>\n          </label>\n\n          <label style="display:flex;gap:10px;align-items:center">\n            <input type="radio" name="llExtraMode" value="add" ' + (!noneChecked ? 'checked' : '') + ' />\n            <div><b>追加カードを追加</b>（下から複数選択可）</div>\n          </label>\n\n          <div id="llExtrasList" class="stack" style="gap:12px;margin-top:6px">\n            <label style="display:flex;gap:12px;align-items:center">\n              <input type="checkbox" id="llExtraMegane" ' + (hasMegane ? 'checked' : '') + ' />\n              ' + cardPreview('8:megane') + '\n              <div>姫（眼鏡）(8) / 1枚</div>\n            </label>\n            <label style="display:flex;gap:12px;align-items:center">\n              <input type="checkbox" id="llExtraCountess" ' + (hasCountess ? 'checked' : '') + ' />\n              ' + cardPreview('7:countess') + '\n              <div>女侯爵(7) / 1枚</div>\n            </label>\n          </div>\n        </div>\n      </div>\n\n      <div class="row">\n        <button id="llExtrasStart" class="primary">この設定で開始</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n\n      <div class="muted">※ 他の参加者はそのまま待機していてOKです。</div>\n    </div>\n  '
+    );
+  }
+
   function renderLoveLetterPlayer(viewEl, opts) {
     var roomId = opts.roomId;
     var playerId = opts.playerId;
@@ -8673,10 +8752,11 @@
     if (ui && ui.pending && ui.pending.card) {
       var pending = ui.pending;
       var pendingCard = String(pending.card);
-      var needsTarget = pendingCard === '1' || pendingCard === '2' || pendingCard === '3' || pendingCard === '5' || pendingCard === '6';
-      var allowSelfTarget = pendingCard === '5';
-      var needsGuess = pendingCard === '1';
-      var compactSelectOnly = pendingCard === '1' || pendingCard === '5';
+      var pc = llCardRankStr(pendingCard);
+      var needsTarget = pc === '1' || pc === '2' || pc === '3' || pc === '5' || pc === '6';
+      var allowSelfTarget = pc === '5';
+      var needsGuess = pc === '1';
+      var compactSelectOnly = pc === '1' || pc === '5';
 
       var eligible = [];
       for (var pi = 0; pi < order.length; pi++) {
@@ -9320,21 +9400,15 @@
       if (startBtn && !startBtn.__ll_bound) {
         startBtn.__ll_bound = true;
         startBtn.addEventListener('click', function () {
-          startLoveLetterGame(roomId, hostPlayerId)
-            .then(function () {
-              var q = {};
-              var v = getCacheBusterParam();
-              if (v) q.v = v;
-              q.room = roomId;
-              q.host = '1';
-              q.player = '1';
-              q.screen = 'loveletter_player';
-              setQuery(q);
-              route();
-            })
-            .catch(function (e) {
-              alert((e && e.message) || '失敗');
-            });
+          var q = {};
+          var v = getCacheBusterParam();
+          if (v) q.v = v;
+          q.room = roomId;
+          q.host = '1';
+          q.player = '1';
+          q.screen = 'loveletter_extras';
+          setQuery(q);
+          route();
         });
       }
     }
@@ -9349,6 +9423,165 @@
           renderLoveLetterHost(viewEl, { roomId: roomId, joinUrl: joinUrl, room: room, hostPlayerId: hostPlayerId });
           drawQr();
           bindHostButtons(room);
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+    });
+  }
+
+  function routeLoveLetterExtras(roomId, isHost) {
+    var unsub = null;
+    var playerId = getOrCreateLoveLetterPlayerId(roomId);
+
+    firebaseReady()
+      .then(function () {
+        return subscribeLoveLetterRoom(roomId, function (room) {
+          if (!room) {
+            renderError(viewEl, '部屋が見つかりません');
+            return;
+          }
+
+          // Only the host player can use this screen.
+          var me = room && room.players && playerId ? room.players[playerId] : null;
+          if (!me || !me.isHost || !isHost) {
+            var qx = {};
+            var vx = getCacheBusterParam();
+            if (vx) qx.v = vx;
+            qx.room = roomId;
+            qx.player = '1';
+            if (isHost) qx.host = '1';
+            try {
+              var qq = parseQuery();
+              if (qq && qq.lobby) qx.lobby = String(qq.lobby);
+            } catch (e0) {
+              // ignore
+            }
+            qx.screen = 'loveletter_player';
+            setQuery(qx);
+            route();
+            return;
+          }
+
+          // If already started, skip.
+          if (room.phase !== 'lobby') {
+            var qy = {};
+            var vy = getCacheBusterParam();
+            if (vy) qy.v = vy;
+            qy.room = roomId;
+            qy.player = '1';
+            qy.host = '1';
+            try {
+              var qq2 = parseQuery();
+              if (qq2 && qq2.lobby) qy.lobby = String(qq2.lobby);
+            } catch (e1) {
+              // ignore
+            }
+            qy.screen = 'loveletter_player';
+            setQuery(qy);
+            route();
+            return;
+          }
+
+          renderLoveLetterExtras(viewEl, { roomId: roomId, room: room });
+
+          function syncModeUi() {
+            var mode = 'none';
+            try {
+              var radios = document.querySelectorAll('input[name="llExtraMode"]');
+              for (var i = 0; i < radios.length; i++) {
+                var r = radios[i];
+                if (r && r.checked) mode = String(r.value || 'none');
+              }
+            } catch (e2) {
+              mode = 'none';
+            }
+            var disabled = mode !== 'add';
+            var cb1 = document.getElementById('llExtraMegane');
+            var cb2 = document.getElementById('llExtraCountess');
+            if (cb1) {
+              cb1.disabled = disabled;
+              if (disabled) cb1.checked = false;
+            }
+            if (cb2) {
+              cb2.disabled = disabled;
+              if (disabled) cb2.checked = false;
+            }
+          }
+
+          try {
+            var radios2 = document.querySelectorAll('input[name="llExtraMode"]');
+            for (var ri = 0; ri < radios2.length; ri++) {
+              (function (el) {
+                if (!el || el.__ll_bound) return;
+                el.__ll_bound = true;
+                el.addEventListener('change', syncModeUi);
+              })(radios2[ri]);
+            }
+          } catch (e3) {
+            // ignore
+          }
+          syncModeUi();
+
+          var btn = document.getElementById('llExtrasStart');
+          if (btn && !btn.__ll_bound) {
+            btn.__ll_bound = true;
+            btn.addEventListener('click', function () {
+              clearInlineError('llExtrasError');
+              var mode = 'none';
+              try {
+                var radios3 = document.querySelectorAll('input[name="llExtraMode"]');
+                for (var i3 = 0; i3 < radios3.length; i3++) {
+                  var r3 = radios3[i3];
+                  if (r3 && r3.checked) mode = String(r3.value || 'none');
+                }
+              } catch (e4) {
+                mode = 'none';
+              }
+
+              var extras = [];
+              if (mode === 'add') {
+                var mEl = document.getElementById('llExtraMegane');
+                var cEl = document.getElementById('llExtraCountess');
+                if (mEl && mEl.checked) extras.push('8:megane');
+                if (cEl && cEl.checked) extras.push('7:countess');
+              }
+
+              btn.disabled = true;
+              setLoveLetterExtraCards(roomId, extras)
+                .then(function () {
+                  return startLoveLetterGame(roomId, playerId);
+                })
+                .then(function () {
+                  var qz = {};
+                  var vz = getCacheBusterParam();
+                  if (vz) qz.v = vz;
+                  qz.room = roomId;
+                  qz.player = '1';
+                  qz.host = '1';
+                  try {
+                    var qq3 = parseQuery();
+                    if (qq3 && qq3.lobby) qz.lobby = String(qq3.lobby);
+                  } catch (e5) {
+                    // ignore
+                  }
+                  qz.screen = 'loveletter_player';
+                  setQuery(qz);
+                  route();
+                })
+                .catch(function (e6) {
+                  btn.disabled = false;
+                  setInlineError('llExtrasError', (e6 && e6.message) || '開始に失敗しました');
+                });
+            });
+          }
         });
       })
       .then(function (u) {
@@ -9932,7 +10165,7 @@
       };
 
       // Host-mode is never allowed on restricted devices (even if URL is tampered).
-      if (isHost || screen === 'lobby_host' || screen === 'lobby_assign' || screen === 'lobby_login' || screen === 'lobby_create' || screen === 'create' || screen === 'setup' || screen === 'history' || screen === 'codenames_create' || screen === 'codenames_host' || screen === 'loveletter_create' || screen === 'loveletter_host') {
+      if (isHost || screen === 'lobby_host' || screen === 'lobby_assign' || screen === 'lobby_login' || screen === 'lobby_create' || screen === 'create' || screen === 'setup' || screen === 'history' || screen === 'codenames_create' || screen === 'codenames_host' || screen === 'loveletter_create' || screen === 'loveletter_host' || screen === 'loveletter_extras') {
         redirectRestrictedToLobbyPlayer();
         return;
       }
@@ -9987,6 +10220,10 @@
     if (screen === 'loveletter_host') {
       if (!roomId) return routeHome();
       return routeLoveLetterHost(roomId);
+    }
+    if (screen === 'loveletter_extras') {
+      if (!roomId) return routeHome();
+      return routeLoveLetterExtras(roomId, isHost);
     }
     if (screen === 'loveletter_player') {
       if (!roomId) return routeHome();
