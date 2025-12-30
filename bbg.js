@@ -3636,7 +3636,7 @@
           logText += '（対象なし）';
         }
       } else if (card === '6') {
-        // King
+        // General (swap)
         var t6 = action && action.target ? String(action.target) : '';
         var eligible6 = eligibleTargetIds(false);
         if (eligible6.length && (!t6 || eligible6.indexOf(t6) < 0)) return room;
@@ -3649,6 +3649,10 @@
             setSingleHand(actorId, b6);
             setSingleHand(t6, a6);
             logText += ' → ' + pname(t6) + ' と手札交換';
+
+            // Show swapped cards and wait for actor to proceed.
+            round.reveal = { type: 'general_swap', by: actorId, target: t6, byCard: a6, targetCard: b6 };
+            round.waitFor = { type: 'general_ack', by: actorId };
           }
         } else {
           logText += '（対象なし）';
@@ -5897,12 +5901,14 @@
 
     var pilesText = '山札 ' + String(deckLeft) + ' / 墓地 ' + String(graveCount);
     var pilesHtml =
-      '<span class="ll-piles">' +
+      '<div class="ll-piles-box">' +
+      '<div class="ll-piles-text">' +
       escapeHtml(pilesText) +
+      '</div>' +
       (graveLatest
-        ? ' <img class="ll-grave-icon" alt="grave" src="' + escapeHtml((llCardDef(graveLatest) || {}).icon || '') + '" />'
+        ? '<img class="ll-piles-icon" alt="grave" src="' + escapeHtml((llCardDef(graveLatest) || {}).icon || '') + '" />'
         : '') +
-      '</span>';
+      '</div>';
 
     function llCardImgHtml(rank) {
       var d = llCardDef(rank);
@@ -5971,6 +5977,7 @@
       var needsTarget = pendingCard === '1' || pendingCard === '2' || pendingCard === '3' || pendingCard === '5' || pendingCard === '6';
       var allowSelfTarget = pendingCard === '5';
       var needsGuess = pendingCard === '1';
+      var compactSelectOnly = pendingCard === '1' || pendingCard === '5';
 
       var eligible = [];
       for (var pi = 0; pi < order.length; pi++) {
@@ -6027,19 +6034,21 @@
       }
 
       modalHtml =
-        '<div class="ll-overlay" role="dialog" aria-modal="true">' +
+        '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
         '<div class="ll-overlay-backdrop"></div>' +
         '<div class="ll-overlay-panel">' +
-        '<div class="big">' +
+        '<div class="big ll-modal-title">' +
         escapeHtml(llCardDef(pendingCard).name + ' を使用') +
         '</div>' +
-        '<div class="ll-modal-card">' +
-        llCardImgHtml(pendingCard) +
-        '</div>' +
+        (compactSelectOnly
+          ? ''
+          : '<div class="ll-action-card">' +
+            llCardImgHtml(pendingCard) +
+            '</div>') +
         (needsTarget ? '<div class="muted">対象</div><div class="stack">' + targetBtns + '</div>' : '') +
         (needsGuess ? '<div class="muted">推測</div><div class="ll-guess-grid">' + guessBtns + '</div>' : '') +
         '<div id="llPlayError" class="form-error" role="alert"></div>' +
-        '<div class="row" style="justify-content:flex-end">' +
+        '<div class="row ll-modal-actions" style="justify-content:space-between">' +
         '<button id="llCancelPlay" class="ghost">キャンセル</button>' +
         '<button id="llConfirmPlay" class="primary" ' +
         (canConfirm ? '' : 'disabled') +
@@ -6053,12 +6062,12 @@
     if (!ui.ackInFlight && ui && ui.modal && ui.modal.type === 'peek') {
       var m = ui.modal;
       modalHtml =
-        '<div class="ll-overlay" role="dialog" aria-modal="true">' +
+        '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
         '<div class="ll-overlay-backdrop"></div>' +
         '<div class="ll-overlay-panel">' +
         '<div class="big">道化：確認</div>' +
-        '<div class="muted">対象：' + escapeHtml(String(m.targetName || '')) + '</div>' +
-        '<div class="ll-modal-card">' + llCardImgHtml(String(m.rank || '')) + '</div>' +
+        '<div class="ll-modal-name">' + escapeHtml(String(m.targetName || '')) + '</div>' +
+        '<div class="ll-reveal-card">' + llCardImgHtml(String(m.rank || '')) + '</div>' +
         '<div class="row" style="justify-content:flex-end">' +
         '<button id="llAck" class="primary">OK</button>' +
         '</div>' +
@@ -6066,24 +6075,39 @@
         '</div>';
     }
 
-    // Reveal modal (騎士/大臣オーバー)
+    // Reveal modal (騎士/将軍交換/大臣オーバー/全員公開)
       if (!ui.ackInFlight && !modalHtml && phase === 'playing' && r && r.reveal && r.reveal.type) {
       var rv = r.reveal;
-      if (rv.type === 'knight') {
+      if (rv.type === 'knight' || rv.type === 'general_swap') {
         var by = String(rv.by || '');
         var tg = String(rv.target || '');
         if (String(playerId) === by || String(playerId) === tg) {
           var byName = ps[by] ? formatPlayerDisplayName(ps[by]) : by;
           var tgName = ps[tg] ? formatPlayerDisplayName(ps[tg]) : tg;
+          var title = rv.type === 'general_swap' ? '将軍：手札交換' : '騎士：比較結果';
           modalHtml =
-            '<div class="ll-overlay" role="dialog" aria-modal="true">' +
+            '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
             '<div class="ll-overlay-backdrop"></div>' +
             '<div class="ll-overlay-panel">' +
-            '<div class="big">騎士：比較結果</div>' +
-            '<div class="muted">' + escapeHtml(byName) + '</div>' +
-            '<div class="ll-modal-card">' + llCardImgHtml(String(rv.byCard || '')) + '</div>' +
-            '<div class="muted">' + escapeHtml(tgName) + '</div>' +
-            '<div class="ll-modal-card">' + llCardImgHtml(String(rv.targetCard || '')) + '</div>' +
+            '<div class="big">' + escapeHtml(title) + '</div>' +
+            '<div class="ll-compare-row">' +
+            '<div class="ll-compare-col">' +
+            '<div class="ll-modal-name">' +
+            escapeHtml(byName) +
+            '</div>' +
+            '<div class="ll-compare-card">' +
+            llCardImgHtml(String(rv.byCard || '')) +
+            '</div>' +
+            '</div>' +
+            '<div class="ll-compare-col">' +
+            '<div class="ll-modal-name">' +
+            escapeHtml(tgName) +
+            '</div>' +
+            '<div class="ll-compare-card">' +
+            llCardImgHtml(String(rv.targetCard || '')) +
+            '</div>' +
+            '</div>' +
+            '</div>' +
             '<div class="row" style="justify-content:flex-end">' +
             (String(playerId) === by ? '<button id="llAck" class="primary">次へ</button>' : '') +
             '</div>' +
@@ -6094,14 +6118,20 @@
         var by2 = String(rv.by || '');
         if (String(playerId) === by2) {
           modalHtml =
-            '<div class="ll-overlay" role="dialog" aria-modal="true">' +
+            '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
             '<div class="ll-overlay-backdrop"></div>' +
             '<div class="ll-overlay-panel">' +
             '<div class="big">大臣：合計12以上</div>' +
-            '<div class="muted">手札</div>' +
-            '<div class="ll-modal-card">' + llCardImgHtml(String(rv.had || '7')) + '</div>' +
-            '<div class="muted">引いたカード</div>' +
-            '<div class="ll-modal-card">' + llCardImgHtml(String(rv.drew || '')) + '</div>' +
+            '<div class="ll-compare-row">' +
+            '<div class="ll-compare-col">' +
+            '<div class="ll-modal-name">手札</div>' +
+            '<div class="ll-compare-card">' + llCardImgHtml(String(rv.had || '7')) + '</div>' +
+            '</div>' +
+            '<div class="ll-compare-col">' +
+            '<div class="ll-modal-name">引いたカード</div>' +
+            '<div class="ll-compare-card">' + llCardImgHtml(String(rv.drew || '')) + '</div>' +
+            '</div>' +
+            '</div>' +
             '<div class="row" style="justify-content:flex-end">' +
             '<button id="llAck" class="primary">脱落</button>' +
             '</div>' +
@@ -6121,16 +6151,12 @@
           var nm = ps[pid3] ? formatPlayerDisplayName(ps[pid3]) : String(pid3);
           grid +=
             '<div class="ll-showdown-item">' +
-            '<div class="muted">' +
-            escapeHtml(nm) +
-            '</div>' +
-            '<div class="ll-modal-card">' +
-            llCardImgHtml(String(h[0] || '')) +
-            '</div>' +
+            '<div class="ll-modal-name">' + escapeHtml(nm) + '</div>' +
+            '<div class="ll-showdown-card">' + llCardImgHtml(String(h[0] || '')) + '</div>' +
             '</div>';
         }
         modalHtml =
-          '<div class="ll-overlay" role="dialog" aria-modal="true">' +
+          '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
           '<div class="ll-overlay-backdrop"></div>' +
           '<div class="ll-overlay-panel">' +
           '<div class="big">山札切れ：全員公開</div>' +
@@ -6149,11 +6175,11 @@
       viewEl,
       '\n    <div class="stack ll-player">\n      <div class="big ll-player-name">' +
         escapeHtml(selfName) +
-        '</div>\n\n      <div class="card" style="padding:10px">\n        <div class="ll-topline">\n          <div class="ll-status">' +
-        escapeHtml(statusText || '') +
-        '</div>\n          ' +
+        '</div>\n\n      <div class="card ll-status-card" style="padding:10px">\n        ' +
         pilesHtml +
-        '\n        </div>\n      </div>\n\n      ' +
+        '\n        <div class="ll-topline">\n          <div class="ll-status">' +
+        escapeHtml(statusText || '') +
+        '</div>\n        </div>\n      </div>\n\n      ' +
         (resultHtml || '') +
         '\n\n      ' +
         (handHtml || '') +
@@ -6402,7 +6428,7 @@
 
     var playerId = getOrCreateLoveLetterPlayerId(roomId);
     var unsub = null;
-    var ui = { pending: null, modal: null, handFrontIndex: 1, peekDismissedKey: '', ackInFlight: false };
+    var ui = { pending: null, modal: null, handFrontIndex: 1, peekDismissedKey: '', ackInFlight: false, modalScrollTop: 0 };
     var lastRoom = null;
 
     function computePeekModal(room) {
@@ -6432,6 +6458,16 @@
 
       var player = room && room.players ? room.players[playerId] : null;
       renderLoveLetterPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui });
+
+      // Restore scroll position inside modal panel (prevents jumping to top on rerender).
+      try {
+        var panel = document.querySelector('.ll-overlay-panel');
+        if (panel && ui && typeof ui.modalScrollTop === 'number') {
+          panel.scrollTop = ui.modalScrollTop;
+        }
+      } catch (eScroll) {
+        // ignore
+      }
 
       var ackBtn = document.getElementById('llAck');
       if (ackBtn && !ackBtn.__ll_bound) {
@@ -6608,6 +6644,12 @@
       var pickTargets = document.querySelectorAll('.llPickTarget');
       for (var t = 0; t < pickTargets.length; t++) {
         pickTargets[t].addEventListener('click', function (ev) {
+          try {
+            var panel = document.querySelector('.ll-overlay-panel');
+            ui.modalScrollTop = panel ? panel.scrollTop : 0;
+          } catch (e0) {
+            ui.modalScrollTop = 0;
+          }
           var el = ev && ev.currentTarget ? ev.currentTarget : null;
           var tid = el ? String(el.getAttribute('data-target') || '') : '';
           if (!ui.pending) ui.pending = { card: '', target: '', guess: '' };
@@ -6619,6 +6661,12 @@
       var pickGuesses = document.querySelectorAll('.llPickGuess');
       for (var g = 0; g < pickGuesses.length; g++) {
         pickGuesses[g].addEventListener('click', function (ev) {
+          try {
+            var panel = document.querySelector('.ll-overlay-panel');
+            ui.modalScrollTop = panel ? panel.scrollTop : 0;
+          } catch (e1) {
+            ui.modalScrollTop = 0;
+          }
           var el = ev && ev.currentTarget ? ev.currentTarget : null;
           var gv = el ? String(el.getAttribute('data-guess') || '') : '';
           if (!ui.pending) ui.pending = { card: '', target: '', guess: '' };

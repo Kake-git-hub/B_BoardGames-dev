@@ -129,7 +129,7 @@ body.ll-player-screen .app{padding-top:10px}
 .ll-hand-wrap{display:flex;flex-direction:column;gap:10px}
 .ll-hand{
   position:relative;
-  width:min(360px, 92vw);
+  width:min(340px, 90vw);
   margin:0 auto;
   aspect-ratio:3/4;
   touch-action:manipulation;
@@ -145,7 +145,8 @@ body.ll-player-screen .app{padding-top:10px}
   user-select:none;
 }
 .ll-card-back{transform:translate(0,0) scale(.90);opacity:.85}
-.ll-card-front{transform:translate(18px,20%) scale(.90)}
+.ll-card-front{transform:translate(14px,16%) scale(.90)}
+.ll-turn-waiting .ll-card-front{transform:translate(0,0) scale(.90);opacity:.85}
 .ll-card-img{width:100%;height:100%;object-fit:contain;display:block}
 .ll-hint{font-size:13px}
 
@@ -153,17 +154,31 @@ body.ll-player-screen .app{padding-top:10px}
 .ll-player-name{margin-top:0}
 .ll-topline{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:nowrap}
 .ll-topline .ll-status{font-weight:900;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ll-topline .ll-piles{color:var(--muted);font-size:13px;white-space:nowrap}
+
+.ll-status-card{position:relative;min-height:96px;padding-right:112px}
+.ll-piles-box{position:absolute;top:8px;right:8px;border:1px solid var(--line);border-radius:12px;padding:6px;background:#0f1520;display:flex;flex-direction:column;align-items:center;gap:4px}
+.ll-piles-text{color:var(--muted);font-size:12px;white-space:nowrap}
+.ll-piles-icon{width:88px;height:88px;object-fit:contain;border-radius:10px;border:1px solid var(--line);background:#0f1520}
 
 .ll-grave-icon{width:22px;height:22px;object-fit:contain;vertical-align:-6px;display:inline-block;margin-left:6px;border-radius:6px;border:1px solid var(--line);background:#0f1520}
 
 .ll-modal-card{width:min(320px, 80vw);margin:10px auto;aspect-ratio:3/4}
+.ll-action-card{width:min(240px, 64vw);margin:8px auto;aspect-ratio:3/4}
+.ll-reveal-card{width:min(300px, 76vw);margin:8px auto;aspect-ratio:3/4}
+.ll-modal-name{font-weight:900;text-align:center;font-size:16px;margin:6px 0 0}
+.ll-modal-actions{gap:12px}
+.ll-modal-actions button{min-width:120px}
 .ll-guess-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .ll-guess-grid button{width:100%}
 
 .ll-overlay{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px}
+.ll-overlay.ll-sheet{align-items:flex-end}
 .ll-overlay-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6)}
 .ll-overlay-panel{position:relative;width:100%;max-width:520px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;max-height:calc(100vh - 32px);overflow:auto}
+
+.ll-compare-row{display:flex;gap:10px;justify-content:space-between;align-items:flex-start;margin-top:6px}
+.ll-compare-col{flex:1;min-width:0}
+.ll-compare-card{width:100%;aspect-ratio:3/4;max-width:180px;margin:6px auto 0}
 
 /* Love Letter: turn emphasis */
 #view.ll-turn-actor::before{content:"";position:absolute;inset:-4px;border:4px solid var(--text);border-radius:12px;pointer-events:none}
@@ -172,5 +187,5 @@ body.ll-player-screen .app{padding-top:10px}
 
 /* Love Letter: showdown */
 .ll-showdown-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.ll-showdown-item{display:flex;gap:10px;align-items:center}
-.ll-showdown-item img{width:54px;height:72px;object-fit:contain;border-radius:8px;border:1px solid var(--line);background:#0f1520}
+.ll-showdown-item{display:flex;flex-direction:column;gap:6px;align-items:center}
+.ll-showdown-card{width:min(220px, 44vw);aspect-ratio:3/4}
