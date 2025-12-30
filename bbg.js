@@ -3066,15 +3066,31 @@
         if ((counts[pid2] || 0) === bestCount) leaders.push(pid2);
       }
 
+      // Show vote leaders in a modal first (phase=reveal). GM advances next.
       if (leaders.length > 1) {
-        // If this is already a runoff revote and it's still tied, minority wins.
-        if (candidateIds && candidateIds.length) {
-          return assign({}, room, {
-            phase: 'finished',
-            reveal: { revealedAt: serverNowMs(), votedOutId: '' },
-            result: { winner: 'minority', decidedAt: serverNowMs(), decidedBy: 'runoff-tie' }
-          });
-        }
+        return assign({}, room, {
+          phase: 'reveal',
+          reveal: { revealedAt: serverNowMs(), votedOutId: '', tieCandidates: leaders }
+        });
+      }
+
+      var votedOutId = leaders[0] || computeVotedOutId(room);
+      return assign({}, room, {
+        phase: 'reveal',
+        reveal: { revealedAt: serverNowMs(), votedOutId: votedOutId }
+      });
+    });
+  }
+
+  function advanceAfterVoteReveal(roomId) {
+    var base = roomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'reveal') return room;
+
+      var rv = (room && room.reveal) || {};
+      var tieCandidates = rv && Array.isArray(rv.tieCandidates) ? rv.tieCandidates.slice() : null;
+      if (tieCandidates && tieCandidates.length > 1) {
         var prevRound = room.voting && room.voting.runoff && room.voting.runoff.round ? parseIntSafe(room.voting.runoff.round, 0) : 0;
         return assign({}, room, {
           phase: 'voting',
@@ -3082,27 +3098,37 @@
           voting: {
             startedAt: serverNowMs(),
             revealedAt: 0,
-            runoff: { round: prevRound + 1, candidates: leaders }
+            runoff: { round: prevRound + 1, candidates: tieCandidates }
           },
           reveal: { revealedAt: 0, votedOutId: '' }
         });
       }
 
-      var votedOutId = leaders[0] || computeVotedOutId(room);
-      var votedOutRole = votedOutId && room.players && room.players[votedOutId] ? room.players[votedOutId].role : '';
-      var reversal = !!(room.settings && room.settings.reversal);
-
-      // Branch:
-      // - voted-out is majority => minority wins immediately
-      // - voted-out is minority => if reversal enabled -> minority can guess, then ゲームマスター decides; else majority wins
-      if (votedOutRole === 'majority') {
+      var votedOutId = rv && rv.votedOutId ? String(rv.votedOutId) : '';
+      if (!votedOutId) {
+        // Safety: if we somehow reached reveal without a target, restart voting.
         return assign({}, room, {
-          phase: 'finished',
-          reveal: { revealedAt: serverNowMs(), votedOutId: votedOutId },
-          result: { winner: 'minority', decidedAt: serverNowMs(), decidedBy: 'auto' }
+          phase: 'voting',
+          votes: {},
+          voting: { startedAt: serverNowMs(), revealedAt: 0 },
+          reveal: { revealedAt: 0, votedOutId: '' }
         });
       }
 
+      var votedOutRole = votedOutId && room.players && room.players[votedOutId] ? String(room.players[votedOutId].role || '') : '';
+      var reversal = !!(room.settings && room.settings.reversal);
+      var keepReveal = { revealedAt: rv.revealedAt || serverNowMs(), votedOutId: votedOutId };
+
+      // If majority was voted out => minority wins immediately.
+      if (votedOutRole === 'majority') {
+        return assign({}, room, {
+          phase: 'finished',
+          reveal: keepReveal,
+          result: { winner: 'minority', decidedAt: serverNowMs(), decidedBy: 'vote' }
+        });
+      }
+
+      // If minority was voted out => if reversal enabled, minority can guess; otherwise majority wins.
       if (votedOutRole === 'minority' && reversal) {
         var nextGuess = assign(
           {
@@ -3115,17 +3141,16 @@
         if (!nextGuess.guesses) nextGuess.guesses = {};
         return assign({}, room, {
           phase: 'guess',
-          reveal: { revealedAt: serverNowMs(), votedOutId: votedOutId },
+          reveal: keepReveal,
           guess: nextGuess,
           result: { winner: '', decidedAt: 0, decidedBy: '' }
         });
       }
 
-      // default: majority wins
       return assign({}, room, {
         phase: 'finished',
-        reveal: { revealedAt: serverNowMs(), votedOutId: votedOutId },
-        result: { winner: 'majority', decidedAt: serverNowMs(), decidedBy: 'auto' }
+        reveal: keepReveal,
+        result: { winner: 'majority', decidedAt: serverNowMs(), decidedBy: 'vote' }
       });
     });
   }
@@ -5551,11 +5576,11 @@
 
     var singleWordHtml = '<div class="big">' + escapeHtml(word || '（未配布）') + '</div>';
     var bothWordsHtml =
-      '<div class="stack">' +
-      '<div><div class="muted">多数側</div><div class="big">' +
+      '<div class="inline-row" style="gap:12px;align-items:flex-start">' +
+      '<div style="flex:1;min-width:0"><div class="muted">多数側</div><div class="big">' +
       escapeHtml(majorityWord || '（未配布）') +
       '</div></div>' +
-      '<div><div class="muted">少数側</div><div class="big">' +
+      '<div style="flex:1;min-width:0"><div class="muted">少数側</div><div class="big">' +
       escapeHtml(minorityWord || '（未配布）') +
       '</div></div>' +
       '</div>';
@@ -5580,8 +5605,9 @@
     else if (phase === 'discussion') statusText = 'トーク中：少数側を探しましょう。';
     else if (phase === 'voting') statusText = votedTo ? '待機中：全員の投票を待っています。' : '投票してください。';
     else if (phase === 'guess') statusText = role === 'minority' ? '少数側は多数側ワードを入力してください。' : '待機中：少数側の入力を待っています。';
+    else if (phase === 'reveal') statusText = isHost ? '投票結果を表示します。' : '待機中：投票結果を表示します。';
     else if (phase === 'judge') statusText = isHost ? '判定：勝敗を決定してください。' : '待機中：ゲームマスターの判定を待っています。';
-    else if (phase === 'finished') statusText = 'ゲーム終了：結果を確認してください。';
+    else if (phase === 'finished') statusText = '';
 
     // Short status for top line (prevents huge blocks after voting).
     var statusShort = '';
@@ -5589,6 +5615,7 @@
     else if (phase === 'discussion') statusShort = 'トーク中';
     else if (phase === 'voting') statusShort = votedTo ? '待機中' : '投票してください';
     else if (phase === 'guess') statusShort = role === 'minority' ? '推理入力' : '待機中';
+    else if (phase === 'reveal') statusShort = '結果発表';
     else if (phase === 'judge') statusShort = isHost ? '判定' : '待機中';
     else if (phase === 'finished') statusShort = '終了';
 
@@ -5693,33 +5720,6 @@
               ? '<div class="kv"><span class="muted">送信済み</span><b>' + escapeHtml(myGuess0) + '</b></div>'
               : '<div class="stack"><input id="guessText" placeholder="多数側ワード" /><button id="submitGuess" class="primary">送信</button></div>');
         }
-      } else if (phase === 'judge') {
-        // No "予想一覧". Show only the keyword(s) and GM decision.
-        var guessesObj0 = (room && room.guess && room.guess.guesses) || {};
-        var gKeys0 = Object.keys(guessesObj0);
-        var uniq = {};
-        var uniqList = [];
-        for (var gi0 = 0; gi0 < gKeys0.length; gi0++) {
-          var entry0 = guessesObj0[gKeys0[gi0]];
-          var txt0 = entry0 && entry0.text ? String(entry0.text).trim() : '';
-          if (!txt0) continue;
-          var key0 = txt0.toLowerCase();
-          if (uniq[key0]) continue;
-          uniq[key0] = true;
-          uniqList.push(txt0);
-        }
-        if (uniqList.length) {
-          extraHtml += '<hr /><div class="kv"><span class="muted">少数側予想</span><b>' + escapeHtml(uniqList.join(' / ')) + '</b></div>';
-        }
-        if (isHost) {
-          extraHtml +=
-            '<hr />' +
-            '<div class="muted">ゲームマスターが勝敗を決定します</div>' +
-            '<div class="row">' +
-            '<button id="decideMinority" class="primary">少数側の勝ち</button>' +
-            '<button id="decideMajority" class="danger">多数側の勝ち</button>' +
-            '</div>';
-        }
       }
 
       voteResultHtml = '<div class="card" style="padding:12px"><div class="big">投票結果</div><div class="stack">' + rows + '</div>' + extraHtml + '</div>';
@@ -5737,57 +5737,98 @@
 
     var judgeHtml = '';
 
-    // Guess success modal (reversal path): show keyword clearly to all.
-    var guessWinModalHtml = '';
-    try {
-      var decidedBy = room && room.result && room.result.decidedBy ? String(room.result.decidedBy) : '';
-      var winner0 = room && room.result && room.result.winner ? String(room.result.winner) : '';
-      if (phase === 'finished' && decidedBy === 'gm' && winner0 === 'minority') {
-        var gObj = (room && room.guess && room.guess.guesses) || {};
-        var gk = Object.keys(gObj);
-        var uniq2 = {};
-        var list2 = [];
-        for (var gi2 = 0; gi2 < gk.length; gi2++) {
-          var e2 = gObj[gk[gi2]];
-          var tx = e2 && e2.text ? String(e2.text).trim() : '';
-          if (!tx) continue;
-          var kk = tx.toLowerCase();
-          if (uniq2[kk]) continue;
-          uniq2[kk] = true;
-          list2.push(tx);
-        }
-        if (list2.length) {
-          var k2 = String(room && room.result && room.result.decidedAt ? room.result.decidedAt : '') + '|' + list2.join('|');
-          if (!ui.guessWinDismissedKey || ui.guessWinDismissedKey !== k2) {
-            guessWinModalHtml =
-              '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true" id="wwGuessWinModal" data-key="' +
-              escapeHtml(k2) +
-              '">' +
-              '<div class="ll-overlay-backdrop"></div>' +
-              '<div class="ll-overlay-panel">' +
-              '<div class="big">少数側が当てました</div>' +
-              '<div class="muted">推測キーワード</div>' +
-              '<div class="card center" style="padding:12px;margin-top:10px"><div class="big">' +
-              escapeHtml(list2.join(' / ')) +
-              '</div></div>' +
-              '<div class="row" style="justify-content:flex-end;margin-top:12px">' +
-              (isHost
-                ? '<button id="wwGuessWinClose" class="ghost">閉じる</button>' + (lobbyId ? '<button id="wwGuessWinNext" class="primary">次へ</button>' : '<button id="wwGuessWinOk" class="primary">OK</button>')
-                : '<button id="wwGuessWinOk" class="primary">OK</button>') +
-              '</div>' +
-              '</div>' +
-              '</div>';
+    // Vote reveal modal: show voted-out player (or tie) to all, GM advances.
+    var voteRevealModalHtml = '';
+    if (phase === 'reveal') {
+      try {
+        var rv0 = (room && room.reveal) || {};
+        var tie0 = rv0 && Array.isArray(rv0.tieCandidates) ? rv0.tieCandidates : null;
+        if (tie0 && tie0.length > 1) {
+          var names0 = [];
+          for (var ti0 = 0; ti0 < tie0.length; ti0++) {
+            var pid0 = String(tie0[ti0] || '');
+            if (!pid0) continue;
+            names0.push(players && players[pid0] ? formatPlayerDisplayName(players[pid0]) : pid0);
           }
+          voteRevealModalHtml =
+            '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true" id="wwVoteRevealModal">' +
+            '<div class="ll-overlay-backdrop"></div>' +
+            '<div class="ll-overlay-panel">' +
+            '<div class="big">投票結果：同票</div>' +
+            '<div class="muted">次は同票の人だけで再投票します</div>' +
+            '<div class="card center" style="padding:14px;margin-top:10px"><div class="big">' +
+            escapeHtml(names0.join(' / ') || '-') +
+            '</div></div>' +
+            '<div class="row" style="justify-content:flex-end;margin-top:12px">' +
+            (isHost ? '<button id="wwVoteRevealNext" class="primary">次へ</button>' : '<div class="muted">ゲームマスターが進めます</div>') +
+            '</div>' +
+            '</div>' +
+            '</div>';
+        } else {
+          var outId0 = rv0 && rv0.votedOutId ? String(rv0.votedOutId) : '';
+          var outName0 = outId0 && players && players[outId0] ? formatPlayerDisplayName(players[outId0]) : outId0;
+          voteRevealModalHtml =
+            '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true" id="wwVoteRevealModal">' +
+            '<div class="ll-overlay-backdrop"></div>' +
+            '<div class="ll-overlay-panel">' +
+            '<div class="big">投票結果</div>' +
+            '<div class="muted">最多票</div>' +
+            '<div class="card center" style="padding:14px;margin-top:10px"><div class="big">' +
+            escapeHtml(outName0 || '-') +
+            '</div></div>' +
+            '<div class="row" style="justify-content:flex-end;margin-top:12px">' +
+            (isHost ? '<button id="wwVoteRevealNext" class="primary">次へ</button>' : '<div class="muted">ゲームマスターが進めます</div>') +
+            '</div>' +
+            '</div>' +
+            '</div>';
         }
+      } catch (eRv) {
+        voteRevealModalHtml = '';
       }
-    } catch (eM) {
-      // ignore
+    }
+
+    // Guess modal: after minority submits the guess word(s), show to all; GM decides.
+    var guessJudgeModalHtml = '';
+    if (phase === 'judge') {
+      try {
+        var guessesObjJ = (room && room.guess && room.guess.guesses) || {};
+        var gKeysJ = Object.keys(guessesObjJ);
+        var uniqJ = {};
+        var uniqListJ = [];
+        for (var giJ = 0; giJ < gKeysJ.length; giJ++) {
+          var entryJ = guessesObjJ[gKeysJ[giJ]];
+          var txtJ = entryJ && entryJ.text ? String(entryJ.text).trim() : '';
+          if (!txtJ) continue;
+          var keyJ = txtJ.toLowerCase();
+          if (uniqJ[keyJ]) continue;
+          uniqJ[keyJ] = true;
+          uniqListJ.push(txtJ);
+        }
+        if (uniqListJ.length) {
+          guessJudgeModalHtml =
+            '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true" id="wwGuessJudgeModal">' +
+            '<div class="ll-overlay-backdrop"></div>' +
+            '<div class="ll-overlay-panel">' +
+            '<div class="big">少数側の推測</div>' +
+            '<div class="muted">推測ワード</div>' +
+            '<div class="card center" style="padding:14px;margin-top:10px"><div class="big">' +
+            escapeHtml(uniqListJ.join(' / ')) +
+            '</div></div>' +
+            '<div class="row" style="justify-content:flex-end;margin-top:12px">' +
+            (isHost
+              ? '<button id="decideMinority" class="primary">少数側の勝ち</button><button id="decideMajority" class="danger">多数側の勝ち</button>'
+              : '<div class="muted">ゲームマスターが判定します</div>') +
+            '</div>' +
+            '</div>' +
+            '</div>';
+        }
+      } catch (eGj) {
+        guessJudgeModalHtml = '';
+      }
     }
 
     var finishedHtml = '';
     if (phase === 'finished') {
-      var mj = (room && room.words && room.words.majority) || '';
-      var mn = (room && room.words && room.words.minority) || '';
       var winner = (room && room.result && room.result.winner) || '';
       var winnerLabel = winner === 'minority' ? '少数側の勝ち' : winner === 'majority' ? '多数側の勝ち' : '未確定';
 
@@ -5806,12 +5847,6 @@
         (votedOutLine
           ? '<div class="kv"><span class="muted">追放</span><b>' + escapeHtml(votedOutLine) + '</b></div>'
           : '') +
-        '<div class="kv"><span class="muted">多数側ワード</span><b>' +
-        escapeHtml(mj) +
-        '</b></div>' +
-        '<div class="kv"><span class="muted">少数側ワード</span><b>' +
-        escapeHtml(mn) +
-        '</b></div>' +
         (lobbyId
           ? '<hr />' +
             (isHost
@@ -5911,7 +5946,8 @@
         judgeHtml +
         finishedHtml +
         voteResultHtml +
-        guessWinModalHtml +
+        voteRevealModalHtml +
+        guessJudgeModalHtml +
         '\n\n      <div class="row">' +
         (isHost && phase === 'voting' && isVotingComplete(room) ? '<button id="revealNext" class="primary">結果発表</button>' : '') +
         '</div>\n    </div>\n  '
@@ -7940,55 +7976,18 @@
             });
           }
 
-          // Guess-win modal (minority guessed correctly) controls.
-          var guessModal = document.getElementById('wwGuessWinModal');
-          var guessModalKey = '';
-          try {
-            guessModalKey = guessModal ? String(guessModal.getAttribute('data-key') || '') : '';
-          } catch (eKey) {
-            guessModalKey = '';
-          }
-
-          function dismissGuessWinModal() {
-            if (guessModalKey) ui.guessWinDismissedKey = guessModalKey;
-            renderPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui, lobbyId: lobbyId });
-          }
-
-          var okBtn = document.getElementById('wwGuessWinOk');
-          if (okBtn && !okBtn.__ww_bound) {
-            okBtn.__ww_bound = true;
-            okBtn.addEventListener('click', function () {
-              dismissGuessWinModal();
-            });
-          }
-
-          var closeBtn = document.getElementById('wwGuessWinClose');
-          if (closeBtn && !closeBtn.__ww_bound) {
-            closeBtn.__ww_bound = true;
-            closeBtn.addEventListener('click', function () {
-              dismissGuessWinModal();
-            });
-          }
-
-          var nextModalBtn = document.getElementById('wwGuessWinNext');
-          if (nextModalBtn && !nextModalBtn.__ww_bound) {
-            nextModalBtn.__ww_bound = true;
-            nextModalBtn.addEventListener('click', function () {
-              dismissGuessWinModal();
-              if (!lobbyId) return;
-              nextModalBtn.disabled = true;
-              firebaseReady()
-                .then(function () {
-                  return setLobbyCurrentGame(lobbyId, null);
-                })
-                .then(function () {
-                  redirectToLobby();
-                })
+          // Vote reveal modal: GM advances to next phase.
+          var voteRevealNext = document.getElementById('wwVoteRevealNext');
+          if (voteRevealNext && !voteRevealNext.__ww_bound) {
+            voteRevealNext.__ww_bound = true;
+            voteRevealNext.addEventListener('click', function () {
+              voteRevealNext.disabled = true;
+              advanceAfterVoteReveal(roomId)
                 .catch(function (e) {
                   alert((e && e.message) || '失敗');
                 })
                 .finally(function () {
-                  nextModalBtn.disabled = false;
+                  voteRevealNext.disabled = false;
                 });
             });
           }
