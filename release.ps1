@@ -1,6 +1,6 @@
 param(
   [string]$Message = "release",
-  [switch]$NoPush
+  [switch]$NoCommit
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,10 +39,11 @@ if (-not $st) {
   exit 0
 }
 
-git commit -m "$Message (assets $assetV)"
-
-if (-not $NoPush) {
-  git push origin main
+if (-not $NoCommit) {
+  git commit -m "$Message (assets $assetV)"
 }
+
+# Always push (per request)
+git push origin main
 
 Write-Host "Released: assets=$assetV"

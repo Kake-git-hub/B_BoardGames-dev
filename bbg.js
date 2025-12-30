@@ -730,6 +730,120 @@
     return onValue(loveletterRoomPath(roomId), cb);
   }
 
+  // -------------------- shared (persisted name) --------------------
+  var BBG_NAME_KEY = 'bbg_name_v1';
+
+  function loadPersistedName() {
+    try {
+      return String(localStorage.getItem(BBG_NAME_KEY) || '').trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function savePersistedName(name) {
+    var nm = String(name || '').trim();
+    try {
+      if (!nm) localStorage.removeItem(BBG_NAME_KEY);
+      else localStorage.setItem(BBG_NAME_KEY, nm);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  // -------------------- lobby (state) --------------------
+  function lobbyPath(lobbyId) {
+    return 'lobbies/' + lobbyId;
+  }
+
+  function subscribeLobby(lobbyId, cb) {
+    return onValue(lobbyPath(lobbyId), cb);
+  }
+
+  function getOrCreateLobbyMemberId(lobbyId) {
+    var key = 'bbg_lobby_member_' + lobbyId;
+    var id = '';
+    try {
+      id = localStorage.getItem(key);
+    } catch (e) {
+      id = '';
+    }
+    if (!id) {
+      id = randomId(12);
+      try {
+        localStorage.setItem(key, id);
+      } catch (e2) {
+        // ignore
+      }
+    }
+    return id;
+  }
+
+  function createLobby(lobbyId, hostName) {
+    var nm = String(hostName || '').trim();
+    if (!nm) return Promise.reject(new Error('名前を入力してください。'));
+    var mid = getOrCreateLobbyMemberId(lobbyId);
+    var now = serverNowMs ? serverNowMs() : Date.now();
+
+    return runTxn(lobbyPath(lobbyId), function (current) {
+      if (current) return current;
+      var lobby = {
+        createdAt: now,
+        hostMid: mid,
+        members: {},
+        order: [mid],
+        currentGame: null
+      };
+      lobby.members[mid] = { name: nm, joinedAt: now, isGmDevice: true, lastSeenAt: now };
+      return lobby;
+    });
+  }
+
+  function joinLobbyMember(lobbyId, memberId, name, isGmDevice) {
+    var nm = String(name || '').trim();
+    if (!nm) return Promise.reject(new Error('名前を入力してください。'));
+    var mid = String(memberId || '').trim();
+    if (!mid) return Promise.reject(new Error('参加に失敗しました（ID不正）'));
+    var now = serverNowMs ? serverNowMs() : Date.now();
+
+    return runTxn(lobbyPath(lobbyId), function (current) {
+      if (!current) return current;
+      if (!current.members) current.members = {};
+      if (!current.order || !Array.isArray(current.order)) current.order = [];
+
+      if (!current.members[mid]) {
+        current.members[mid] = { name: nm, joinedAt: now, lastSeenAt: now };
+      } else {
+        current.members[mid].name = nm;
+        current.members[mid].lastSeenAt = now;
+      }
+
+      if (isGmDevice) current.members[mid].isGmDevice = true;
+
+      var exists = false;
+      for (var i = 0; i < current.order.length; i++) {
+        if (String(current.order[i]) === mid) {
+          exists = true;
+          break;
+        }
+      }
+      if (!exists) current.order.push(mid);
+      return current;
+    }).then(function (lobby) {
+      if (!lobby) throw new Error('ロビーが見つかりません');
+      return lobby;
+    });
+  }
+
+  function setLobbyOrder(lobbyId, nextOrder) {
+    if (!Array.isArray(nextOrder)) return Promise.reject(new Error('順番が不正です'));
+    return setValue(lobbyPath(lobbyId) + '/order', nextOrder);
+  }
+
+  function setLobbyCurrentGame(lobbyId, currentGame) {
+    return setValue(lobbyPath(lobbyId) + '/currentGame', currentGame || null);
+  }
+
   function parseWordListText(text) {
     var s = String(text || '');
     s = s.replace(/\r\n/g, '\n');
@@ -3944,9 +4058,189 @@
   }
 
   function renderHome(viewEl) {
+    var persistedName = loadPersistedName();
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">B_BoardGames</div>\n      <div class="muted">遊ぶゲームを選びます。</div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">ワードウルフ</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=create">ワードウルフ開始</a>\n          <a class="btn ghost" href="?screen=history">勝敗履歴</a>\n        </div>\n        <div class="muted">参加者はQRを読み取って参加します。</div>\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">コードネーム</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=codenames_create">コードネーム開始</a>\n        </div>\n        <div class="muted">各チームにスパイマスター1人＋諜報員で遊びます。</div>\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">ラブレター</div>\n        <div class="row">\n          <a class="btn primary" href="?screen=loveletter_create">ラブレター開始</a>\n        </div>\n        <div class="muted">手札を1枚使って効果を発動し、最後に残る/強い札で勝ちます。</div>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">B_BoardGames</div>\n      <div class="muted">まずロビーを作成し、参加者は同じQRから入室します。</div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">あなたの名前（保存済み）</div>\n        <div><b>' +
+        escapeHtml(persistedName || '（未設定）') +
+        '</b></div>\n      </div>\n\n      <div class="row">\n        <a class="btn primary" href="?screen=lobby_create">ロビーを作成</a>\n        <a class="btn ghost" href="?screen=lobby_join">ロビーに参加</a>\n      </div>\n\n      <div class="row">\n        <a class="btn ghost" href="?screen=setup">Firebase設定</a>\n        <a class="btn ghost" href="?screen=history">勝敗履歴</a>\n      </div>\n    </div>\n  '
+    );
+  }
+
+  function makeLobbyJoinUrl(lobbyId) {
+    var q = {};
+    var v = getCacheBusterParam();
+    if (v) q.v = v;
+    q.lobby = lobbyId;
+    q.screen = 'lobby_join';
+    return baseUrl() + '?' + buildQuery(q);
+  }
+
+  function renderLobbyCreate(viewEl) {
+    var persistedName = loadPersistedName();
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">ロビーを作成</div>\n      <div id="lobbyCreateError" class="form-error" role="alert"></div>\n\n      <div class="field">\n        <label>あなたの名前（表示用）</label>\n        <input id="lobbyHostName" placeholder="例: たろう" value="' +
+        escapeHtml(persistedName || '') +
+        '" />\n      </div>\n\n      <div class="row">\n        <button id="lobbyCreateBtn" class="primary">作成</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+    );
+  }
+
+  function readLobbyCreateForm() {
+    var el = document.getElementById('lobbyHostName');
+    var name = String((el && el.value) || '').trim();
+    if (!name) throw new Error('名前を入力してください。');
+    return { name: name };
+  }
+
+  function renderLobbyJoin(viewEl, lobbyId) {
+    var persistedName = loadPersistedName();
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">ロビーに参加</div>\n      <div id="lobbyJoinError" class="form-error" role="alert"></div>\n\n      <div class="field">\n        <label>ロビーID</label>\n        <input id="lobbyId" placeholder="例: ABCD1234" value="' +
+        escapeHtml(lobbyId || '') +
+        '" />\n      </div>\n\n      <div class="field">\n        <label>あなたの名前（表示用）</label>\n        <input id="lobbyJoinName" placeholder="例: たろう" value="' +
+        escapeHtml(persistedName || '') +
+        '" />\n      </div>\n\n      <div class="row">\n        <button id="lobbyJoinBtn" class="primary">参加</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+    );
+  }
+
+  function readLobbyJoinForm() {
+    var idEl = document.getElementById('lobbyId');
+    var nameEl = document.getElementById('lobbyJoinName');
+    var lobbyId = String((idEl && idEl.value) || '').trim();
+    var name = String((nameEl && nameEl.value) || '').trim();
+    if (!lobbyId) throw new Error('ロビーIDを入力してください。');
+    if (!name) throw new Error('名前を入力してください。');
+    return { lobbyId: lobbyId, name: name };
+  }
+
+  function lobbyMembersSummaryHtml(lobby) {
+    try {
+      var members = (lobby && lobby.members) || {};
+      var order = (lobby && lobby.order) || [];
+      if (!Array.isArray(order)) order = [];
+      var out = '';
+      for (var i = 0; i < order.length; i++) {
+        var mid = String(order[i] || '');
+        if (!mid) continue;
+        var m = members[mid] || {};
+        var nm = String(m.name || '').trim();
+        if (!nm) nm = '（無名）';
+        out += '<div class="kv"><span class="muted">' + (i + 1) + '</span><b>' + escapeHtml(nm) + '</b></div>';
+      }
+      if (out) return out;
+      var keys = Object.keys(members);
+      if (!keys.length) return '<div class="muted">まだ参加者がいません。</div>';
+      return '<div class="muted">参加者を読み込み中...</div>';
+    } catch (e) {
+      return '<div class="muted">参加者を表示できません。</div>';
+    }
+  }
+
+  function renderLobbyHost(viewEl, opts) {
+    var lobbyId = opts.lobbyId;
+    var joinUrl = opts.joinUrl;
+    var lobby = opts.lobby;
+    var currentGame = (lobby && lobby.currentGame) || null;
+    var currentLabel = currentGame && currentGame.kind ? String(currentGame.kind) : '';
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">ロビー：ホスト</div>\n      <div class="kv"><span class="muted">ロビーID</span><b>' +
+        escapeHtml(lobbyId) +
+        '</b></div>\n\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="field">\n        <label>参加URL（スマホ以外はこちら）</label>\n        <div class="code" id="joinUrlText">' +
+        escapeHtml(joinUrl || '') +
+        '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">参加者</div>\n        ' +
+        lobbyMembersSummaryHtml(lobby) +
+        '\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>開始するゲーム</label>\n        <select id="lobbyGameKind">\n          <option value="wordwolf">ワードウルフ</option>\n          <option value="codenames">コードネーム</option>\n          <option value="loveletter">ラブレター</option>\n        </select>\n        <div class="muted">現在: ' +
+        escapeHtml(currentLabel || '未開始') +
+        '</div>\n      </div>\n\n      <div class="row">\n        <button id="lobbyStartGame" class="primary">開始</button>\n        <a class="btn ghost" href="./">ホーム</a>\n      </div>\n\n      <div id="lobbyHostError" class="form-error" role="alert"></div>\n    </div>\n  '
+    );
+  }
+
+  function renderLobbyPlayer(viewEl, opts) {
+    var lobbyId = opts.lobbyId;
+    var lobby = opts.lobby;
+    var currentGame = (lobby && lobby.currentGame) || null;
+    var label = currentGame && currentGame.kind ? String(currentGame.kind) : '';
+    var roomId = currentGame && currentGame.roomId ? String(currentGame.roomId) : '';
+    var canGo = !!(label && roomId);
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">ロビー</div>\n      <div class="kv"><span class="muted">ロビーID</span><b>' +
+        escapeHtml(lobbyId) +
+        '</b></div>\n\n      <div class="stack">\n        <div class="muted">参加者</div>\n        ' +
+        lobbyMembersSummaryHtml(lobby) +
+        '\n      </div>\n\n      <hr />\n\n      <div class="kv"><span class="muted">開始状況</span><b>' +
+        escapeHtml(canGo ? '開始済み' : '待機中') +
+        '</b></div>\n      <div class="muted">ホストがゲームを開始すると自動で画面が移動します。</div>\n\n      <div id="lobbyPlayerError" class="form-error" role="alert"></div>\n\n      <div class="row">' +
+        (canGo ? '<button id="lobbyGoGame" class="primary">ゲームへ</button>' : '') +
+        '<a class="btn ghost" href="./">ホーム</a>\n      </div>\n    </div>\n  '
+    );
+  }
+
+  function renderLobbyAssign(viewEl, opts) {
+    var lobbyId = opts.lobbyId;
+    var lobby = opts.lobby;
+    var canEdit = !!opts.canEdit;
+
+    var members = (lobby && lobby.members) || {};
+    var order = (lobby && lobby.order) || [];
+    if (!Array.isArray(order)) order = [];
+
+    var listHtml = '';
+    for (var i = 0; i < order.length; i++) {
+      var mid = String(order[i] || '');
+      if (!mid) continue;
+      var m = members[mid] || {};
+      var nm = String(m.name || '').trim();
+      if (!nm) nm = '（無名）';
+
+      var upDisabled = !canEdit || i === 0;
+      var downDisabled = !canEdit || i === order.length - 1;
+
+      listHtml +=
+        '<div class="row" style="align-items:center; gap:8px">' +
+        '<div class="muted" style="min-width:18px">' +
+        (i + 1) +
+        '</div>' +
+        '<div style="flex:1"><b>' +
+        escapeHtml(nm) +
+        '</b></div>' +
+        '<button class="ghost lobbyOrderUp" data-mid="' +
+        escapeHtml(mid) +
+        '" ' +
+        (upDisabled ? 'disabled' : '') +
+        '>↑</button>' +
+        '<button class="ghost lobbyOrderDown" data-mid="' +
+        escapeHtml(mid) +
+        '" ' +
+        (downDisabled ? 'disabled' : '') +
+        '>↓</button>' +
+        '</div>';
+    }
+    if (!listHtml) listHtml = '<div class="muted">参加者がいません。</div>';
+
+    var backQ = { lobby: lobbyId, screen: canEdit ? 'lobby_host' : 'lobby_player' };
+    var v = getCacheBusterParam();
+    if (v) backQ.v = v;
+    var backHref = '?' + buildQuery(backQ);
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">ロビー：順番割り振り</div>\n      <div class="kv"><span class="muted">ロビーID</span><b>' +
+        escapeHtml(lobbyId) +
+        '</b></div>\n\n      <div class="muted">' +
+        escapeHtml(canEdit ? '↑↓で並べ替え、シャッフルでランダムにします。' : '閲覧のみ（ホストだけ編集できます）。') +
+        '</div>\n\n      <div id="lobbyAssignError" class="form-error" role="alert"></div>\n\n      <div class="stack">' +
+        listHtml +
+        '</div>\n\n      <hr />\n\n      <div class="row">\n        <button id="lobbyShuffle" class="ghost" ' +
+        (canEdit ? '' : 'disabled') +
+        '>シャッフル</button>\n        <a class="btn ghost" href="' +
+        escapeHtml(backHref) +
+        '">戻る</a>\n      </div>\n    </div>\n  '
     );
   }
 
@@ -5179,6 +5473,515 @@
     renderHome(viewEl);
   }
 
+  function routeLobbyCreate() {
+    renderLobbyCreate(viewEl);
+    clearInlineError('lobbyCreateError');
+    var btn = document.getElementById('lobbyCreateBtn');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var form;
+      try {
+        clearInlineError('lobbyCreateError');
+        form = readLobbyCreateForm();
+      } catch (e) {
+        setInlineError('lobbyCreateError', (e && e.message) || '入力を確認してください。');
+        return;
+      }
+
+      savePersistedName(form.name);
+      var lobbyId = makeRoomId();
+
+      firebaseReady()
+        .then(function () {
+          return createLobby(lobbyId, form.name);
+        })
+        .then(function () {
+          var q = {};
+          var v = getCacheBusterParam();
+          if (v) q.v = v;
+          q.lobby = lobbyId;
+          q.screen = 'lobby_host';
+          setQuery(q);
+          route();
+        })
+        .catch(function (e) {
+          renderError(viewEl, (e && e.message) || '作成に失敗しました');
+        });
+    });
+  }
+
+  function routeLobbyJoin(lobbyId) {
+    renderLobbyJoin(viewEl, lobbyId);
+    clearInlineError('lobbyJoinError');
+    var btn = document.getElementById('lobbyJoinBtn');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var form;
+      try {
+        clearInlineError('lobbyJoinError');
+        form = readLobbyJoinForm();
+      } catch (e) {
+        setInlineError('lobbyJoinError', (e && e.message) || '入力を確認してください。');
+        return;
+      }
+
+      savePersistedName(form.name);
+      var mid = getOrCreateLobbyMemberId(form.lobbyId);
+
+      firebaseReady()
+        .then(function () {
+          return joinLobbyMember(form.lobbyId, mid, form.name, false);
+        })
+        .then(function () {
+          var q = {};
+          var v = getCacheBusterParam();
+          if (v) q.v = v;
+          q.lobby = form.lobbyId;
+          q.screen = 'lobby_player';
+          setQuery(q);
+          route();
+        })
+        .catch(function (e) {
+          setInlineError('lobbyJoinError', (e && e.message) || '参加に失敗しました');
+        });
+    });
+  }
+
+  function routeLobbyHost(lobbyId) {
+    var unsub = null;
+    var joinUrl = makeLobbyJoinUrl(lobbyId);
+
+    function drawQr() {
+      return new Promise(function (resolve) {
+        var canvas = document.getElementById('qr');
+        var errEl = document.getElementById('qrError');
+        var wrapEl = document.getElementById('qrWrap');
+        if (errEl) errEl.textContent = '';
+        if (!canvas) {
+          if (errEl) errEl.textContent = 'QR表示領域が見つかりません。';
+          return resolve();
+        }
+        var qr = window.QRCode || window.qrcode || window.QR;
+        if (!qr || !qr.toCanvas) {
+          if (errEl) errEl.textContent = 'QRの生成に失敗しました（ライブラリ未読込）。';
+          return resolve();
+        }
+
+        function showAsImage() {
+          if (!qr.toDataURL || !wrapEl) return;
+          try {
+            qr.toDataURL(joinUrl, { margin: 1, width: 240 }, function (err, url) {
+              if (err || !url) {
+                if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+                return resolve();
+              }
+              wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />';
+              if (errEl) errEl.textContent = '（QRは画像で表示しています）';
+              return resolve();
+            });
+          } catch (e) {
+            if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+            return resolve();
+          }
+        }
+
+        function looksBlank(c) {
+          try {
+            var ctx = c.getContext && c.getContext('2d');
+            if (!ctx) return true;
+            var w = c.width || 0;
+            var h = c.height || 0;
+            if (!w || !h) return true;
+            var img = ctx.getImageData(0, 0, Math.min(16, w), Math.min(16, h)).data;
+            var allZero = true;
+            var allWhite = true;
+            for (var i = 0; i < img.length; i += 4) {
+              var r = img[i], g = img[i + 1], b = img[i + 2], a = img[i + 3];
+              if (a !== 0) allZero = false;
+              if (!(a !== 0 && r > 240 && g > 240 && b > 240)) allWhite = false;
+              if (!allZero && !allWhite) return false;
+            }
+            return allZero || allWhite;
+          } catch (e) {
+            return false;
+          }
+        }
+
+        try {
+          qr.toCanvas(canvas, joinUrl, { margin: 1, width: 240 }, function (err) {
+            if (err) {
+              if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+              showAsImage();
+              return;
+            }
+            if (looksBlank(canvas)) {
+              showAsImage();
+              return;
+            }
+            resolve();
+          });
+        } catch (e) {
+          if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+          showAsImage();
+        }
+      });
+    }
+
+    function bindHostButtons(lobby) {
+      var copyBtn = document.getElementById('copyJoinUrl');
+      if (copyBtn && !copyBtn.__lobby_bound) {
+        copyBtn.__lobby_bound = true;
+        copyBtn.addEventListener('click', function () {
+          var st = document.getElementById('copyStatus');
+          if (st) st.textContent = 'コピー中...';
+          copyTextToClipboard(joinUrl)
+            .then(function (ok) {
+              if (!st) return;
+              st.textContent = ok ? 'コピーしました' : 'コピーできませんでした（長押しで選択してコピーしてください）';
+            })
+            .catch(function () {
+              if (st) st.textContent = 'コピーできませんでした（長押しで選択してコピーしてください）';
+            });
+        });
+      }
+
+      var startBtn = document.getElementById('lobbyStartGame');
+      if (startBtn && !startBtn.__lobby_bound) {
+        startBtn.__lobby_bound = true;
+        startBtn.addEventListener('click', function () {
+          var kindEl = document.getElementById('lobbyGameKind');
+          var kind = String((kindEl && kindEl.value) || 'wordwolf');
+
+          clearInlineError('lobbyHostError');
+          startBtn.disabled = true;
+
+          var hostMid = lobby && lobby.hostMid ? String(lobby.hostMid) : '';
+          var hostName = lobby && lobby.members && hostMid && lobby.members[hostMid] ? String(lobby.members[hostMid].name || '').trim() : '';
+          if (!hostName) hostName = loadPersistedName() || 'GM';
+
+          var roomId = makeRoomId();
+          firebaseReady()
+            .then(function () {
+              if (kind === 'codenames') {
+                return createCodenamesRoom(roomId, { name: hostName, size: 5 }).then(function () {
+                  var pid = getOrCreateCodenamesPlayerId(roomId);
+                  return joinPlayerInCodenamesRoom(roomId, pid, hostName, true);
+                });
+              }
+              if (kind === 'loveletter') {
+                return createLoveLetterRoom(roomId, {}).then(function () {
+                  var pid2 = getOrCreateLoveLetterPlayerId(roomId);
+                  return joinPlayerInLoveLetterRoom(roomId, pid2, hostName, true);
+                });
+              }
+              // default: wordwolf
+              var settings = { gmName: hostName, minorityCount: 1, talkSeconds: 180, reversal: true, topicCategoryId: 'random' };
+              return createRoom(roomId, settings).then(function () {
+                var pid3 = getOrCreatePlayerId(roomId);
+                return joinPlayerInRoom(roomId, pid3, hostName, true);
+              });
+            })
+            .then(function () {
+              return setLobbyCurrentGame(lobbyId, { kind: kind, roomId: roomId, startedAt: serverNowMs() });
+            })
+            .then(function () {
+              var q = {};
+              var v = getCacheBusterParam();
+              if (v) q.v = v;
+              q.room = roomId;
+              if (kind === 'codenames') {
+                q.host = '1';
+                q.screen = 'codenames_host';
+              } else if (kind === 'loveletter') {
+                q.host = '1';
+                q.screen = 'loveletter_host';
+              } else {
+                q.host = '1';
+                q.player = '1';
+              }
+              setQuery(q);
+              route();
+            })
+            .catch(function (e) {
+              startBtn.disabled = false;
+              setInlineError('lobbyHostError', (e && e.message) || '開始に失敗しました');
+            });
+        });
+      }
+
+      var assignBtn = document.getElementById('lobbyGoAssign');
+      if (assignBtn && !assignBtn.__lobby_bound) {
+        assignBtn.__lobby_bound = true;
+        assignBtn.addEventListener('click', function () {
+          var q = {};
+          var v = getCacheBusterParam();
+          if (v) q.v = v;
+          q.lobby = lobbyId;
+          q.screen = 'lobby_assign';
+          setQuery(q);
+          route();
+        });
+      }
+    }
+
+    function renderWithLobby(lobby) {
+      renderLobbyHost(viewEl, { lobbyId: lobbyId, joinUrl: joinUrl, lobby: lobby });
+
+      // Add the assign button next to the start button (no layout redesign).
+      try {
+        var startBtn = document.getElementById('lobbyStartGame');
+        if (startBtn && !document.getElementById('lobbyGoAssign') && startBtn.parentNode) {
+          var b = document.createElement('button');
+          b.id = 'lobbyGoAssign';
+          b.className = 'ghost';
+          b.textContent = '順番割り振り';
+          startBtn.parentNode.insertBefore(b, startBtn);
+        }
+      } catch (e0) {
+        // ignore
+      }
+
+      drawQr();
+      bindHostButtons(lobby);
+    }
+
+    firebaseReady()
+      .then(function () {
+        return subscribeLobby(lobbyId, function (lobby) {
+          if (!lobby) {
+            renderError(viewEl, 'ロビーが見つかりません');
+            return;
+          }
+          renderWithLobby(lobby);
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+    });
+  }
+
+  function routeLobbyPlayer(lobbyId) {
+    var unsub = null;
+    var mid = getOrCreateLobbyMemberId(lobbyId);
+
+    function goToCurrentGame(lobby) {
+      var cg = (lobby && lobby.currentGame) || null;
+      if (!cg || !cg.kind || !cg.roomId) return false;
+
+      var kind = String(cg.kind || '');
+      var roomId = String(cg.roomId || '');
+      if (!kind || !roomId) return false;
+
+      var q = {};
+      var v = getCacheBusterParam();
+      if (v) q.v = v;
+      q.room = roomId;
+
+      var isHostDevice = lobby && String(lobby.hostMid || '') === String(mid);
+      var nm = loadPersistedName();
+      if (nm) q.name = nm;
+      q.autojoin = '1';
+
+      if (kind === 'codenames') {
+        q.screen = isHostDevice ? 'codenames_host' : 'codenames_join';
+        if (isHostDevice) q.host = '1';
+      } else if (kind === 'loveletter') {
+        q.screen = isHostDevice ? 'loveletter_host' : 'loveletter_join';
+        if (isHostDevice) q.host = '1';
+      } else {
+        q.screen = 'join';
+        if (isHostDevice) q.host = '1';
+      }
+
+      try {
+        if (unsub) {
+          unsub();
+          unsub = null;
+        }
+      } catch (e) {
+        // ignore
+      }
+
+      setQuery(q);
+      route();
+      return true;
+    }
+
+    firebaseReady()
+      .then(function () {
+        return subscribeLobby(lobbyId, function (lobby) {
+          if (!lobby) {
+            renderError(viewEl, 'ロビーが見つかりません');
+            return;
+          }
+
+          if (goToCurrentGame(lobby)) return;
+
+          renderLobbyPlayer(viewEl, { lobbyId: lobbyId, lobby: lobby });
+          clearInlineError('lobbyPlayerError');
+
+          var goBtn = document.getElementById('lobbyGoGame');
+          if (goBtn && !goBtn.__lobby_bound) {
+            goBtn.__lobby_bound = true;
+            goBtn.addEventListener('click', function () {
+              if (!goToCurrentGame(lobby)) {
+                setInlineError('lobbyPlayerError', 'まだ開始されていません');
+              }
+            });
+          }
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+    });
+  }
+
+  function routeLobbyAssign(lobbyId) {
+    var unsub = null;
+    var mid = getOrCreateLobbyMemberId(lobbyId);
+
+    function normalizeOrder(lobby) {
+      var members = (lobby && lobby.members) || {};
+      var order = (lobby && lobby.order) || [];
+      if (!Array.isArray(order)) order = [];
+
+      var seen = {};
+      var out = [];
+
+      for (var i = 0; i < order.length; i++) {
+        var id = String(order[i] || '');
+        if (!id) continue;
+        if (seen[id]) continue;
+        if (!members[id]) continue;
+        seen[id] = true;
+        out.push(id);
+      }
+
+      // Append any missing members deterministically.
+      var keys = Object.keys(members);
+      keys.sort();
+      for (var j = 0; j < keys.length; j++) {
+        var k = String(keys[j] || '');
+        if (!k || seen[k]) continue;
+        seen[k] = true;
+        out.push(k);
+      }
+
+      return out;
+    }
+
+    function swap(order, i, j) {
+      if (i === j) return order;
+      if (i < 0 || j < 0) return order;
+      if (i >= order.length || j >= order.length) return order;
+      var a = order.slice();
+      var t = a[i];
+      a[i] = a[j];
+      a[j] = t;
+      return a;
+    }
+
+    function shuffle(list) {
+      var a = list.slice();
+      for (var i = a.length - 1; i > 0; i--) {
+        var r = randomInt(i + 1);
+        var t = a[i];
+        a[i] = a[r];
+        a[r] = t;
+      }
+      return a;
+    }
+
+    firebaseReady()
+      .then(function () {
+        return subscribeLobby(lobbyId, function (lobby) {
+          if (!lobby) {
+            renderError(viewEl, 'ロビーが見つかりません');
+            return;
+          }
+
+          var canEdit = String(lobby.hostMid || '') === String(mid || '');
+          renderLobbyAssign(viewEl, { lobbyId: lobbyId, lobby: lobby, canEdit: canEdit });
+          clearInlineError('lobbyAssignError');
+
+          if (!canEdit) return;
+
+          var order = normalizeOrder(lobby);
+
+          var shuffleBtn = document.getElementById('lobbyShuffle');
+          if (shuffleBtn && !shuffleBtn.__lobby_bound) {
+            shuffleBtn.__lobby_bound = true;
+            shuffleBtn.addEventListener('click', function () {
+              shuffleBtn.disabled = true;
+              setLobbyOrder(lobbyId, shuffle(order))
+                .catch(function (e) {
+                  setInlineError('lobbyAssignError', (e && e.message) || 'シャッフルに失敗しました');
+                })
+                .then(function () {
+                  shuffleBtn.disabled = false;
+                });
+            });
+          }
+
+          var ups = document.querySelectorAll('.lobbyOrderUp');
+          for (var i = 0; i < ups.length; i++) {
+            var upBtn = ups[i];
+            if (!upBtn || upBtn.__lobby_bound) continue;
+            upBtn.__lobby_bound = true;
+            upBtn.addEventListener('click', function (ev) {
+              var mid2 = String((ev && ev.currentTarget && ev.currentTarget.getAttribute('data-mid')) || '');
+              if (!mid2) return;
+              var idx = order.indexOf(mid2);
+              if (idx <= 0) return;
+              setLobbyOrder(lobbyId, swap(order, idx, idx - 1)).catch(function (e) {
+                setInlineError('lobbyAssignError', (e && e.message) || '更新に失敗しました');
+              });
+            });
+          }
+
+          var downs = document.querySelectorAll('.lobbyOrderDown');
+          for (var j = 0; j < downs.length; j++) {
+            var downBtn = downs[j];
+            if (!downBtn || downBtn.__lobby_bound) continue;
+            downBtn.__lobby_bound = true;
+            downBtn.addEventListener('click', function (ev2) {
+              var mid3 = String((ev2 && ev2.currentTarget && ev2.currentTarget.getAttribute('data-mid')) || '');
+              if (!mid3) return;
+              var idx2 = order.indexOf(mid3);
+              if (idx2 < 0 || idx2 >= order.length - 1) return;
+              setLobbyOrder(lobbyId, swap(order, idx2, idx2 + 1)).catch(function (e) {
+                setInlineError('lobbyAssignError', (e && e.message) || '更新に失敗しました');
+              });
+            });
+          }
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+    });
+  }
+
   var HISTORY_KEY = 'ww_history_v1';
   var HISTORY_LAST_SAVED_KEY = 'ww_history_last_saved_v1';
 
@@ -5360,7 +6163,19 @@
     var joinBtn = document.getElementById('join');
     if (!joinBtn) return;
 
-    joinBtn.addEventListener('click', function () {
+    // Auto-join support (used by lobby).
+    try {
+      var q0 = parseQuery();
+      var nm0 = q0 && q0.name ? String(q0.name) : '';
+      if (nm0) {
+        var input0 = document.getElementById('playerName');
+        if (input0) input0.value = nm0;
+      }
+    } catch (e0) {
+      // ignore
+    }
+
+    function doJoin() {
       var form;
       try {
         clearInlineError('wwJoinError');
@@ -5393,7 +6208,21 @@
         .catch(function (e) {
           renderError(viewEl, (e && e.message) || '参加に失敗しました');
         });
-    });
+    }
+
+    joinBtn.addEventListener('click', doJoin);
+
+    // If requested, auto-run once after binding.
+    try {
+      var q1 = parseQuery();
+      if (q1 && String(q1.autojoin || '') === '1') {
+        setTimeout(function () {
+          doJoin();
+        }, 0);
+      }
+    } catch (e1) {
+      // ignore
+    }
   }
 
   function routeHost(roomId) {
@@ -6372,7 +7201,19 @@
     var btn = document.getElementById('llJoin');
     if (!btn) return;
 
-    btn.addEventListener('click', function () {
+    // Auto-join support (used by lobby).
+    try {
+      var q0 = parseQuery();
+      var nm0 = q0 && q0.name ? String(q0.name) : '';
+      if (nm0) {
+        var input0 = document.getElementById('llPlayerName');
+        if (input0) input0.value = nm0;
+      }
+    } catch (e0) {
+      // ignore
+    }
+
+    function doJoin() {
       var form;
       try {
         clearInlineError('llJoinError');
@@ -6406,7 +7247,20 @@
         .catch(function (e) {
           renderError(viewEl, (e && e.message) || '参加に失敗しました');
         });
-    });
+    }
+
+    btn.addEventListener('click', doJoin);
+
+    try {
+      var q1 = parseQuery();
+      if (q1 && String(q1.autojoin || '') === '1') {
+        setTimeout(function () {
+          doJoin();
+        }, 0);
+      }
+    } catch (e1) {
+      // ignore
+    }
   }
 
   function routeLoveLetterHost(roomId) {
@@ -6919,6 +7773,22 @@
     var roomId = st.roomId;
     var isHost = st.isHost;
     var isPlayer = q.player === '1';
+    var lobbyId = q.lobby ? String(q.lobby) : '';
+
+    if (screen === 'lobby_create') return routeLobbyCreate();
+    if (screen === 'lobby_join') return routeLobbyJoin(lobbyId);
+    if (screen === 'lobby_host') {
+      if (!lobbyId) return routeHome();
+      return routeLobbyHost(lobbyId);
+    }
+    if (screen === 'lobby_player') {
+      if (!lobbyId) return routeHome();
+      return routeLobbyPlayer(lobbyId);
+    }
+    if (screen === 'lobby_assign') {
+      if (!lobbyId) return routeHome();
+      return routeLobbyAssign(lobbyId);
+    }
 
     if (screen === 'codenames_create') return routeCodenamesCreate();
     if (screen === 'loveletter_create') return routeLoveLetterCreate();
@@ -7011,7 +7881,20 @@
     clearInlineError('cnJoinError');
     var btn = document.getElementById('cnJoin');
     if (!btn) return;
-    btn.addEventListener('click', function () {
+
+    // Auto-join support (used by lobby).
+    try {
+      var q0 = parseQuery();
+      var nm0 = q0 && q0.name ? String(q0.name) : '';
+      if (nm0) {
+        var input0 = document.getElementById('cnPlayerName');
+        if (input0) input0.value = nm0;
+      }
+    } catch (e0) {
+      // ignore
+    }
+
+    function doJoin() {
       var form;
       try {
         clearInlineError('cnJoinError');
@@ -7045,7 +7928,20 @@
         .catch(function (e) {
           renderError(viewEl, (e && e.message) || '参加に失敗しました');
         });
-    });
+    }
+
+    btn.addEventListener('click', doJoin);
+
+    try {
+      var q1 = parseQuery();
+      if (q1 && String(q1.autojoin || '') === '1') {
+        setTimeout(function () {
+          doJoin();
+        }, 0);
+      }
+    } catch (e1) {
+      // ignore
+    }
   }
 
   function routeCodenamesRejoin(roomId) {
