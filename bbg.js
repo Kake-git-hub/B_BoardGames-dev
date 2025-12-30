@@ -956,7 +956,31 @@
   }
 
   function setLobbyCurrentGame(lobbyId, currentGame) {
-    return setValue(lobbyPath(lobbyId) + '/currentGame', currentGame || null);
+    var cg = currentGame || null;
+    return runTxn(lobbyPath(lobbyId), function (lobby) {
+      if (!lobby) return lobby;
+      var next = assign({}, lobby, { currentGame: cg });
+      try {
+        if (cg && cg.kind) {
+          next.lastKind = String(cg.kind || '');
+          next.lastGameAt = serverNowMs();
+        }
+      } catch (e) {
+        // ignore
+      }
+      return next;
+    });
+  }
+
+  function setLobbyWordwolfSettings(lobbyId, settings) {
+    var s = settings && typeof settings === 'object' ? settings : {};
+    var out = {
+      minorityCount: clamp(parseIntSafe(s.minorityCount, 1), 1, 5),
+      talkSeconds: clamp(parseIntSafe(s.talkSeconds, 180), 60, 5 * 60),
+      topicCategoryId: String(s.topicCategoryId || 'random'),
+      updatedAt: serverNowMs()
+    };
+    return setValue(lobbyPath(lobbyId) + '/wordwolfSettings', out);
   }
 
   function setLobbyCodenamesAssign(lobbyId, memberId, team, role) {
@@ -4849,6 +4873,7 @@
     var room = opts.room;
     var player = opts.player;
     var isHost = !!opts.isHost;
+    var lobbyId = opts.lobbyId ? String(opts.lobbyId) : '';
 
     var phase = (room && room.phase) || 'lobby';
     var myTeam = player && player.team ? player.team : '';
@@ -5096,9 +5121,14 @@
         '<div class="kv"><span class="muted">勝者</span><b>' +
         escapeHtml(wLabel) +
         '</b></div>' +
-        (amHost
-          ? '<div class="row"><button id="cnContinue" class="primary">もう一度</button><button id="cnChangePlayers" class="ghost">参加者変更</button><button id="cnBackToLobby" class="ghost">ロビーに戻る</button></div>'
-          : '') +
+        (lobbyId
+          ? '<hr />' +
+            (amHost
+              ? '<div class="row"><button id="cnNextToLobby" class="primary">次へ</button></div>'
+              : '<div class="muted">※ 次へ進むのはゲームマスターです。</div>')
+          : amHost
+            ? '<div class="row"><button id="cnContinue" class="primary">もう一度</button><button id="cnChangePlayers" class="ghost">参加者変更</button><button id="cnBackToLobby" class="ghost">ロビーに戻る</button></div>'
+            : '') +
         '</div>';
     }
 
@@ -5466,6 +5496,7 @@
     var playerId = opts.playerId;
     var player = opts.player;
     var room = opts.room;
+    var lobbyId = opts.lobbyId ? String(opts.lobbyId) : '';
 
     var isHost = !!opts.isHost;
 
@@ -5729,47 +5760,52 @@
         '<div class="kv"><span class="muted">少数側ワード</span><b>' +
         escapeHtml(mn) +
         '</b></div>' +
-        (isHost
-          ? ui && ui.showContinueForm
-            ? '<hr />' +
-              '<div class="big">ゲーム継続</div>' +
-              '<div class="muted">同じメンバーで設定を変えてすぐ始めます。</div>' +
-              '<div class="field"><label>少数側の人数（最大5）</label>' +
-              '<input id="cMinorityCount" type="range" min="1" max="5" step="1" value="' +
-              escapeHtml(String((room && room.settings && room.settings.minorityCount) || 1)) +
-              '" />' +
-              '<div class="kv"><span class="muted">現在</span><b id="cMinorityCountLabel">' +
-              escapeHtml(String((room && room.settings && room.settings.minorityCount) || 1)) +
-              '</b></div></div>' +
-              '<div class="field"><label>トーク時間（分・最大5分）</label>' +
-              '<input id="cTalkMinutes" type="range" min="1" max="5" step="1" value="' +
-              escapeHtml(String(Math.max(1, Math.min(5, Math.round(((room && room.settings && room.settings.talkSeconds) || 180) / 60))))) +
-              '" />' +
-              '<div class="kv"><span class="muted">現在</span><b id="cTalkMinutesLabel">' +
-              escapeHtml(String(Math.max(1, Math.min(5, Math.round(((room && room.settings && room.settings.talkSeconds) || 180) / 60)))) + '分') +
-              '</b></div></div>' +
-              '<div class="field"><label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>' +
-              '<select id="cReversal">' +
-              '<option value="1"' +
-              ((room && room.settings && room.settings.reversal) ? ' selected' : '') +
-              '>あり</option>' +
-              '<option value="0"' +
-              (!(room && room.settings && room.settings.reversal) ? ' selected' : '') +
-              '>なし</option>' +
-              '</select></div>' +
-              '<div class="field"><label>お題カテゴリ</label>' +
-              '<select id="cTopicCategory"></select>' +
-              '<div class="muted">※ 開始時にワードを確定してDBに保持します。</div></div>' +
-              '<div class="row">' +
-              '<button id="startContinue" class="primary">この設定で開始</button>' +
-                '\n      </div>\n    </div>\n  '
-            : '<hr />' +
-              '<div class="row">' +
-              '<button id="continueGame" class="primary">もう一度</button>' +
-              '<button id="changePlayers" class="ghost">参加者変更</button>' +
-              '<button id="wwBackToLobby" class="ghost">ロビーに戻る</button>' +
-              '</div>'
-          : '') +
+        (lobbyId
+          ? '<hr />' +
+            (isHost
+              ? '<div class="row"><button id="wwNextToLobby" class="primary">次へ</button></div>'
+              : '<div class="muted">※ 次へ進むのはゲームマスターです。</div>')
+          : isHost
+            ? ui && ui.showContinueForm
+              ? '<hr />' +
+                '<div class="big">ゲーム継続</div>' +
+                '<div class="muted">同じメンバーで設定を変えてすぐ始めます。</div>' +
+                '<div class="field"><label>少数側の人数（最大5）</label>' +
+                '<input id="cMinorityCount" type="range" min="1" max="5" step="1" value="' +
+                escapeHtml(String((room && room.settings && room.settings.minorityCount) || 1)) +
+                '" />' +
+                '<div class="kv"><span class="muted">現在</span><b id="cMinorityCountLabel">' +
+                escapeHtml(String((room && room.settings && room.settings.minorityCount) || 1)) +
+                '</b></div></div>' +
+                '<div class="field"><label>トーク時間（分・最大5分）</label>' +
+                '<input id="cTalkMinutes" type="range" min="1" max="5" step="1" value="' +
+                escapeHtml(String(Math.max(1, Math.min(5, Math.round(((room && room.settings && room.settings.talkSeconds) || 180) / 60))))) +
+                '" />' +
+                '<div class="kv"><span class="muted">現在</span><b id="cTalkMinutesLabel">' +
+                escapeHtml(String(Math.max(1, Math.min(5, Math.round(((room && room.settings && room.settings.talkSeconds) || 180) / 60)))) + '分') +
+                '</b></div></div>' +
+                '<div class="field"><label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>' +
+                '<select id="cReversal">' +
+                '<option value="1"' +
+                ((room && room.settings && room.settings.reversal) ? ' selected' : '') +
+                '>あり</option>' +
+                '<option value="0"' +
+                (!(room && room.settings && room.settings.reversal) ? ' selected' : '') +
+                '>なし</option>' +
+                '</select></div>' +
+                '<div class="field"><label>お題カテゴリ</label>' +
+                '<select id="cTopicCategory"></select>' +
+                '<div class="muted">※ 開始時にワードを確定してDBに保持します。</div></div>' +
+                '<div class="row">' +
+                '<button id="startContinue" class="primary">この設定で開始</button>' +
+                  '\n      </div>\n    </div>\n  '
+              : '<hr />' +
+                '<div class="row">' +
+                '<button id="continueGame" class="primary">もう一度</button>' +
+                '<button id="changePlayers" class="ghost">参加者変更</button>' +
+                '<button id="wwBackToLobby" class="ghost">ロビーに戻る</button>' +
+                '</div>'
+            : '') +
         '</div>';
     }
 
@@ -6588,6 +6624,7 @@
       var cg = (lobby && lobby.currentGame) || null;
       var kindFromCg = cg && cg.kind ? String(cg.kind) : '';
       if (!ui.selectedKind && kindFromCg) ui.selectedKind = kindFromCg;
+      if (!ui.selectedKind && !kindFromCg && lobby && lobby.lastKind) ui.selectedKind = String(lobby.lastKind || '');
       if (!ui.selectedKind) ui.selectedKind = 'wordwolf';
 
       renderLobbyHost(viewEl, { lobbyId: lobbyId, lobby: lobby, selectedKind: ui.selectedKind });
@@ -6667,8 +6704,17 @@
           q.player = '1';
         }
       } else {
-        q.screen = 'join';
+        // Wordwolf: members are pre-registered from lobby; go directly.
+        try {
+          setPlayerId(roomId, mid);
+          touchPlayer(roomId, mid).catch(function () {
+            // ignore
+          });
+        } catch (eSet) {
+          // ignore
+        }
         if (isHostDevice) q.host = '1';
+        q.player = '1';
       }
 
       try {
@@ -7030,6 +7076,32 @@
           '">戻る</a>\n      </div>\n    </div>\n  '
       );
 
+      // Insert talk time UI (kept minimal but configurable).
+      try {
+        var mcWrap = document.getElementById('minorityCount');
+        if (mcWrap && mcWrap.parentNode) {
+          var html2 =
+            '<div class="field">' +
+            '<label>トーク時間（分・最大5分）</label>' +
+            '<input id="talkMinutes" type="range" min="1" max="5" step="1" value="3" />' +
+            '<div class="kv"><span class="muted">現在</span><b id="talkMinutesLabel">3分</b></div>' +
+            '</div>';
+          // insert after minorityCount field block
+          var container = mcWrap.parentNode;
+          // container is the field div; insert after it
+          var after = container.nextSibling;
+          var tmp = document.createElement('div');
+          tmp.innerHTML = html2;
+          var node = tmp.firstChild;
+          if (node) {
+            if (after) container.parentNode.insertBefore(node, after);
+            else container.parentNode.appendChild(node);
+          }
+        }
+      } catch (eIns) {
+        // ignore
+      }
+
       // Populate categories.
       try {
         var sel = document.getElementById('topicCategory');
@@ -7051,13 +7123,44 @@
           var mc = document.getElementById('minorityCount');
           var mcl = document.getElementById('minorityCountLabel');
           if (mc && mcl) mcl.textContent = String(mc.value || '1');
+
+          var tm = document.getElementById('talkMinutes');
+          var tml = document.getElementById('talkMinutesLabel');
+          if (tm && tml) tml.textContent = String(tm.value || '1') + '分';
         } catch (eLbl) {
           // ignore
         }
       }
       var mcEl = document.getElementById('minorityCount');
       if (mcEl) mcEl.addEventListener('input', updateMinorityLabel);
+      var tmEl = document.getElementById('talkMinutes');
+      if (tmEl) tmEl.addEventListener('input', updateMinorityLabel);
       updateMinorityLabel();
+
+      // Prefill from lobby shared settings if present.
+      firebaseReady()
+        .then(function () {
+          return getValueOnce(lobbyPath(lobbyIdFromQuery) + '/wordwolfSettings').catch(function () {
+            return null;
+          });
+        })
+        .then(function (s0) {
+          if (!s0) return;
+          try {
+            var mc0 = document.getElementById('minorityCount');
+            var tm0 = document.getElementById('talkMinutes');
+            var tc0 = document.getElementById('topicCategory');
+            if (mc0 && s0.minorityCount != null) mc0.value = String(clamp(parseIntSafe(s0.minorityCount, 1), 1, 5));
+            if (tm0 && s0.talkSeconds != null) tm0.value = String(clamp(Math.round(clamp(parseIntSafe(s0.talkSeconds, 180), 60, 5 * 60) / 60), 1, 5));
+            if (tc0 && s0.topicCategoryId) tc0.value = String(s0.topicCategoryId || 'random');
+            updateMinorityLabel();
+          } catch (eSet) {
+            // ignore
+          }
+        })
+        .catch(function () {
+          // ignore
+        });
 
       clearInlineError('wwCreateError');
       stripBackNavLinks(viewEl);
@@ -7070,10 +7173,13 @@
         try {
           clearInlineError('wwCreateError');
           var mc2 = document.getElementById('minorityCount');
+          var tm2 = document.getElementById('talkMinutes');
           var tc2 = document.getElementById('topicCategory');
           var minorityCount = clamp(parseIntSafe(mc2 && mc2.value, 1), 1, 5);
+          var talkMinutes = clamp(parseIntSafe(tm2 && tm2.value, 3), 1, 5);
+          var talkSeconds = talkMinutes * 60;
           var topicCategoryId = String((tc2 && tc2.value) || 'random');
-          form = { minorityCount: minorityCount, topicCategoryId: topicCategoryId };
+          form = { minorityCount: minorityCount, talkSeconds: talkSeconds, topicCategoryId: topicCategoryId };
         } catch (eRead) {
           setInlineError('wwCreateError', (eRead && eRead.message) || '入力を確認してください。');
           return;
@@ -7122,7 +7228,7 @@
             var settings = {
               gmName: hostName,
               minorityCount: form.minorityCount,
-              talkSeconds: 180,
+              talkSeconds: form.talkSeconds,
               reversal: true,
               topicCategoryId: form.topicCategoryId
             };
@@ -7142,6 +7248,19 @@
               })
               .then(function () {
                 setPlayerId(roomId, hostMid);
+                return startGame(roomId);
+              })
+              .then(function (roomAfterStart) {
+                if (!roomAfterStart || String(roomAfterStart.phase || '') !== 'discussion') {
+                  throw new Error('参加者が3人以上必要です');
+                }
+                return setLobbyWordwolfSettings(lobbyIdFromQuery, {
+                  minorityCount: form.minorityCount,
+                  talkSeconds: form.talkSeconds,
+                  topicCategoryId: form.topicCategoryId
+                });
+              })
+              .then(function () {
                 return setLobbyCurrentGame(lobbyIdFromQuery, { kind: 'wordwolf', roomId: roomId, startedAt: serverNowMs() });
               })
               .then(function () {
@@ -7593,7 +7712,53 @@
     var unsub = null;
     var timerHandle = null;
     var autoVoteRequested = false;
-    var ui = { showContinueForm: false };
+    var ui = { showContinueForm: false, lobbyReturnWatching: false, lobbyUnsub: null };
+
+    var lobbyId = '';
+    try {
+      var q0 = parseQuery();
+      lobbyId = q0 && q0.lobby ? String(q0.lobby) : '';
+    } catch (e0) {
+      lobbyId = '';
+    }
+
+    function redirectToLobby() {
+      if (!lobbyId) return;
+      var q = {};
+      var v = getCacheBusterParam();
+      if (v) q.v = v;
+      q.lobby = lobbyId;
+      q.screen = isHost ? 'lobby_host' : 'lobby_player';
+      setQuery(q);
+      route();
+    }
+
+    function ensureLobbyReturnWatcher() {
+      if (!lobbyId) return;
+      if (ui.lobbyReturnWatching) return;
+      ui.lobbyReturnWatching = true;
+      firebaseReady()
+        .then(function () {
+          return subscribeLobby(lobbyId, function (lobby) {
+            var cg = (lobby && lobby.currentGame) || null;
+            if (!cg) {
+              try {
+                if (ui.lobbyUnsub) ui.lobbyUnsub();
+              } catch (e) {
+                // ignore
+              }
+              ui.lobbyUnsub = null;
+              redirectToLobby();
+            }
+          });
+        })
+        .then(function (u2) {
+          ui.lobbyUnsub = u2;
+        })
+        .catch(function () {
+          // ignore
+        });
+    }
 
     function rerenderTimer(room) {
       var el = document.getElementById('timer');
@@ -7613,7 +7778,7 @@
           }
 
           var player = room.players ? room.players[playerId] : null;
-          renderPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui });
+          renderPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui, lobbyId: lobbyId });
 
           if (isHost) {
             maybeAppendHistory(roomId, room);
@@ -7683,6 +7848,33 @@
                 alert((e && e.message) || '失敗');
               });
             });
+          }
+
+          // Lobby mode: GM only "next" => back to lobby.
+          var nextBtn = document.getElementById('wwNextToLobby');
+          if (nextBtn && !nextBtn.__ww_bound) {
+            nextBtn.__ww_bound = true;
+            nextBtn.addEventListener('click', function () {
+              if (!lobbyId) return;
+              nextBtn.disabled = true;
+              firebaseReady()
+                .then(function () {
+                  return setLobbyCurrentGame(lobbyId, null);
+                })
+                .then(function () {
+                  redirectToLobby();
+                })
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  nextBtn.disabled = false;
+                });
+            });
+          }
+
+          if (lobbyId && room && room.phase === 'finished') {
+            ensureLobbyReturnWatcher();
           }
 
           var continueBtn = document.getElementById('continueGame');
@@ -7946,6 +8138,7 @@
     var player = opts.player;
     var isHost = !!opts.isHost;
     var ui = opts.ui || {};
+    var lobbyId = opts.lobbyId ? String(opts.lobbyId) : '';
 
     var phase = (room && room.phase) || 'lobby';
     var ps = (room && room.players) || {};
@@ -8039,13 +8232,20 @@
         '<div class="big">' +
         escapeHtml(fs.length ? fs.join(' / ') : '-') +
         '</div>' +
-        (isHost
-          ? '<div class="row" style="justify-content:center;margin-top:10px">' +
-            '<button id="llReplay" class="primary">もう一度</button>' +
-            '<button id="llNextGame" class="ghost">次ゲームへ（参加者変更）</button>' +
-            '<button id="llBackToLobby" class="ghost">ロビーに戻る</button>' +
-            '</div>'
-          : '') +
+        (lobbyId
+          ? '<hr />' +
+            (isHost
+              ? '<div class="row" style="justify-content:center;margin-top:10px">' +
+                '<button id="llNextToLobby" class="primary">次へ</button>' +
+                '</div>'
+              : '<div class="muted" style="margin-top:10px">※ 次へ進むのはゲームマスターです。</div>')
+          : isHost
+            ? '<div class="row" style="justify-content:center;margin-top:10px">' +
+              '<button id="llReplay" class="primary">もう一度</button>' +
+              '<button id="llNextGame" class="ghost">次ゲームへ（参加者変更）</button>' +
+              '<button id="llBackToLobby" class="ghost">ロビーに戻る</button>' +
+              '</div>'
+            : '') +
         '</div>';
     }
 
@@ -8822,6 +9022,55 @@
     var ui = { pending: null, modal: null, handFrontIndex: 1, peekDismissedKey: '', ackInFlight: false, modalScrollTop: 0 };
     var lastRoom = null;
 
+    var lobbyId = '';
+    try {
+      var q0 = parseQuery();
+      lobbyId = q0 && q0.lobby ? String(q0.lobby) : '';
+    } catch (e00) {
+      lobbyId = '';
+    }
+
+    ui.lobbyReturnWatching = false;
+    ui.lobbyUnsub = null;
+
+    function redirectToLobby() {
+      if (!lobbyId) return;
+      var q = {};
+      var v = getCacheBusterParam();
+      if (v) q.v = v;
+      q.lobby = lobbyId;
+      q.screen = isHost ? 'lobby_host' : 'lobby_player';
+      setQuery(q);
+      route();
+    }
+
+    function ensureLobbyReturnWatcher() {
+      if (!lobbyId) return;
+      if (ui.lobbyReturnWatching) return;
+      ui.lobbyReturnWatching = true;
+      firebaseReady()
+        .then(function () {
+          return subscribeLobby(lobbyId, function (lobby) {
+            var cg = (lobby && lobby.currentGame) || null;
+            if (!cg) {
+              try {
+                if (ui.lobbyUnsub) ui.lobbyUnsub();
+              } catch (e) {
+                // ignore
+              }
+              ui.lobbyUnsub = null;
+              redirectToLobby();
+            }
+          });
+        })
+        .then(function (u2) {
+          ui.lobbyUnsub = u2;
+        })
+        .catch(function () {
+          // ignore
+        });
+    }
+
     function computePeekModal(room) {
       try {
         var r = room && room.round ? room.round : null;
@@ -8870,7 +9119,7 @@
       }
 
       var player = room && room.players ? room.players[playerId] : null;
-      renderLoveLetterPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui });
+      renderLoveLetterPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui, lobbyId: lobbyId });
 
       // Restore scroll position inside modal panel (prevents jumping to top on rerender).
       try {
@@ -8941,6 +9190,29 @@
         });
       }
 
+      // Lobby mode: GM only "next" => back to lobby.
+      var nextBtn = document.getElementById('llNextToLobby');
+      if (nextBtn && !nextBtn.__ll_bound) {
+        nextBtn.__ll_bound = true;
+        nextBtn.addEventListener('click', function () {
+          if (!lobbyId) return;
+          nextBtn.disabled = true;
+          firebaseReady()
+            .then(function () {
+              return setLobbyCurrentGame(lobbyId, null);
+            })
+            .then(function () {
+              redirectToLobby();
+            })
+            .catch(function (e) {
+              alert((e && e.message) || '失敗');
+            })
+            .finally(function () {
+              nextBtn.disabled = false;
+            });
+        });
+      }
+
       var backBtn = document.getElementById('llBackToLobby');
       if (backBtn && !backBtn.__ll_bound) {
         backBtn.__ll_bound = true;
@@ -8997,6 +9269,10 @@
               nextGameBtn.disabled = false;
             });
         });
+      }
+
+      if (lobbyId && room && String(room.phase || '') === 'finished') {
+        ensureLobbyReturnWatcher();
       }
 
       var cancelBtn = document.getElementById('llCancelPlay');
@@ -9199,6 +9475,11 @@
 
     window.addEventListener('popstate', function () {
       if (unsub) unsub();
+      try {
+        if (ui && ui.lobbyUnsub) ui.lobbyUnsub();
+      } catch (e2) {
+        // ignore
+      }
       try {
         if (document && document.body && document.body.classList) {
           document.body.classList.remove('ll-player-screen');
@@ -9827,6 +10108,53 @@
   function routeCodenamesPlayer(roomId, isHost) {
     var playerId = getOrCreateCodenamesPlayerId(roomId);
     var unsub = null;
+    var ui = { lobbyReturnWatching: false, lobbyUnsub: null };
+
+    var lobbyId = '';
+    try {
+      var q0 = parseQuery();
+      lobbyId = q0 && q0.lobby ? String(q0.lobby) : '';
+    } catch (e0) {
+      lobbyId = '';
+    }
+
+    function redirectToLobby() {
+      if (!lobbyId) return;
+      var q = {};
+      var v = getCacheBusterParam();
+      if (v) q.v = v;
+      q.lobby = lobbyId;
+      q.screen = isHost ? 'lobby_host' : 'lobby_player';
+      setQuery(q);
+      route();
+    }
+
+    function ensureLobbyReturnWatcher() {
+      if (!lobbyId) return;
+      if (ui.lobbyReturnWatching) return;
+      ui.lobbyReturnWatching = true;
+      firebaseReady()
+        .then(function () {
+          return subscribeLobby(lobbyId, function (lobby) {
+            var cg = (lobby && lobby.currentGame) || null;
+            if (!cg) {
+              try {
+                if (ui.lobbyUnsub) ui.lobbyUnsub();
+              } catch (e) {
+                // ignore
+              }
+              ui.lobbyUnsub = null;
+              redirectToLobby();
+            }
+          });
+        })
+        .then(function (u2) {
+          ui.lobbyUnsub = u2;
+        })
+        .catch(function () {
+          // ignore
+        });
+    }
 
     firebaseReady()
       .then(function () {
@@ -9837,7 +10165,7 @@
           }
 
           var player = room.players ? room.players[playerId] : null;
-          renderCodenamesPlayer(viewEl, { roomId: roomId, playerId: playerId, room: room, player: player, isHost: isHost });
+          renderCodenamesPlayer(viewEl, { roomId: roomId, playerId: playerId, room: room, player: player, isHost: isHost, lobbyId: lobbyId });
 
           var saveBtn = document.getElementById('cnSavePrefs');
           if (saveBtn && !saveBtn.__cn_bound) {
@@ -9878,6 +10206,29 @@
             });
           }
 
+          // Lobby mode: GM only "next" => back to lobby.
+          var nextBtn = document.getElementById('cnNextToLobby');
+          if (nextBtn && !nextBtn.__cn_bound) {
+            nextBtn.__cn_bound = true;
+            nextBtn.addEventListener('click', function () {
+              if (!lobbyId) return;
+              nextBtn.disabled = true;
+              firebaseReady()
+                .then(function () {
+                  return setLobbyCurrentGame(lobbyId, null);
+                })
+                .then(function () {
+                  redirectToLobby();
+                })
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  nextBtn.disabled = false;
+                });
+            });
+          }
+
           var backBtn = document.getElementById('cnBackToLobby');
           if (backBtn && !backBtn.__cn_bound) {
             backBtn.__cn_bound = true;
@@ -9909,6 +10260,10 @@
                   backBtn.disabled = false;
                 });
             });
+          }
+
+          if (lobbyId && room && String(room.phase || '') === 'finished') {
+            ensureLobbyReturnWatcher();
           }
 
           var changeBtn = document.getElementById('cnChangePlayers');
@@ -10091,6 +10446,11 @@
 
     window.addEventListener('popstate', function () {
       if (unsub) unsub();
+      try {
+        if (ui && ui.lobbyUnsub) ui.lobbyUnsub();
+      } catch (e) {
+        // ignore
+      }
     });
   }
 
