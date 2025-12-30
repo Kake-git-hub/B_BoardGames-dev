@@ -3119,6 +3119,20 @@
     return keys;
   }
 
+  function llFindHostId(room) {
+    try {
+      var ps = (room && room.players) || {};
+      var keys = Object.keys(ps);
+      for (var i = 0; i < keys.length; i++) {
+        var id = keys[i];
+        if (ps[id] && ps[id].isHost) return id;
+      }
+    } catch (e) {
+      // ignore
+    }
+    return '';
+  }
+
   function llAppendLog(room, text) {
     var log = [];
     try {
@@ -3555,7 +3569,7 @@
           logText += '（対象なし）';
         }
       } else if (card === '3') {
-        // Baron
+        // Knight
         var t3 = action && action.target ? String(action.target) : '';
         var eligible3 = eligibleTargetIds(false);
         if (eligible3.length && (!t3 || eligible3.indexOf(t3) < 0)) return room;
@@ -3563,26 +3577,26 @@
           if (isProtected(t3)) {
             logText += ' → ' + pname(t3) + '（僧侶により保護中：無効）';
           } else {
-          var aCard = getSingleHand(actorId);
-          var bCard = getSingleHand(t3);
-          var av = parseIntSafe(aCard, 0);
-          var bv = parseIntSafe(bCard, 0);
-          logText += ' → ' + pname(t3) + ' と比較';
-            if (av && bv) {
+            var aCard = '3';
+            var bCard = getSingleHand(t3);
+            var av = 3;
+            var bv = parseIntSafe(bCard, 0);
+            logText += ' → ' + pname(t3) + ' と比較';
+            if (bv) {
               // Smaller number loses.
               if (av === bv) {
                 logText += '（引き分け）';
               } else if (av < bv) {
-                eliminatePlayer(actorId, 'baron');
+                eliminatePlayer(actorId, 'knight');
                 logText += '（' + pname(t3) + ' 勝ち：' + actorName + ' 脱落）';
               } else {
-                eliminatePlayer(t3, 'baron');
+                eliminatePlayer(t3, 'knight');
                 logText += '（' + actorName + ' 勝ち：' + pname(t3) + ' 脱落）';
               }
             }
-          // Show both cards to actor + target, and wait for actor to proceed.
-          round.reveal = { type: 'knight', by: actorId, target: t3, byCard: aCard, targetCard: bCard };
-          round.waitFor = { type: 'knight_ack', by: actorId };
+            // Show both cards to everyone, and wait for actor to proceed.
+            round.reveal = { type: 'knight', by: actorId, target: t3, byCard: aCard, targetCard: bCard };
+            round.waitFor = { type: 'knight_ack', by: actorId };
           }
         } else {
           logText += '（対象なし）';
@@ -3669,7 +3683,7 @@
       // Determine end of round.
       var alive = llAliveIds(nextRoom, round);
       var deckLeft = Array.isArray(round.deck) ? round.deck.length : 0;
-      if (alive.length <= 1 || deckLeft === 0) {
+      if (alive.length <= 1) {
         var winners = llRoundWinners(nextRoom, round);
         round.winners = winners;
         round.endedAt = serverNowMs();
@@ -3679,6 +3693,16 @@
         nextRoom.result = { winners: winners, finishedAt: serverNowMs() };
         nextRoom.round = round;
         nextRoom.log = llAppendLog(nextRoom, 'ゲーム終了');
+        return nextRoom;
+      }
+
+      if (deckLeft === 0) {
+        // Showdown: reveal all hands, and wait for host to announce result.
+        var hostId = llFindHostId(nextRoom) || String(round.currentPlayerId || '') || String(actorId || '');
+        round.reveal = { type: 'showdown', hostId: hostId, hands: assign({}, round.hands || {}) };
+        round.waitFor = { type: 'showdown_ack', by: hostId };
+        nextRoom.round = round;
+        nextRoom.log = llAppendLog(nextRoom, '山札切れ：全員公開');
         return nextRoom;
       }
 
@@ -3736,6 +3760,7 @@
       var wf = round.waitFor || null;
       if (!wf || !wf.type) return room;
       if (String(wf.by || '') !== String(playerId || '')) return room;
+      var wfType = String(wf.type || '');
 
       // Clear waiting state
       round.waitFor = null;
@@ -3748,7 +3773,7 @@
       // Determine end of round after any elimination that already happened.
       var alive = llAliveIds(nextRoom, round);
       var deckLeft = Array.isArray(round.deck) ? round.deck.length : 0;
-      if (alive.length <= 1 || deckLeft === 0) {
+      if (alive.length <= 1) {
         var winners = llRoundWinners(nextRoom, round);
         round.winners = winners;
         round.endedAt = serverNowMs();
@@ -3758,6 +3783,27 @@
         nextRoom.result = { winners: winners, finishedAt: serverNowMs() };
         nextRoom.round = round;
         nextRoom.log = llAppendLog(nextRoom, 'ゲーム終了');
+        return nextRoom;
+      }
+
+      if (deckLeft === 0) {
+        if (wfType === 'showdown_ack') {
+          var winners2 = llRoundWinners(nextRoom, round);
+          round.winners = winners2;
+          round.endedAt = serverNowMs();
+          round.state = 'ended';
+
+          nextRoom.phase = 'finished';
+          nextRoom.result = { winners: winners2, finishedAt: serverNowMs() };
+          nextRoom.round = round;
+          nextRoom.log = llAppendLog(nextRoom, 'ゲーム終了');
+          return nextRoom;
+        }
+        var hostId = llFindHostId(nextRoom) || String(round.currentPlayerId || '') || String(playerId || '');
+        round.reveal = { type: 'showdown', hostId: hostId, hands: assign({}, round.hands || {}) };
+        round.waitFor = { type: 'showdown_ack', by: hostId };
+        nextRoom.round = round;
+        nextRoom.log = llAppendLog(nextRoom, '山札切れ：全員公開');
         return nextRoom;
       }
 
@@ -3815,6 +3861,23 @@
       round.protected = protectedMap;
 
       nextRoom.round = round;
+      return nextRoom;
+    });
+  }
+
+  function resetLoveLetterToLobby(roomId, playerId) {
+    var base = loveletterRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      var ps = room.players || {};
+      var me = ps && ps[playerId] ? ps[playerId] : null;
+      if (!me || !me.isHost) return room;
+
+      var nextRoom = assign({}, room);
+      nextRoom.phase = 'lobby';
+      nextRoom.result = null;
+      nextRoom.round = null;
+      nextRoom.log = llAppendLog(nextRoom, 'ロビーに戻しました');
       return nextRoom;
     });
   }
@@ -5664,6 +5727,8 @@
       if (viewEl && viewEl.classList) {
         viewEl.classList.remove('cn-turn-actor');
         viewEl.classList.remove('cn-myturn');
+        viewEl.classList.remove('ll-turn-actor');
+        viewEl.classList.remove('ll-turn-waiting');
       }
     } catch (e) {
       // ignore
@@ -5687,6 +5752,8 @@
       if (viewEl && viewEl.classList) {
         viewEl.classList.remove('cn-turn-actor');
         viewEl.classList.remove('cn-myturn');
+        viewEl.classList.remove('ll-turn-actor');
+        viewEl.classList.remove('ll-turn-waiting');
       }
     } catch (e) {
       // ignore
@@ -5736,6 +5803,15 @@
     var playerCount = room && room.players ? Object.keys(room.players).length : 0;
     var phase = (room && room.phase) || '-';
     var canStart = phase === 'lobby' && playerCount >= 2;
+
+    try {
+      if (viewEl && viewEl.classList) {
+        viewEl.classList.remove('ll-turn-actor');
+        viewEl.classList.remove('ll-turn-waiting');
+      }
+    } catch (e0) {
+      // ignore
+    }
 
     render(
       viewEl,
@@ -5796,6 +5872,17 @@
     }
 
     var isMyTurn = phase === 'playing' && String(r.currentPlayerId || '') === String(playerId || '') && !myElim;
+
+    // Turn highlight / waiting dim on the whole view.
+    try {
+      if (viewEl && viewEl.classList) {
+        viewEl.classList.toggle('ll-turn-actor', !!isMyTurn);
+        viewEl.classList.toggle('ll-turn-waiting', phase === 'playing' && !isMyTurn);
+      }
+    } catch (eTurn) {
+      // ignore
+    }
+
     if (phase === 'lobby') statusText = '待機中：GMがスタートするまでお待ちください。';
     else if (phase === 'playing') {
       if (myElim) statusText = 'あなたは脱落しました。';
@@ -5807,6 +5894,15 @@
     var graveArr = r && Array.isArray(r.grave) ? r.grave : [];
     var graveCount = graveArr.length;
     var graveLatest = graveCount >= 2 ? String(graveArr[graveArr.length - 1] || '') : '';
+
+    var pilesText = '山札 ' + String(deckLeft) + ' / 墓地 ' + String(graveCount);
+    var pilesHtml =
+      '<span class="ll-piles">' +
+      escapeHtml(pilesText) +
+      (graveLatest
+        ? ' <img class="ll-grave-icon" alt="grave" src="' + escapeHtml((llCardDef(graveLatest) || {}).icon || '') + '" />'
+        : '') +
+      '</span>';
 
     function llCardImgHtml(rank) {
       var d = llCardDef(rank);
@@ -5825,7 +5921,18 @@
         var fpid = room.result.winners[fi];
         fs.push(ps[fpid] ? formatPlayerDisplayName(ps[fpid]) : String(fpid));
       }
-      resultHtml = '<div class="card center" style="padding:12px"><div class="muted">勝者</div><div class="big">' + escapeHtml(fs.length ? fs.join(' / ') : '-') + '</div></div>';
+      resultHtml =
+        '<div class="card center" style="padding:12px">' +
+        '<div class="muted">勝者</div>' +
+        '<div class="big">' +
+        escapeHtml(fs.length ? fs.join(' / ') : '-') +
+        '</div>' +
+        (isHost
+          ? '<div class="row" style="justify-content:center;margin-top:10px">' +
+            '<button id="llNextGame" class="primary">次ゲームへ（参加者変更）</button>' +
+            '</div>'
+          : '') +
+        '</div>';
     }
 
     // Hand (always show your card while waiting)
@@ -5943,7 +6050,7 @@
     }
 
     // Peek modal (道化)
-    if (ui && ui.modal && ui.modal.type === 'peek') {
+    if (!ui.ackInFlight && ui && ui.modal && ui.modal.type === 'peek') {
       var m = ui.modal;
       modalHtml =
         '<div class="ll-overlay" role="dialog" aria-modal="true">' +
@@ -5960,7 +6067,7 @@
     }
 
     // Reveal modal (騎士/大臣オーバー)
-    if (!modalHtml && phase === 'playing' && r && r.reveal && r.reveal.type) {
+      if (!ui.ackInFlight && !modalHtml && phase === 'playing' && r && r.reveal && r.reveal.type) {
       var rv = r.reveal;
       if (rv.type === 'knight') {
         var by = String(rv.by || '');
@@ -6001,21 +6108,52 @@
             '</div>' +
             '</div>';
         }
+      } else if (rv.type === 'showdown') {
+        var hostId = String(rv.hostId || '');
+        var handsMap = rv.hands || {};
+        var grid = '';
+        for (var sdi = 0; sdi < order.length; sdi++) {
+          var pid3 = order[sdi];
+          if (!pid3) continue;
+          if (r && r.eliminated && r.eliminated[pid3]) continue;
+          var h = handsMap && handsMap[pid3] && Array.isArray(handsMap[pid3]) ? handsMap[pid3] : (r.hands && Array.isArray(r.hands[pid3]) ? r.hands[pid3] : []);
+          if (!h || !h.length) continue;
+          var nm = ps[pid3] ? formatPlayerDisplayName(ps[pid3]) : String(pid3);
+          grid +=
+            '<div class="ll-showdown-item">' +
+            '<div class="muted">' +
+            escapeHtml(nm) +
+            '</div>' +
+            '<div class="ll-modal-card">' +
+            llCardImgHtml(String(h[0] || '')) +
+            '</div>' +
+            '</div>';
+        }
+        modalHtml =
+          '<div class="ll-overlay" role="dialog" aria-modal="true">' +
+          '<div class="ll-overlay-backdrop"></div>' +
+          '<div class="ll-overlay-panel">' +
+          '<div class="big">山札切れ：全員公開</div>' +
+          '<div class="ll-showdown-grid">' +
+          grid +
+          '</div>' +
+          '<div class="row" style="justify-content:flex-end">' +
+          (String(playerId) === hostId ? '<button id="llAck" class="primary">結果発表</button>' : '<div class="muted">GMが結果発表します</div>') +
+          '</div>' +
+          '</div>' +
+          '</div>';
       }
     }
 
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">' +
+      '\n    <div class="stack ll-player">\n      <div class="big ll-player-name">' +
         escapeHtml(selfName) +
-        '</div>\n\n      <div class="card center" style="padding:12px">\n        <div class="big">' +
+        '</div>\n\n      <div class="card" style="padding:10px">\n        <div class="ll-topline">\n          <div class="ll-status">' +
         escapeHtml(statusText || '') +
-        '</div>\n        <div class="muted">山札 ' +
-        escapeHtml(String(deckLeft)) +
-        ' / 墓地 ' +
-        escapeHtml(String(graveCount)) +
-        (graveLatest ? ' <img class="ll-grave-icon" alt="grave" src="' + escapeHtml((llCardDef(graveLatest) || {}).icon || '') + '" />' : '') +
-        '</div>\n      </div>\n\n      ' +
+        '</div>\n          ' +
+        pilesHtml +
+        '\n        </div>\n      </div>\n\n      ' +
         (resultHtml || '') +
         '\n\n      ' +
         (handHtml || '') +
@@ -6254,9 +6392,17 @@
   }
 
   function routeLoveLetterPlayer(roomId, isHost) {
+    try {
+      if (document && document.body && document.body.classList) {
+        document.body.classList.add('ll-player-screen');
+      }
+    } catch (e0) {
+      // ignore
+    }
+
     var playerId = getOrCreateLoveLetterPlayerId(roomId);
     var unsub = null;
-    var ui = { pending: null, modal: null, handFrontIndex: 1, peekDismissedKey: '' };
+    var ui = { pending: null, modal: null, handFrontIndex: 1, peekDismissedKey: '', ackInFlight: false };
     var lastRoom = null;
 
     function computePeekModal(room) {
@@ -6279,7 +6425,7 @@
     function renderNow(room) {
       lastRoom = room;
       // Show peek modal (道化) on top when applicable.
-      if (!ui.pending) {
+      if (!ui.ackInFlight && !ui.pending) {
         var pm = computePeekModal(room);
         if (pm) ui.modal = pm;
       }
@@ -6288,15 +6434,66 @@
       renderLoveLetterPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui });
 
       var ackBtn = document.getElementById('llAck');
-      if (ackBtn) {
-        ackBtn.addEventListener('click', function () {
-          ackBtn.disabled = true;
+      if (ackBtn && !ackBtn.__ll_bound) {
+        ackBtn.__ll_bound = true;
+
+        var doAck = function (ev) {
+          if (ui.ackInFlight) return;
+          if (ev && ev.preventDefault) ev.preventDefault();
+          if (ev && ev.stopPropagation) ev.stopPropagation();
+
+          if (ui.modal && ui.modal.type === 'peek' && ui.modal.key) {
+            ui.peekDismissedKey = String(ui.modal.key);
+          }
+
+          ui.pending = null;
+          ui.modal = null;
+          ui.ackInFlight = true;
+
+          // Close modal immediately on UI.
+          renderNow(lastRoom);
+
+          try {
+            ackBtn.disabled = true;
+          } catch (e1) {
+            // ignore
+          }
+
           ackLoveLetter(roomId, playerId)
             .catch(function (e) {
               alert((e && e.message) || '失敗');
             })
             .finally(function () {
-              ackBtn.disabled = false;
+              ui.ackInFlight = false;
+            });
+        };
+
+        ackBtn.addEventListener('click', doAck);
+        if (typeof PointerEvent !== 'undefined') {
+          ackBtn.addEventListener('pointerup', doAck);
+        }
+      }
+
+      var nextGameBtn = document.getElementById('llNextGame');
+      if (nextGameBtn) {
+        nextGameBtn.addEventListener('click', function () {
+          nextGameBtn.disabled = true;
+          resetLoveLetterToLobby(roomId, playerId)
+            .then(function () {
+              var q = {};
+              var v = getCacheBusterParam();
+              if (v) q.v = v;
+              q.room = roomId;
+              q.host = '1';
+              q.screen = 'loveletter_host';
+              setQuery(q);
+              route();
+            })
+            .catch(function (e) {
+              alert((e && e.message) || '失敗');
+            })
+            .finally(function () {
+              nextGameBtn.disabled = false;
             });
         });
       }
@@ -6488,10 +6685,25 @@
 
     window.addEventListener('popstate', function () {
       if (unsub) unsub();
+      try {
+        if (document && document.body && document.body.classList) {
+          document.body.classList.remove('ll-player-screen');
+        }
+      } catch (e3) {
+        // ignore
+      }
     });
   }
 
   function route() {
+    try {
+      if (document && document.body && document.body.classList) {
+        document.body.classList.remove('ll-player-screen');
+      }
+    } catch (e0) {
+      // ignore
+    }
+
     var q = parseQuery();
     var screen = q.screen ? String(q.screen) : '';
     var st = getUrlState();

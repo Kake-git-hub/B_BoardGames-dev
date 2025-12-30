@@ -58,6 +58,10 @@ hr{border:none;border-top:1px solid var(--line);margin:12px 0}
 .inline-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .footer{padding:10px 4px;color:var(--muted);text-align:center}
 
+/* Love Letter player screen: maximize vertical space */
+body.ll-player-screen .header{display:none}
+body.ll-player-screen .app{padding-top:10px}
+
 .form-error{color:var(--danger);font-size:13px;line-height:1.4}
 .form-error:empty{display:none}
 
@@ -140,10 +144,16 @@ hr{border:none;border-top:1px solid var(--line);margin:12px 0}
   -webkit-user-select:none;
   user-select:none;
 }
-.ll-card-back{transform:translate(0,0) scale(.96);opacity:.85}
-.ll-card-front{transform:translate(28px,28px)}
+.ll-card-back{transform:translate(0,0) scale(.90);opacity:.85}
+.ll-card-front{transform:translate(18px,20%) scale(.90)}
 .ll-card-img{width:100%;height:100%;object-fit:contain;display:block}
 .ll-hint{font-size:13px}
+
+.ll-player{gap:8px}
+.ll-player-name{margin-top:0}
+.ll-topline{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:nowrap}
+.ll-topline .ll-status{font-weight:900;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ll-topline .ll-piles{color:var(--muted);font-size:13px;white-space:nowrap}
 
 .ll-grave-icon{width:22px;height:22px;object-fit:contain;vertical-align:-6px;display:inline-block;margin-left:6px;border-radius:6px;border:1px solid var(--line);background:#0f1520}
 
@@ -154,3 +164,13 @@ hr{border:none;border-top:1px solid var(--line);margin:12px 0}
 .ll-overlay{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px}
 .ll-overlay-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6)}
 .ll-overlay-panel{position:relative;width:100%;max-width:520px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;max-height:calc(100vh - 32px);overflow:auto}
+
+/* Love Letter: turn emphasis */
+#view.ll-turn-actor::before{content:"";position:absolute;inset:-4px;border:4px solid var(--text);border-radius:12px;pointer-events:none}
+.ll-turn-waiting .ll-hand-wrap{filter:brightness(.72);opacity:.75}
+.ll-turn-waiting .stack>.card{filter:brightness(.78);opacity:.82}
+
+/* Love Letter: showdown */
+.ll-showdown-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.ll-showdown-item{display:flex;gap:10px;align-items:center}
+.ll-showdown-item img{width:54px;height:72px;object-fit:contain;border-radius:8px;border:1px solid var(--line);background:#0f1520}
