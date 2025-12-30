@@ -732,6 +732,8 @@
 
   // -------------------- shared (persisted name) --------------------
   var BBG_NAME_KEY = 'bbg_name_v1';
+  var BBG_ACTIVE_LOBBY_KEY = 'bbg_active_lobby_v1';
+  var BBG_RESTRICTED_KEY = 'bbg_restricted_v1';
 
   function loadPersistedName() {
     try {
@@ -747,6 +749,82 @@
       if (!nm) localStorage.removeItem(BBG_NAME_KEY);
       else localStorage.setItem(BBG_NAME_KEY, nm);
     } catch (e) {
+      // ignore
+    }
+  }
+
+  function setActiveLobby(lobbyId, restricted) {
+    var id = String(lobbyId || '').trim();
+    try {
+      if (!id) {
+        localStorage.removeItem(BBG_ACTIVE_LOBBY_KEY);
+        localStorage.removeItem(BBG_RESTRICTED_KEY);
+        return;
+      }
+      localStorage.setItem(BBG_ACTIVE_LOBBY_KEY, id);
+      localStorage.setItem(BBG_RESTRICTED_KEY, restricted ? '1' : '0');
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  function loadActiveLobbyId() {
+    try {
+      return String(localStorage.getItem(BBG_ACTIVE_LOBBY_KEY) || '').trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function isRestrictedDevice() {
+    try {
+      return String(localStorage.getItem(BBG_RESTRICTED_KEY) || '') === '1';
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function shouldShowBackNav() {
+    try {
+      return !(loadActiveLobbyId() && isRestrictedDevice());
+    } catch (e) {
+      return true;
+    }
+  }
+
+  function stripBackNavLinks(rootEl) {
+    if (!rootEl) return;
+    if (shouldShowBackNav()) return;
+    try {
+      var links = rootEl.querySelectorAll ? rootEl.querySelectorAll('a.btn.ghost') : [];
+      for (var i = 0; i < links.length; i++) {
+        var a = links[i];
+        if (!a) continue;
+        var href = '';
+        try {
+          href = String(a.getAttribute('href') || '');
+        } catch (e1) {
+          href = '';
+        }
+        if (href !== './') continue;
+        var txt = '';
+        try {
+          txt = String(a.textContent || '').trim();
+        } catch (e2) {
+          txt = '';
+        }
+        if (txt !== '戻る' && txt !== 'ホーム') continue;
+        try {
+          if (a.parentNode) a.parentNode.removeChild(a);
+        } catch (e3) {
+          try {
+            a.style.display = 'none';
+          } catch (e4) {
+            // ignore
+          }
+        }
+      }
+    } catch (e0) {
       // ignore
     }
   }
@@ -779,7 +857,7 @@
     return id;
   }
 
-  function createLobby(lobbyId, hostName) {
+  function createLobby(lobbyId, hostName, isGmDevice, nonce) {
     var nm = String(hostName || '').trim();
     if (!nm) return Promise.reject(new Error('名前を入力してください。'));
     var mid = getOrCreateLobbyMemberId(lobbyId);
@@ -789,12 +867,13 @@
       if (current) return current;
       var lobby = {
         createdAt: now,
+        nonce: String(nonce || ''),
         hostMid: mid,
         members: {},
         order: [mid],
         currentGame: null
       };
-      lobby.members[mid] = { name: nm, joinedAt: now, isGmDevice: true, lastSeenAt: now };
+      lobby.members[mid] = { name: nm, joinedAt: now, isGmDevice: !!isGmDevice, lastSeenAt: now };
       return lobby;
     });
   }
@@ -818,7 +897,14 @@
         current.members[mid].lastSeenAt = now;
       }
 
-      if (isGmDevice) current.members[mid].isGmDevice = true;
+      if (!!isGmDevice) current.members[mid].isGmDevice = true;
+      else {
+        try {
+          if (current.members[mid] && current.members[mid].isGmDevice) delete current.members[mid].isGmDevice;
+        } catch (eDel) {
+          // ignore
+        }
+      }
 
       var exists = false;
       for (var i = 0; i < current.order.length; i++) {
@@ -4023,7 +4109,30 @@
   }
 
   // -------------------- UI --------------------
+  var HEADER_LOBBY_ID = '';
+
+  function setHeaderLobbyId(lobbyId) {
+    HEADER_LOBBY_ID = String(lobbyId || '').trim();
+  }
+
+  function headerHtml() {
+    if (!HEADER_LOBBY_ID) return '';
+    return (
+      '<div class="row" style="align-items:baseline; gap:8px">' +
+      '<div class="big">B_BoardGames</div>' +
+      '<div class="badge">' +
+      escapeHtml(HEADER_LOBBY_ID) +
+      '</div>' +
+      '</div>'
+    );
+  }
+
   function render(viewEl, html) {
+    var h = headerHtml();
+    if (h) {
+      viewEl.innerHTML = '<div class="stack">' + h + html + '</div>';
+      return;
+    }
     viewEl.innerHTML = html;
   }
 
@@ -4058,13 +4167,42 @@
   }
 
   function renderHome(viewEl) {
-    var persistedName = loadPersistedName();
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">B_BoardGames</div>\n      <div class="muted">まずロビーを作成し、参加者は同じQRから入室します。</div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">あなたの名前（保存済み）</div>\n        <div><b>' +
-        escapeHtml(persistedName || '（未設定）') +
-        '</b></div>\n      </div>\n\n      <div class="row">\n        <a class="btn primary" href="?screen=lobby_create">ロビーを作成</a>\n        <a class="btn ghost" href="?screen=lobby_join">ロビーに参加</a>\n      </div>\n\n      <div class="row">\n        <a class="btn ghost" href="?screen=setup">Firebase設定</a>\n        <a class="btn ghost" href="?screen=history">勝敗履歴</a>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">B_BoardGames</div>\n\n      <div class="row">\n        <button id="homeCreateJoin" class="primary">ロビー作成（この端末もゲームに参加）</button>\n      </div>\n      <div class="row">\n        <button id="homeCreateGm" class="ghost">ロビー作成（この端末をゲームマスターデバイス）</button>\n      </div>\n    </div>\n  '
     );
+  }
+
+  function pad4(n) {
+    var s = String(Math.floor(Math.abs(n || 0)));
+    while (s.length < 4) s = '0' + s;
+    if (s.length > 4) s = s.slice(-4);
+    return s;
+  }
+
+  function makeLobbyId4() {
+    return pad4(randomInt(10000));
+  }
+
+  function createLobbyWithRetry(hostName, isGmDevice) {
+    var nm = String(hostName || '').trim();
+    if (!nm) nm = 'GM';
+
+    function attempt(triesLeft) {
+      if (triesLeft <= 0) return Promise.reject(new Error('ロビー作成に失敗しました（再試行回数超過）'));
+      var lobbyId = makeLobbyId4();
+      var nonce = randomId(8);
+      var mid = getOrCreateLobbyMemberId(lobbyId);
+      return createLobby(lobbyId, nm, !!isGmDevice, nonce).then(function (lobby) {
+        // Collision check: if an existing lobby was returned, nonce won't match.
+        if (lobby && String(lobby.nonce || '') === String(nonce) && String(lobby.hostMid || '') === String(mid)) {
+          return { lobbyId: lobbyId };
+        }
+        return attempt(triesLeft - 1);
+      });
+    }
+
+    return attempt(30);
   }
 
   function makeLobbyJoinUrl(lobbyId) {
@@ -4074,6 +4212,23 @@
     q.lobby = lobbyId;
     q.screen = 'lobby_join';
     return baseUrl() + '?' + buildQuery(q);
+  }
+
+  function renderLobbyLogin(viewEl, opts) {
+    var lobbyId = opts.lobbyId;
+    var joinUrl = opts.joinUrl;
+    var persistedName = loadPersistedName();
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">ロビーログイン</div>\n      <div class="kv"><span class="muted">ロビーID</span><b>' +
+        escapeHtml(lobbyId) +
+        '</b></div>\n\n      <div class="muted">参加者はこのQRを読み取って参加します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="field">\n        <label>参加URL（スマホ以外はこちら）</label>\n        <div class="code" id="joinUrlText">' +
+        escapeHtml(joinUrl || '') +
+        '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>この端末の名前（表示用）</label>\n        <input id="lobbyLoginName" placeholder="例: たろう" value="' +
+        escapeHtml(persistedName || '') +
+        '" />\n      </div>\n\n      <div class="row">\n        <button id="lobbyShowLobby" class="primary">ロビー表示</button>\n      </div>\n\n      <div id="lobbyLoginError" class="form-error" role="alert"></div>\n    </div>\n  '
+    );
   }
 
   function renderLobbyCreate(viewEl) {
@@ -4101,7 +4256,7 @@
         escapeHtml(lobbyId || '') +
         '" />\n      </div>\n\n      <div class="field">\n        <label>あなたの名前（表示用）</label>\n        <input id="lobbyJoinName" placeholder="例: たろう" value="' +
         escapeHtml(persistedName || '') +
-        '" />\n      </div>\n\n      <div class="row">\n        <button id="lobbyJoinBtn" class="primary">参加</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+        '" />\n      </div>\n\n      <div class="row">\n        <button id="lobbyJoinBtn" class="primary">参加</button>\n      </div>\n    </div>\n  '
     );
   }
 
@@ -5377,8 +5532,7 @@
               '<div class="muted">※ 開始時にワードを確定してDBに保持します。</div></div>' +
               '<div class="row">' +
               '<button id="startContinue" class="primary">この設定で開始</button>' +
-              '<button id="cancelContinue" class="ghost">キャンセル</button>' +
-              '</div>'
+                '\n      </div>\n    </div>\n  '
             : '<hr />' +
               '<div class="row">' +
               '<button id="continueGame" class="primary">ゲーム継続</button>' +
@@ -5470,7 +5624,225 @@
   }
 
   function routeHome() {
+    setHeaderLobbyId('');
+
+    // QR参加者はホームに戻れない（待機画面へ戻す）
+    try {
+      var activeLobbyId = loadActiveLobbyId();
+      if (activeLobbyId && isRestrictedDevice()) {
+        var q0 = {};
+        var v0 = getCacheBusterParam();
+        if (v0) q0.v = v0;
+        q0.lobby = activeLobbyId;
+        q0.screen = 'lobby_player';
+        setQuery(q0);
+        route();
+        return;
+      }
+    } catch (e0) {
+      // ignore
+    }
+
     renderHome(viewEl);
+
+    var btnJoin = document.getElementById('homeCreateJoin');
+    var btnGm = document.getElementById('homeCreateGm');
+
+    function disableHomeButtons(disabled) {
+      try {
+        if (btnJoin) btnJoin.disabled = !!disabled;
+        if (btnGm) btnGm.disabled = !!disabled;
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    function startCreate(isGmDevice) {
+      disableHomeButtons(true);
+      var nm = loadPersistedName();
+      if (!nm) nm = 'GM';
+
+      firebaseReady()
+        .then(function () {
+          return createLobbyWithRetry(nm, !!isGmDevice);
+        })
+        .then(function (res) {
+          var q = {};
+          var v = getCacheBusterParam();
+          if (v) q.v = v;
+          q.lobby = res.lobbyId;
+          q.gmdev = isGmDevice ? '1' : '0';
+          q.screen = 'lobby_login';
+          setQuery(q);
+          route();
+        })
+        .catch(function (e) {
+          renderError(viewEl, (e && e.message) || '作成に失敗しました');
+        })
+        .finally(function () {
+          disableHomeButtons(false);
+        });
+    }
+
+    if (btnJoin && !btnJoin.__home_bound) {
+      btnJoin.__home_bound = true;
+      btnJoin.addEventListener('click', function () {
+        startCreate(false);
+      });
+    }
+
+    if (btnGm && !btnGm.__home_bound) {
+      btnGm.__home_bound = true;
+      btnGm.addEventListener('click', function () {
+        startCreate(true);
+      });
+    }
+  }
+
+  function routeLobbyLogin(lobbyId) {
+    if (!lobbyId) return routeHome();
+
+    var joinUrl = makeLobbyJoinUrl(lobbyId);
+    renderLobbyLogin(viewEl, { lobbyId: lobbyId, joinUrl: joinUrl });
+    clearInlineError('lobbyLoginError');
+
+    function drawQr() {
+      return new Promise(function (resolve) {
+        var canvas = document.getElementById('qr');
+        var errEl = document.getElementById('qrError');
+        var wrapEl = document.getElementById('qrWrap');
+        if (errEl) errEl.textContent = '';
+        if (!canvas) {
+          if (errEl) errEl.textContent = 'QR表示領域が見つかりません。';
+          return resolve();
+        }
+        var qr = window.QRCode || window.qrcode || window.QR;
+        if (!qr || !qr.toCanvas) {
+          if (errEl) errEl.textContent = 'QRの生成に失敗しました（ライブラリ未読込）。';
+          return resolve();
+        }
+
+        function showAsImage() {
+          if (!qr.toDataURL || !wrapEl) return;
+          try {
+            qr.toDataURL(joinUrl, { margin: 1, width: 240 }, function (err, url) {
+              if (err || !url) {
+                if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+                return resolve();
+              }
+              wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />';
+              if (errEl) errEl.textContent = '（QRは画像で表示しています）';
+              return resolve();
+            });
+          } catch (e) {
+            if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+            return resolve();
+          }
+        }
+
+        function looksBlank(c) {
+          try {
+            var ctx = c.getContext && c.getContext('2d');
+            if (!ctx) return true;
+            var w = c.width || 0;
+            var h = c.height || 0;
+            if (!w || !h) return true;
+            var img = ctx.getImageData(0, 0, Math.min(16, w), Math.min(16, h)).data;
+            var allZero = true;
+            var allWhite = true;
+            for (var i = 0; i < img.length; i += 4) {
+              var r = img[i], g = img[i + 1], b = img[i + 2], a = img[i + 3];
+              if (a !== 0) allZero = false;
+              if (!(a !== 0 && r > 240 && g > 240 && b > 240)) allWhite = false;
+              if (!allZero && !allWhite) return false;
+            }
+            return allZero || allWhite;
+          } catch (e) {
+            return false;
+          }
+        }
+
+        try {
+          qr.toCanvas(canvas, joinUrl, { margin: 1, width: 240 }, function (err) {
+            if (err) {
+              if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+              showAsImage();
+              return;
+            }
+            if (looksBlank(canvas)) {
+              showAsImage();
+              return;
+            }
+            resolve();
+          });
+        } catch (e) {
+          if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
+          showAsImage();
+        }
+      });
+    }
+
+    drawQr();
+
+    var copyBtn = document.getElementById('copyJoinUrl');
+    if (copyBtn && !copyBtn.__lobby_bound) {
+      copyBtn.__lobby_bound = true;
+      copyBtn.addEventListener('click', function () {
+        var st = document.getElementById('copyStatus');
+        if (st) st.textContent = 'コピー中...';
+        copyTextToClipboard(joinUrl)
+          .then(function (ok) {
+            if (!st) return;
+            st.textContent = ok ? 'コピーしました' : 'コピーできませんでした（長押しで選択してコピーしてください）';
+          })
+          .catch(function () {
+            if (st) st.textContent = 'コピーできませんでした（長押しで選択してコピーしてください）';
+          });
+      });
+    }
+
+    var showBtn = document.getElementById('lobbyShowLobby');
+    if (showBtn && !showBtn.__lobby_bound) {
+      showBtn.__lobby_bound = true;
+      showBtn.addEventListener('click', function () {
+        var nameEl = document.getElementById('lobbyLoginName');
+        var name = String((nameEl && nameEl.value) || '').trim();
+        if (!name) {
+          setInlineError('lobbyLoginError', '名前を入力してください。');
+          return;
+        }
+
+        clearInlineError('lobbyLoginError');
+        savePersistedName(name);
+        showBtn.disabled = true;
+
+        var q0 = parseQuery();
+        var isGmDevice = q0.gmdev === '1';
+        var mid = getOrCreateLobbyMemberId(lobbyId);
+
+        firebaseReady()
+          .then(function () {
+            return joinLobbyMember(lobbyId, mid, name, isGmDevice);
+          })
+          .then(function () {
+            setActiveLobby(lobbyId, false);
+            var q = {};
+            var v = getCacheBusterParam();
+            if (v) q.v = v;
+            q.lobby = lobbyId;
+            q.gmdev = isGmDevice ? '1' : '0';
+            q.screen = 'lobby_host';
+            setQuery(q);
+            route();
+          })
+          .catch(function (e) {
+            setInlineError('lobbyLoginError', (e && e.message) || 'ロビー表示に失敗しました');
+          })
+          .finally(function () {
+            showBtn.disabled = false;
+          });
+      });
+    }
   }
 
   function routeLobbyCreate() {
@@ -5489,18 +5861,18 @@
       }
 
       savePersistedName(form.name);
-      var lobbyId = makeRoomId();
 
       firebaseReady()
         .then(function () {
-          return createLobby(lobbyId, form.name);
+          return createLobbyWithRetry(form.name, false);
         })
-        .then(function () {
+        .then(function (res) {
           var q = {};
           var v = getCacheBusterParam();
           if (v) q.v = v;
-          q.lobby = lobbyId;
-          q.screen = 'lobby_host';
+          q.lobby = res.lobbyId;
+          q.gmdev = '0';
+          q.screen = 'lobby_login';
           setQuery(q);
           route();
         })
@@ -5513,6 +5885,20 @@
   function routeLobbyJoin(lobbyId) {
     renderLobbyJoin(viewEl, lobbyId);
     clearInlineError('lobbyJoinError');
+
+    // QRからの参加時はロビーIDは固定（編集させない）
+    try {
+      if (lobbyId) {
+        var idEl0 = document.getElementById('lobbyId');
+        if (idEl0) {
+          idEl0.value = String(lobbyId);
+          idEl0.disabled = true;
+        }
+      }
+    } catch (e0) {
+      // ignore
+    }
+
     var btn = document.getElementById('lobbyJoinBtn');
     if (!btn) return;
     btn.addEventListener('click', function () {
@@ -5533,6 +5919,7 @@
           return joinLobbyMember(form.lobbyId, mid, form.name, false);
         })
         .then(function () {
+          setActiveLobby(form.lobbyId, true);
           var q = {};
           var v = getCacheBusterParam();
           if (v) q.v = v;
@@ -5550,6 +5937,25 @@
   function routeLobbyHost(lobbyId) {
     var unsub = null;
     var joinUrl = makeLobbyJoinUrl(lobbyId);
+    var mid = getOrCreateLobbyMemberId(lobbyId);
+
+    function redirectToLobbyPlayer() {
+      try {
+        if (unsub) {
+          unsub();
+          unsub = null;
+        }
+      } catch (e0) {
+        // ignore
+      }
+      var q = {};
+      var v = getCacheBusterParam();
+      if (v) q.v = v;
+      q.lobby = lobbyId;
+      q.screen = 'lobby_player';
+      setQuery(q);
+      route();
+    }
 
     function drawQr() {
       return new Promise(function (resolve) {
@@ -5752,6 +6158,21 @@
             renderError(viewEl, 'ロビーが見つかりません');
             return;
           }
+
+          // 参加者は管理画面に入れない（ホスト or GM端末のみ）
+          try {
+            var hostMid = lobby && lobby.hostMid ? String(lobby.hostMid) : '';
+            var me = lobby && lobby.members && mid ? lobby.members[mid] : null;
+            var isAllowed = String(hostMid) === String(mid) || (me && me.isGmDevice);
+            if (!isAllowed) {
+              redirectToLobbyPlayer();
+              return;
+            }
+          } catch (eAuth) {
+            redirectToLobbyPlayer();
+            return;
+          }
+
           renderWithLobby(lobby);
         });
       })
@@ -5854,6 +6275,24 @@
     var unsub = null;
     var mid = getOrCreateLobbyMemberId(lobbyId);
 
+    function redirectToLobbyPlayer() {
+      try {
+        if (unsub) {
+          unsub();
+          unsub = null;
+        }
+      } catch (e0) {
+        // ignore
+      }
+      var q = {};
+      var v = getCacheBusterParam();
+      if (v) q.v = v;
+      q.lobby = lobbyId;
+      q.screen = 'lobby_player';
+      setQuery(q);
+      route();
+    }
+
     function normalizeOrder(lobby) {
       var members = (lobby && lobby.members) || {};
       var order = (lobby && lobby.order) || [];
@@ -5915,10 +6354,15 @@
           }
 
           var canEdit = String(lobby.hostMid || '') === String(mid || '');
+
+          // 参加者は順番割り振り画面に入れない
+          if (!canEdit) {
+            redirectToLobbyPlayer();
+            return;
+          }
+
           renderLobbyAssign(viewEl, { lobbyId: lobbyId, lobby: lobby, canEdit: canEdit });
           clearInlineError('lobbyAssignError');
-
-          if (!canEdit) return;
 
           var order = normalizeOrder(lobby);
 
@@ -6160,6 +6604,7 @@
   function routeJoin(roomId, isHost) {
     renderJoin(viewEl, roomId);
     clearInlineError('wwJoinError');
+    stripBackNavLinks(viewEl);
     var joinBtn = document.getElementById('join');
     if (!joinBtn) return;
 
@@ -7198,6 +7643,7 @@
   function routeLoveLetterJoin(roomId, isHost) {
     renderLoveLetterJoin(viewEl, roomId);
     clearInlineError('llJoinError');
+    stripBackNavLinks(viewEl);
     var btn = document.getElementById('llJoin');
     if (!btn) return;
 
@@ -7775,7 +8221,74 @@
     var isPlayer = q.player === '1';
     var lobbyId = q.lobby ? String(q.lobby) : '';
 
+    if (lobbyId) setHeaderLobbyId(lobbyId);
+    else setHeaderLobbyId('');
+
+    // QR参加者（制限端末）は、待機＋ゲームプレイ以外へ遷移させない
+    var activeLobbyId = '';
+    var restricted = false;
+    try {
+      activeLobbyId = loadActiveLobbyId();
+      restricted = !!(activeLobbyId && isRestrictedDevice());
+    } catch (eR0) {
+      activeLobbyId = '';
+      restricted = false;
+    }
+
+    function redirectRestrictedToLobbyPlayer() {
+      var qx = {};
+      var vx = getCacheBusterParam();
+      if (vx) qx.v = vx;
+      qx.lobby = activeLobbyId;
+      qx.screen = 'lobby_player';
+      setQuery(qx);
+      route();
+      return;
+    }
+
+    if (restricted) {
+      // If URL has a different lobby, force back.
+      if (lobbyId && String(lobbyId) !== String(activeLobbyId)) {
+        redirectRestrictedToLobbyPlayer();
+        return;
+      }
+
+      // Allowed screens for restricted devices.
+      var allowed = {
+        lobby_player: 1,
+        lobby_join: 1,
+        join: 1,
+        loveletter_join: 1,
+        loveletter_player: 1,
+        codenames_join: 1,
+        codenames_player: 1,
+        codenames_rejoin: 1
+      };
+
+      // Host-mode is never allowed on restricted devices (even if URL is tampered).
+      if (isHost || screen === 'lobby_host' || screen === 'lobby_assign' || screen === 'lobby_login' || screen === 'lobby_create' || screen === 'create' || screen === 'setup' || screen === 'history' || screen === 'codenames_create' || screen === 'codenames_host' || screen === 'loveletter_create' || screen === 'loveletter_host') {
+        redirectRestrictedToLobbyPlayer();
+        return;
+      }
+
+      // If screen is set and not allowed, force back.
+      if (screen && !allowed[screen]) {
+        redirectRestrictedToLobbyPlayer();
+        return;
+      }
+
+      // For lobby_join, only allow joining the active lobby.
+      if (screen === 'lobby_join' && (!lobbyId || String(lobbyId) !== String(activeLobbyId))) {
+        redirectRestrictedToLobbyPlayer();
+        return;
+      }
+    }
+
     if (screen === 'lobby_create') return routeLobbyCreate();
+    if (screen === 'lobby_login') {
+      if (!lobbyId) return routeHome();
+      return routeLobbyLogin(lobbyId);
+    }
     if (screen === 'lobby_join') return routeLobbyJoin(lobbyId);
     if (screen === 'lobby_host') {
       if (!lobbyId) return routeHome();
@@ -7879,6 +8392,7 @@
   function routeCodenamesJoin(roomId, isHost) {
     renderCodenamesJoin(viewEl, roomId);
     clearInlineError('cnJoinError');
+    stripBackNavLinks(viewEl);
     var btn = document.getElementById('cnJoin');
     if (!btn) return;
 
@@ -7970,6 +8484,7 @@
 
           renderCodenamesRejoin(viewEl, { roomId: roomId, room: room });
           clearInlineError('cnRejoinError');
+          stripBackNavLinks(viewEl);
 
           var goNew = document.getElementById('cnGoNewJoin');
           if (goNew && !goNew.__cn_bound) {
