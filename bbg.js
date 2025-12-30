@@ -4296,7 +4296,7 @@
         escapeHtml(lobbyId) +
         '</b></div>\n\n      <div class="muted">参加者はこのQRを読み取って名前登録します。</div>\n\n      <div class="center" id="qrWrap">\n        <canvas id="qr"></canvas>\n      </div>\n      <div class="muted center" id="qrError"></div>\n\n      <div class="field">\n        <label>GM参加者の名前（この端末）</label>\n        <input id="lobbyGmName" placeholder="例: GM" value="' +
         escapeHtml(persistedName || '') +
-        '" />\n      </div>\n\n      <div class="field">\n        <label>参加URL（スマホ以外はこちら）</label>\n        <div class="code" id="joinUrlText">' +
+        '" />\n      </div>\n\n      <div class="row">\n        <button id="lobbyRegisterGm" class="ghost">この端末の名前を登録</button>\n      </div>\n      <div class="muted">※ 登録すると参加者一覧に反映されます。</div>\n\n      <div class="field">\n        <label>参加URL（スマホ以外はこちら）</label>\n        <div class="code" id="joinUrlText">' +
         escapeHtml(joinUrl || '') +
         '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="muted">参加者</div>\n        ' +
         lobbyMembersSummaryHtml(lobby) +
@@ -4418,7 +4418,7 @@
         listHtml +
         '<div class="row">' +
         '<button id="lobbyShuffle" class="ghost">シャッフル</button>' +
-        '</div>' +
+          '\n      </div>\n    </div>\n  '
         '</div>';
     }
 
@@ -6024,14 +6024,53 @@
     }
 
     function bindButtons() {
+      var registerBtn = document.getElementById('lobbyRegisterGm');
+      if (registerBtn && !registerBtn.__lobby_bound) {
+        registerBtn.__lobby_bound = true;
+        registerBtn.addEventListener('click', function () {
+          var nameEl = document.getElementById('lobbyGmName');
+          var name = String((nameEl && nameEl.value) || '').trim();
+          if (!name) {
+            setInlineError('lobbyLoginError', '名前を入力してください。');
+            return;
+          }
+
+          clearInlineError('lobbyLoginError');
+          savePersistedName(name);
+          registerBtn.disabled = true;
+
+          var q0 = parseQuery();
+          var isGmDevice = q0.gmdev === '1';
+
+          firebaseReady()
+            .then(function () {
+              return joinLobbyMember(lobbyId, mid, name, isGmDevice);
+            })
+            .then(function () {
+              setActiveLobby(lobbyId, false);
+            })
+            .catch(function (e) {
+              setInlineError('lobbyLoginError', (e && e.message) || '登録に失敗しました');
+            })
+            .finally(function () {
+              registerBtn.disabled = false;
+            });
+        });
+      }
+
       var copyBtn = document.getElementById('copyJoinUrl');
       if (copyBtn && !copyBtn.__lobby_bound) {
         copyBtn.__lobby_bound = true;
         copyBtn.addEventListener('click', function () {
           var status = document.getElementById('copyStatus');
           if (status) status.textContent = '';
-          var ok = copyTextToClipboard(joinUrl);
-          if (status) status.textContent = ok ? 'コピーしました' : 'コピーに失敗しました';
+          copyTextToClipboard(joinUrl)
+            .then(function (ok) {
+              if (status) status.textContent = ok ? 'コピーしました' : 'コピーに失敗しました';
+            })
+            .catch(function () {
+              if (status) status.textContent = 'コピーに失敗しました';
+            });
         });
       }
 
@@ -6437,26 +6476,80 @@
           firebaseReady()
             .then(function () {
               if (kind === 'codenames') {
-                // Use lobby member id as player id for deterministic role assignment.
+                // Pre-register all lobby members then start.
+                var ids = normalizeOrder(lobby);
+                var members = (lobby && lobby.members) || {};
+
+                // Build assignment fallback when missing.
+                var assignMap = (lobby && lobby.codenamesAssign) || {};
+                if (!assignMap || typeof assignMap !== 'object') assignMap = {};
+                var tmpAssign = {};
+                for (var iA = 0; iA < ids.length; iA++) {
+                  var idA = ids[iA];
+                  var a0 = assignMap && assignMap[idA] ? assignMap[idA] : null;
+                  tmpAssign[idA] = {
+                    team: a0 && a0.team ? String(a0.team) : '',
+                    role: a0 && a0.role ? String(a0.role) : ''
+                  };
+                }
+                for (var iB = 0; iB < ids.length; iB++) {
+                  var idB = ids[iB];
+                  if (!tmpAssign[idB].team) tmpAssign[idB].team = iB % 2 === 0 ? 'red' : 'blue';
+                  if (!tmpAssign[idB].role) tmpAssign[idB].role = 'operative';
+                }
+                var redSm = '';
+                var blueSm = '';
+                for (var iC = 0; iC < ids.length; iC++) {
+                  var idC = ids[iC];
+                  if (tmpAssign[idC].team === 'red' && !redSm) redSm = idC;
+                  if (tmpAssign[idC].team === 'blue' && !blueSm) blueSm = idC;
+                }
+                if (redSm) tmpAssign[redSm].role = 'spymaster';
+                if (blueSm) tmpAssign[blueSm].role = 'spymaster';
+
                 setCodenamesPlayerId(roomId, mid);
                 return createCodenamesRoom(roomId, { name: hostName, size: 5 })
                   .then(function () {
-                    return joinPlayerInCodenamesRoom(roomId, mid, hostName, true);
+                    var seq = Promise.resolve();
+                    for (var jA = 0; jA < ids.length; jA++) {
+                      (function (pid) {
+                        seq = seq
+                          .then(function () {
+                            var nm = members && members[pid] && members[pid].name ? String(members[pid].name) : '';
+                            return joinPlayerInCodenamesRoom(roomId, pid, nm || '-', String(pid) === String(mid));
+                          })
+                          .then(function () {
+                            var a1 = tmpAssign[pid] || { team: '', role: '' };
+                            var nm2 = members && members[pid] && members[pid].name ? String(members[pid].name) : '';
+                            return setCodenamesPlayerProfile(roomId, pid, nm2 || '-', String(a1.team || ''), String(a1.role || ''));
+                          });
+                      })(ids[jA]);
+                    }
+                    return seq;
                   })
                   .then(function () {
-                    var a = lobby && lobby.codenamesAssign && lobby.codenamesAssign[mid] ? lobby.codenamesAssign[mid] : null;
-                    var team = a && a.team ? String(a.team) : '';
-                    var role = a && a.role ? String(a.role) : '';
-                    if (!team && !role) return;
-                    return setCodenamesPlayerProfile(roomId, mid, hostName, team, role);
+                    return startCodenamesGame(roomId);
                   });
               }
               if (kind === 'loveletter') {
+                var order2 = normalizeOrder(lobby);
+                var members2 = (lobby && lobby.members) || {};
                 setLoveLetterPlayerId(roomId, mid);
-                var order = normalizeOrder(lobby);
-                return createLoveLetterRoom(roomId, { order: order })
+                return createLoveLetterRoom(roomId, { order: order2 })
                   .then(function () {
-                    return joinPlayerInLoveLetterRoom(roomId, mid, hostName, true);
+                    var seq2 = Promise.resolve();
+                    for (var kA = 0; kA < order2.length; kA++) {
+                      (function (pid2) {
+                        seq2 = seq2.then(function () {
+                          var nm3 = members2 && members2[pid2] && members2[pid2].name ? String(members2[pid2].name) : '';
+                          return joinPlayerInLoveLetterRoom(roomId, pid2, nm3 || '-', String(pid2) === String(mid));
+                        });
+                      })(order2[kA]);
+                    }
+                    return seq2;
+                  })
+                  .then(function () {
+                    return startLoveLetterGame(roomId, mid);
                   });
               }
               return;
@@ -6914,6 +7007,167 @@
   }
 
   function routeCreate() {
+    // Lobby-mode: show minimal setup and start from lobby members.
+    var qCreate = null;
+    var lobbyIdFromQuery = '';
+    try {
+      qCreate = parseQuery();
+      lobbyIdFromQuery = qCreate && qCreate.lobby ? String(qCreate.lobby) : '';
+    } catch (e0) {
+      lobbyIdFromQuery = '';
+    }
+
+    if (lobbyIdFromQuery) {
+      var backQ = { lobby: lobbyIdFromQuery, screen: 'lobby_host' };
+      var vBack = getCacheBusterParam();
+      if (vBack) backQ.v = vBack;
+      var backHref = '?' + buildQuery(backQ);
+
+      render(
+        viewEl,
+        '\n    <div class="stack">\n      <div class="big">ワードウルフ：設定</div>\n      <div id="wwCreateError" class="form-error" role="alert"></div>\n\n      <div class="field">\n        <label>少数側の人数（最大5）</label>\n        <input id="minorityCount" type="range" min="1" max="5" step="1" value="1" />\n        <div class="kv"><span class="muted">現在</span><b id="minorityCountLabel">1</b></div>\n      </div>\n\n      <div class="field">\n        <label>お題カテゴリ</label>\n        <select id="topicCategory"></select>\n      </div>\n\n      <hr />\n\n      <div class="row">\n        <button id="wwLobbyStart" class="primary">ゲーム開始</button>\n        <a class="btn ghost" href="' +
+          escapeHtml(backHref) +
+          '">戻る</a>\n      </div>\n    </div>\n  '
+      );
+
+      // Populate categories.
+      try {
+        var sel = document.getElementById('topicCategory');
+        if (sel) {
+          var html = '<option value="random">ランダム</option>';
+          for (var i = 0; i < TOPIC_CATEGORIES.length; i++) {
+            var c = TOPIC_CATEGORIES[i];
+            html += '<option value="' + escapeHtml(c.id) + '">' + escapeHtml(c.name) + '</option>';
+          }
+          sel.innerHTML = html;
+          sel.value = 'random';
+        }
+      } catch (eCat) {
+        // ignore
+      }
+
+      function updateMinorityLabel() {
+        try {
+          var mc = document.getElementById('minorityCount');
+          var mcl = document.getElementById('minorityCountLabel');
+          if (mc && mcl) mcl.textContent = String(mc.value || '1');
+        } catch (eLbl) {
+          // ignore
+        }
+      }
+      var mcEl = document.getElementById('minorityCount');
+      if (mcEl) mcEl.addEventListener('input', updateMinorityLabel);
+      updateMinorityLabel();
+
+      clearInlineError('wwCreateError');
+      stripBackNavLinks(viewEl);
+
+      var lobbyStartBtn = document.getElementById('wwLobbyStart');
+      if (!lobbyStartBtn) return;
+
+      lobbyStartBtn.addEventListener('click', function () {
+        var form;
+        try {
+          clearInlineError('wwCreateError');
+          var mc2 = document.getElementById('minorityCount');
+          var tc2 = document.getElementById('topicCategory');
+          var minorityCount = clamp(parseIntSafe(mc2 && mc2.value, 1), 1, 5);
+          var topicCategoryId = String((tc2 && tc2.value) || 'random');
+          form = { minorityCount: minorityCount, topicCategoryId: topicCategoryId };
+        } catch (eRead) {
+          setInlineError('wwCreateError', (eRead && eRead.message) || '入力を確認してください。');
+          return;
+        }
+
+        lobbyStartBtn.disabled = true;
+
+        firebaseReady()
+          .then(function () {
+            return getValueOnce(lobbyPath(lobbyIdFromQuery));
+          })
+          .then(function (lobby) {
+            if (!lobby) throw new Error('ロビーが見つかりません');
+
+            var myMid = getOrCreateLobbyMemberId(lobbyIdFromQuery);
+            var hostMid = lobby && lobby.hostMid ? String(lobby.hostMid) : '';
+            var me = lobby && lobby.members && myMid ? lobby.members[myMid] : null;
+            var isAllowed = String(hostMid) === String(myMid) || (me && me.isGmDevice);
+            if (!isAllowed) throw new Error('この端末はホストではありません');
+
+            var members = (lobby && lobby.members) || {};
+            var order = (lobby && lobby.order) || [];
+            if (!Array.isArray(order)) order = [];
+
+            var seen = {};
+            var ids = [];
+            for (var i2 = 0; i2 < order.length; i2++) {
+              var id = String(order[i2] || '');
+              if (!id || seen[id] || !members[id]) continue;
+              seen[id] = true;
+              ids.push(id);
+            }
+            var keys = Object.keys(members);
+            keys.sort();
+            for (var j2 = 0; j2 < keys.length; j2++) {
+              var k = String(keys[j2] || '');
+              if (!k || seen[k]) continue;
+              seen[k] = true;
+              ids.push(k);
+            }
+
+            var hostName = (members[hostMid] && String(members[hostMid].name || '').trim()) || loadPersistedName() || 'GM';
+            savePersistedName(hostName);
+
+            var roomId = makeRoomId();
+            var settings = {
+              gmName: hostName,
+              minorityCount: form.minorityCount,
+              talkSeconds: 180,
+              reversal: true,
+              topicCategoryId: form.topicCategoryId
+            };
+
+            return createRoom(roomId, settings)
+              .then(function () {
+                var seq = Promise.resolve();
+                for (var t = 0; t < ids.length; t++) {
+                  (function (pid) {
+                    seq = seq.then(function () {
+                      var nm = members && members[pid] && members[pid].name ? String(members[pid].name) : '';
+                      return joinPlayerInRoom(roomId, pid, nm || '-', String(pid) === String(hostMid));
+                    });
+                  })(ids[t]);
+                }
+                return seq;
+              })
+              .then(function () {
+                setPlayerId(roomId, hostMid);
+                return setLobbyCurrentGame(lobbyIdFromQuery, { kind: 'wordwolf', roomId: roomId, startedAt: serverNowMs() });
+              })
+              .then(function () {
+                var q = {};
+                var v = getCacheBusterParam();
+                if (v) q.v = v;
+                q.room = roomId;
+                q.lobby = lobbyIdFromQuery;
+                q.host = '1';
+                q.player = '1';
+                setQuery(q);
+                route();
+              });
+          })
+          .catch(function (e) {
+            setInlineError('wwCreateError', (e && e.message) || '開始に失敗しました');
+          })
+          .finally(function () {
+            lobbyStartBtn.disabled = false;
+          });
+      });
+
+      return;
+    }
+
+    // Standalone-mode (legacy)
     renderCreate(viewEl);
     clearInlineError('wwCreateError');
 
