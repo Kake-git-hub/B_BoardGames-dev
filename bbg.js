@@ -4994,18 +4994,11 @@
     var qrOnly = !!opts.qrOnly;
     var hostPlayer = (room && room.players && hostPlayerId && room.players[hostPlayerId]) || null;
 
-    var qrTitle = qrOnly ? 'コードネーム：再入場QR' : 'コードネーム：参加QR';
-    var qrDesc = qrOnly
-      ? 'ゲーム中に再入場する人はこのQRを読み取ってください。'
-      : '新規参加者はこのQRを読み取って参加します。';
+    if (!qrOnly) {
+      var phase = (room && room.phase) || 'lobby';
+      var counts = countCodenamesRoles(room);
+      var canStart = phase === 'lobby' && counts.redSpymaster === 1 && counts.blueSpymaster === 1 && counts.redOperative >= 1 && counts.blueOperative >= 1;
 
-    var playerCount = room && room.players ? Object.keys(room.players).length : 0;
-    var phase = (room && room.phase) || '-';
-    var counts = countCodenamesRoles(room);
-
-    var canStart = phase === 'lobby' && counts.redSpymaster === 1 && counts.blueSpymaster === 1 && counts.redOperative >= 1 && counts.blueOperative >= 1;
-    var actionHtml = '';
-    if (!qrOnly && phase === 'lobby') {
       var normalSec = getCodenamesTimerNormalSec(room);
       var bonusSec = getCodenamesTimerFirstBonusSec(room);
       var normalVals = [60, 90, 120, 150];
@@ -5017,35 +5010,30 @@
       var normalIdx = idxOf(normalVals, normalSec);
       var bonusIdx = idxOf(bonusVals, bonusSec);
 
-      actionHtml =
-        '<div class="stack">' +
-        '<div class="muted">準備: 赤/青それぞれスパイマスター1人＋諜報員1人以上</div>' +
-        '<div class="kv"><span class="muted">赤</span><b>スパイマスター ' +
-        counts.redSpymaster +
-        ' / 諜報員 ' +
-        counts.redOperative +
-        '</b></div>' +
-        '<div class="kv"><span class="muted">青</span><b>スパイマスター ' +
-        counts.blueSpymaster +
-        ' / 諜報員 ' +
-        counts.blueOperative +
-        '</b></div>' +
-        '<hr />' +
-        '<div class="big">タイマー設定</div>' +
-        '<div class="field"><label>通常タイマー <b id="cnTimerNormalLabel">' +
-        escapeHtml(formatMMSS(normalVals[normalIdx])) +
-        '</b></label><input id="cnTimerNormal" type="range" min="0" max="3" step="1" value="' +
-        escapeHtml(String(normalIdx)) +
-        '" /></div>' +
-        '<div class="field"><label>初ターン追加 <b id="cnTimerBonusLabel">' +
-        escapeHtml(formatMMSS(bonusVals[bonusIdx])) +
-        '</b></label><input id="cnTimerBonus" type="range" min="0" max="3" step="1" value="' +
-        escapeHtml(String(bonusIdx)) +
-        '" /></div>' +
-        (canStart ? '<button id="cnStart" class="primary">スタート</button>' : '<button class="primary" disabled>スタート</button>') +
-        '</div>';
+      render(
+        viewEl,
+        '\n    <div class="stack">\n      <div class="big">コードネーム：タイマー設定</div>\n\n      <div class="stack">' +
+          '<div class="field"><label>通常タイマー <b id="cnTimerNormalLabel">' +
+          escapeHtml(formatMMSS(normalVals[normalIdx])) +
+          '</b></label><input id="cnTimerNormal" type="range" min="0" max="3" step="1" value="' +
+          escapeHtml(String(normalIdx)) +
+          '" /></div>' +
+          '<div class="field"><label>初ターン追加 <b id="cnTimerBonusLabel">' +
+          escapeHtml(formatMMSS(bonusVals[bonusIdx])) +
+          '</b></label><input id="cnTimerBonus" type="range" min="0" max="3" step="1" value="' +
+          escapeHtml(String(bonusIdx)) +
+          '" /></div>' +
+          (canStart ? '<button id="cnStart" class="primary">スタート</button>' : '<button class="primary" disabled>スタート</button>') +
+          '</div>\n    </div>\n  '
+      );
+      return;
     }
 
+    // qrOnly: rejoin QR screen (keep as-is)
+    var qrTitle = 'コードネーム：再入場QR';
+    var qrDesc = 'ゲーム中に再入場する人はこのQRを読み取ってください。';
+
+    var playerCount = room && room.players ? Object.keys(room.players).length : 0;
     var playersHtml = '';
     try {
       var ps = (room && room.players) || {};
@@ -5063,13 +5051,7 @@
           var p = ps[id] || {};
           var nm = escapeHtml(formatPlayerDisplayName(p) || '-');
           var hostMark = p.isHost ? ' <span class="badge">GM</span>' : '';
-          if (qrOnly) {
-            playersHtml += '<div class="kv"><span class="muted">' + nm + hostMark + '</span><b></b></div>';
-          } else {
-            var t = p.team === 'red' ? '赤' : p.team === 'blue' ? '青' : '未選択';
-            var r = p.role === 'spymaster' ? 'スパイマスター' : p.role === 'operative' ? '諜報員' : '未選択';
-            playersHtml += '<div class="kv"><span class="muted">' + nm + hostMark + '</span><b>' + escapeHtml(t + ' / ' + r) + '</b></div>';
-          }
+          playersHtml += '<div class="kv"><span class="muted">' + nm + hostMark + '</span><b></b></div>';
         }
       } else {
         playersHtml = '<div class="muted">まだ参加者がいません。</div>';
@@ -5078,29 +5060,7 @@
       playersHtml = '<div class="muted">参加者一覧を表示できませんでした。</div>';
     }
 
-    var gmName = hostPlayer ? String(hostPlayer.name || '') : '';
-    var gmTeam = hostPlayer ? String(hostPlayer.team || '') : '';
-    var gmRole = hostPlayer ? String(hostPlayer.role || '') : '';
-    var gmHtml = '';
-    if (!qrOnly) {
-      gmHtml =
-        '<hr />' +
-        '<div class="stack">' +
-        '<div class="big">GM（この端末）</div>' +
-        '<div id="cnGmError" class="form-error" role="alert"></div>' +
-        '<div class="field"><label>名前（表示用）</label><input id="cnGmName" placeholder="例: たろう" value="' +
-        escapeHtml(gmName) +
-        '" /></div>' +
-        '<div class="field"><label>チーム</label><select id="cnGmTeam">' +
-        '<option value="">未選択</option><option value="red">赤</option><option value="blue">青</option></select></div>' +
-        '<div class="field"><label>役職</label><select id="cnGmRole">' +
-        '<option value="">未選択</option><option value="spymaster">スパイマスター</option><option value="operative">諜報員</option></select></div>' +
-        '<div class="row"><button id="cnGmSave" class="ghost">保存</button><div class="muted" id="cnGmStatus"></div></div>' +
-        '<div class="muted">※ GMもプレイヤーとして参加します（ここで設定できます）。</div>' +
-        '</div>';
-    }
-
-    var backToGameHtml = qrOnly ? '<hr /><div class="row"><button id="cnBackToGame" class="primary">GMがゲームに戻る</button></div>' : '';
+    var backToGameHtml = '<hr /><div class="row"><button id="cnBackToGame" class="primary">GMがゲームに戻る</button></div>';
 
     render(
       viewEl,
@@ -5112,30 +5072,12 @@
         escapeHtml(joinUrl || '') +
         '</div>\n        <div class="row">\n          <button id="copyJoinUrl" class="ghost">コピー</button>\n        </div>\n        <div class="muted" id="copyStatus"></div>\n      </div>\n\n      <div class="kv"><span class="muted">参加状況</span><b>' +
         playerCount +
-        '</b></div>' +
-        (qrOnly
-          ? ''
-          : '\n      <div class="kv"><span class="muted">フェーズ</span><b>' + escapeHtml(phase) + '</b></div>') +
-        '\n\n      <hr />\n\n      <div class="stack">\n        <div class="big">参加者（保存状況）</div>\n        ' +
+        '</b></div>\n\n      <hr />\n\n      <div class="stack">\n        <div class="big">参加者（保存状況）</div>\n        ' +
         playersHtml +
         '\n      </div>\n\n      ' +
-        gmHtml +
-        (actionHtml ? '\n\n      <hr />\n\n      ' + actionHtml : '') +
         backToGameHtml +
-        (qrOnly ? '' : '\n\n      <div class="muted">※ 参加後は各自の画面でチーム/役職を選びます。</div>') +
         '\n    </div>\n  '
     );
-
-    if (!qrOnly) {
-      try {
-        var tsel = document.getElementById('cnGmTeam');
-        if (tsel) tsel.value = gmTeam || '';
-        var rsel = document.getElementById('cnGmRole');
-        if (rsel) rsel.value = gmRole || '';
-      } catch (e) {
-        // ignore
-      }
-    }
   }
 
   function codenamesCellClass(key, revealed) {
@@ -5294,54 +5236,21 @@
         playersHtml = '<div class="muted">参加者一覧を表示できませんでした。</div>';
       }
 
-      var counts = countCodenamesRoles(room);
-      var canStart = counts.redSpymaster === 1 && counts.blueSpymaster === 1 && counts.redOperative >= 1 && counts.blueOperative >= 1;
-      var isGm = !!(player && player.isHost);
-
-      var normalSec = getCodenamesTimerNormalSec(room);
-      var bonusSec = getCodenamesTimerFirstBonusSec(room);
-      var normalVals = [60, 90, 120, 150];
-      var bonusVals = [30, 60, 90, 120];
-      function idxOf2(arr, v) {
-        for (var i = 0; i < arr.length; i++) if (arr[i] === v) return i;
-        return 0;
-      }
-      var normalIdx = idxOf2(normalVals, normalSec);
-      var bonusIdx = idxOf2(bonusVals, bonusSec);
-
-      if (isGm) {
-        lobbyHtml =
-          '<div class="stack">' +
-          '<div class="big">タイマー設定</div>' +
-          '<div class="field"><label>通常タイマー <b id="cnTimerNormalLabel">' +
-          escapeHtml(formatMMSS(normalVals[normalIdx])) +
-          '</b></label><input id="cnTimerNormal" type="range" min="0" max="3" step="1" value="' +
-          escapeHtml(String(normalIdx)) +
-          '" /></div>' +
-          '<div class="field"><label>初ターン追加 <b id="cnTimerBonusLabel">' +
-          escapeHtml(formatMMSS(bonusVals[bonusIdx])) +
-          '</b></label><input id="cnTimerBonus" type="range" min="0" max="3" step="1" value="' +
-          escapeHtml(String(bonusIdx)) +
-          '" /></div>' +
-          (canStart ? '<button id="cnStartFromPlayer" class="primary">スタート</button>' : '<button class="primary" disabled>スタート</button>') +
-          '</div>';
-      } else {
-        lobbyHtml =
-          '<div class="stack">' +
-          '<div class="big">待機中</div>' +
-          '<div class="muted">チームと役職を選んでください。</div>' +
-          '<div class="field"><label>チーム</label>' +
-          '<select id="cnTeam"><option value="">未選択</option><option value="red">赤</option><option value="blue">青</option></select></div>' +
-          '<div class="field"><label>役職</label>' +
-          '<select id="cnRole"><option value="">未選択</option><option value="spymaster">スパイマスター</option><option value="operative">諜報員</option></select></div>' +
-          '<div id="cnPrefsError" class="form-error" role="alert"></div>' +
-          '<button id="cnSavePrefs" class="primary">保存</button>' +
-          (isHost ? '<div class="muted">※ スタートはGMが行います。</div>' : '') +
-          '<hr />' +
-          '<div class="big">参加者（登録状況）</div>' +
-          playersHtml +
-          '</div>';
-      }
+      lobbyHtml =
+        '<div class="stack">' +
+        '<div class="big">待機中</div>' +
+        '<div class="muted">チームと役職を選んでください。</div>' +
+        '<div class="field"><label>チーム</label>' +
+        '<select id="cnTeam"><option value="">未選択</option><option value="red">赤</option><option value="blue">青</option></select></div>' +
+        '<div class="field"><label>役職</label>' +
+        '<select id="cnRole"><option value="">未選択</option><option value="spymaster">スパイマスター</option><option value="operative">諜報員</option></select></div>' +
+        '<div id="cnPrefsError" class="form-error" role="alert"></div>' +
+        '<button id="cnSavePrefs" class="primary">保存</button>' +
+        '<div class="muted">※ タイマー設定とスタートはテーブル端末で行います。</div>' +
+        '<hr />' +
+        '<div class="big">参加者（登録状況）</div>' +
+        playersHtml +
+        '</div>';
     }
 
     var clueRowHtml = '';
@@ -11751,7 +11660,7 @@
 
     function renderWithRoom(room) {
       renderCodenamesHost(viewEl, { roomId: roomId, joinUrl: joinUrl, room: room, hostPlayerId: hostPlayerId, qrOnly: qrOnly });
-      drawQr();
+      if (qrOnly) drawQr();
 
       var copyBtn = document.getElementById('copyJoinUrl');
       if (copyBtn) {
@@ -12019,54 +11928,7 @@
             });
           }
 
-          var startFromPlayerBtn = document.getElementById('cnStartFromPlayer');
-          if (startFromPlayerBtn && !startFromPlayerBtn.__cn_bound) {
-            startFromPlayerBtn.__cn_bound = true;
-            startFromPlayerBtn.addEventListener('click', function () {
-              startCodenamesGame(roomId).catch(function (e) {
-                alert((e && e.message) || '失敗');
-              });
-            });
-          }
-
-          var normalVals = [60, 90, 120, 150];
-          var bonusVals = [30, 60, 90, 120];
-          function updateTimerLabels() {
-            var nEl = document.getElementById('cnTimerNormal');
-            var bEl = document.getElementById('cnTimerBonus');
-            var nl = document.getElementById('cnTimerNormalLabel');
-            var bl = document.getElementById('cnTimerBonusLabel');
-            var ni = clamp(parseIntSafe(nEl && nEl.value, 0), 0, 3);
-            var bi = clamp(parseIntSafe(bEl && bEl.value, 0), 0, 3);
-            if (nl) nl.textContent = formatMMSS(normalVals[ni] || 60);
-            if (bl) bl.textContent = formatMMSS(bonusVals[bi] || 30);
-          }
-
-          var nSlider = document.getElementById('cnTimerNormal');
-          var bSlider = document.getElementById('cnTimerBonus');
-          if (nSlider && !nSlider.__cn_bound) {
-            nSlider.__cn_bound = true;
-            nSlider.addEventListener('input', updateTimerLabels);
-            nSlider.addEventListener('change', function () {
-              var ni = clamp(parseIntSafe(nSlider.value, 0), 0, 3);
-              var bi = clamp(parseIntSafe(bSlider && bSlider.value, 0), 0, 3);
-              setCodenamesTimerSettings(roomId, normalVals[ni], bonusVals[bi]).catch(function () {
-                // ignore
-              });
-            });
-          }
-          if (bSlider && !bSlider.__cn_bound) {
-            bSlider.__cn_bound = true;
-            bSlider.addEventListener('input', updateTimerLabels);
-            bSlider.addEventListener('change', function () {
-              var ni = clamp(parseIntSafe(nSlider && nSlider.value, 0), 0, 3);
-              var bi = clamp(parseIntSafe(bSlider.value, 0), 0, 3);
-              setCodenamesTimerSettings(roomId, normalVals[ni], bonusVals[bi]).catch(function () {
-                // ignore
-              });
-            });
-          }
-          updateTimerLabels();
+          // NOTE: タイマー設定/スタートはテーブル用の設定画面（codenames_host）側に集約。
 
           var contBtn = document.getElementById('cnContinue');
           if (contBtn && !contBtn.__cn_bound) {
