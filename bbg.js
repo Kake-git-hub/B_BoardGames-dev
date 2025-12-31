@@ -972,6 +972,16 @@
     });
   }
 
+  function setLobbyLoveLetterExtraCards(lobbyId, extraCards) {
+    var nextExtras = [];
+    try {
+      nextExtras = llNormalizeExtraCards(extraCards);
+    } catch (e0) {
+      nextExtras = [];
+    }
+    return setValue(lobbyPath(lobbyId) + '/loveletterExtraCards', nextExtras);
+  }
+
   function setLobbyWordwolfSettings(lobbyId, settings) {
     var s = settings && typeof settings === 'object' ? settings : {};
     var out = {
@@ -4186,8 +4196,8 @@
       } else if (cardRankStr === '8') {
         // Princess: base '8' cannot be played by choice, but 8:megane can.
         if (String(card) === '8:megane') {
-          eliminatePlayer(actorId, 'megane_play', { megane: true });
-          logText += '（姫(眼鏡)：脱落→復帰）';
+          // Intentional discard is allowed, but does NOT draw.
+          logText += '（効果なし）';
         } else {
           return room;
         }
@@ -6971,8 +6981,14 @@
               if (kind === 'loveletter') {
                 var order2 = normalizeOrder(lobby);
                 var members2 = (lobby && lobby.members) || {};
+                var extraCards2 = [];
+                try {
+                  extraCards2 = llNormalizeExtraCards(lobby && lobby.loveletterExtraCards);
+                } catch (eLx) {
+                  extraCards2 = [];
+                }
                 setLoveLetterPlayerId(roomId, mid);
-                return createLoveLetterRoom(roomId, { order: order2 })
+                return createLoveLetterRoom(roomId, { order: order2, extraCards: extraCards2 })
                   .then(function () {
                     var seq2 = Promise.resolve();
                     for (var kA = 0; kA < order2.length; kA++) {
@@ -8940,7 +8956,9 @@
       } else if (rv.type === 'knight' || rv.type === 'general_swap') {
         var by = String(rv.by || '');
         var tg = String(rv.target || '');
-        if (String(playerId) === by || String(playerId) === tg) {
+        // Knight compare should be visible to everyone (even when tied).
+        // General swap stays private to the two involved players.
+        if (rv.type === 'knight' || String(playerId) === by || String(playerId) === tg) {
           var byName = ps[by] ? formatPlayerDisplayName(ps[by]) : by;
           var tgName = ps[tg] ? formatPlayerDisplayName(ps[tg]) : tg;
           var title = rv.type === 'general_swap' ? '将軍：手札交換' : '騎士：比較結果';
@@ -8988,7 +9006,7 @@
             '</div>' +
             '<div class="ll-compare-col">' +
             '<div class="ll-modal-name">引いたカード</div>' +
-            '<div class="ll-compare-card">' + (rv.drew ? llCardImgHtml(String(rv.drew || '')) : llCardBackImgHtml()) + '</div>' +
+            '<div class="ll-compare-card">' + llCardBackImgHtml() + '</div>' +
             '</div>' +
             '</div>' +
             '<div class="row" style="justify-content:flex-end">' +
@@ -9033,7 +9051,6 @@
           var tId = String(rv.target || '');
           var tName = ps[tId] ? formatPlayerDisplayName(ps[tId]) : tId;
           var discarded = String(rv.discarded || '');
-          var drew = String(rv.drew || '');
           modalHtml =
             '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
             '<div class="ll-overlay-backdrop"></div>' +
@@ -9048,14 +9065,12 @@
             llCardImgHtml(discarded) +
             '</div>' +
             '</div>' +
-            (drew
-              ? '<div class="ll-compare-col">' +
-                '<div class="ll-modal-name">引いたカード</div>' +
-                '<div class="ll-compare-card">' +
-                llCardBackImgHtml() +
-                '</div>' +
-                '</div>'
-              : '') +
+            '<div class="ll-compare-col">' +
+            '<div class="ll-modal-name">引いたカード</div>' +
+            '<div class="ll-compare-card">' +
+            llCardBackImgHtml() +
+            '</div>' +
+            '</div>' +
             '</div>' +
             '<div class="row" style="justify-content:flex-end">' +
             '<button id="llAck" class="primary">次へ</button>' +
@@ -9831,6 +9846,15 @@
           nextBtn.disabled = true;
           firebaseReady()
             .then(function () {
+              var extras = [];
+              try {
+                extras = lastRoom && lastRoom.settings ? lastRoom.settings.extraCards : [];
+              } catch (e0) {
+                extras = [];
+              }
+              return setLobbyLoveLetterExtraCards(lobbyId, extras);
+            })
+            .then(function () {
               return setLobbyCurrentGame(lobbyId, null);
             })
             .then(function () {
@@ -9857,6 +9881,15 @@
           }
           backBtn.disabled = true;
           firebaseReady()
+            .then(function () {
+              var extras = [];
+              try {
+                extras = lastRoom && lastRoom.settings ? lastRoom.settings.extraCards : [];
+              } catch (e0) {
+                extras = [];
+              }
+              return setLobbyLoveLetterExtraCards(lobbyId, extras);
+            })
             .then(function () {
               return setLobbyCurrentGame(lobbyId, null);
             })
