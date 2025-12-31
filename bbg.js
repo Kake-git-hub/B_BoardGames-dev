@@ -8709,6 +8709,12 @@
 
     function llCardBackImgHtml() {
       var backIcon = './assets/loveletter/Uramen.png';
+      try {
+        var v = getCacheBusterParam();
+        if (v) backIcon += '?v=' + encodeURIComponent(String(v));
+      } catch (e0) {
+        // ignore
+      }
       return '<img class="ll-card-img" alt="裏面" src="' + escapeHtml(backIcon) + '" />';
     }
 
