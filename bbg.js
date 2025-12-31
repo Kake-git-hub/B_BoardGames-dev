@@ -4476,9 +4476,27 @@
   }
 
   function renderHome(viewEl) {
+    var ver = '';
+    try {
+      var q0 = parseQuery();
+      if (q0 && q0.v != null && String(q0.v)) ver = String(q0.v);
+    } catch (e0) {
+      ver = '';
+    }
+    if (!ver) {
+      try {
+        ver = String(getBundledAssetVersion() || '');
+      } catch (e1) {
+        ver = '';
+      }
+    }
+    var verHtml = ver ? '<div class="muted" style="text-align:center">Version: ' + escapeHtml(ver) + '</div>' : '';
+
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="row">\n        <button id="homeCreateJoin" class="primary">ロビー作成（この端末もゲームに参加）</button>\n      </div>\n      <div class="row">\n        <button id="homeCreateGm" class="ghost">ロビー作成（この端末をゲームマスターデバイス）</button>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      ' +
+        (verHtml || '') +
+        '\n      <div class="row">\n        <button id="homeCreateJoin" class="primary">ロビー作成（この端末もゲームに参加）</button>\n      </div>\n      <div class="row">\n        <button id="homeCreateGm" class="ghost">ロビー作成（この端末をゲームマスターデバイス）</button>\n      </div>\n    </div>\n  '
     );
   }
 
@@ -7413,7 +7431,7 @@
                     return seq;
                   })
                   .then(function () {
-                    return startCodenamesGame(roomId);
+                    return;
                   });
               }
               if (kind === 'loveletter') {
@@ -7461,8 +7479,13 @@
               if (isTableGm) q.gmdev = '1';
               if (kind === 'codenames') {
                 q.host = '1';
-                if (!isTableGm) q.player = '1';
-                q.screen = isTableGm ? 'codenames_table' : 'codenames_player';
+                if (!isTableGm) {
+                  q.player = '1';
+                  q.screen = 'codenames_player';
+                } else {
+                  // Insert timer settings screen before showing the table view.
+                  q.screen = 'codenames_host';
+                }
               } else if (kind === 'loveletter') {
                 q.host = '1';
                 if (!isTableGm) {
@@ -9317,7 +9340,8 @@
     }
 
     function llCardBackImgHtml() {
-      var backIcon = './assets/loveletter/Uramen.png';
+      // TEMP: Use Princess card as "back" to debug Uramen.png rendering.
+      var backIcon = './assets/loveletter/Hime.png';
       try {
         var v = getCacheBusterParam();
         if (v) backIcon += '?v=' + encodeURIComponent(String(v));
@@ -10787,8 +10811,16 @@
       order = [];
     }
 
+    var turnPid = '';
+    try {
+      if (phase === 'playing' && r && r.currentPlayerId) turnPid = String(r.currentPlayerId || '');
+    } catch (eT0) {
+      turnPid = '';
+    }
+
     function llCardBackImgHtml() {
-      var backIcon = './assets/loveletter/Uramen.png';
+      // TEMP: Use Princess card as "back" to debug Uramen.png rendering.
+      var backIcon = './assets/loveletter/Hime.png';
       try {
         var v = getCacheBusterParam();
         if (v) backIcon += '?v=' + encodeURIComponent(String(v));
@@ -10835,13 +10867,23 @@
 
       // Show the latest 10 discarded cards (excluding the face-down first one).
       var visibleGrave = graveArr && graveArr.length > 1 ? graveArr.slice(1) : [];
-      var showStart = Math.max(0, visibleGrave.length - 10);
-      for (var gi = showStart; gi < visibleGrave.length; gi++) {
-        var gr = String(visibleGrave[gi] || '');
-        if (!gr) continue;
-        graveCards += '<div class="ll-table-grave-card">' + llCardImgHtml(gr) + '</div>';
+      var graveCount = visibleGrave.length;
+      var graveTop = graveCount ? String(visibleGrave[graveCount - 1] || '') : '';
+
+      if (graveTop) {
+        var layerCount = Math.min(4, graveCount);
+        for (var gi = layerCount - 1; gi >= 1; gi--) {
+          graveCards +=
+            '<div class="ll-table-grave-stack-card ll-table-grave-stack-card--under" style="left:' +
+            String(gi * 7) +
+            'px;top:' +
+            String(gi * -3) +
+            'px"></div>';
+        }
+        graveCards += '<div class="ll-table-grave-stack-card" style="left:0px;top:0px">' + llCardImgHtml(graveTop) + '</div>';
+      } else {
+        graveCards = '<div class="muted">（なし）</div>';
       }
-      if (!graveCards) graveCards = '<div class="muted">（なし）</div>';
 
       centerHtml =
         '<div class="ll-table-center">' +
@@ -10856,7 +10898,10 @@
         '</div>' +
         '<div class="ll-table-pile">' +
         '<div class="muted">墓地</div>' +
-        '<div class="ll-table-grave">' +
+        '<div class="ll-table-pile-count"><b>' +
+        escapeHtml(String(graveCount)) +
+        '</b></div>' +
+        '<div class="ll-table-grave-stack">' +
         graveCards +
         '</div>' +
         '</div>' +
@@ -10866,6 +10911,7 @@
     var seatsHtml = '';
     var n = order.length || 0;
     var radius = 42;
+    var seatPos = {};
     for (var si = 0; si < n; si++) {
       var pid = order[si];
       if (!pid) continue;
@@ -10875,8 +10921,12 @@
       var rad = (Math.PI / 180) * angle;
       var x = 50 + radius * Math.cos(rad);
       var y = 50 + radius * Math.sin(rad);
+      seatPos[String(pid)] = { x: x, y: y };
+      var isTurnSeat = !!(turnPid && String(pid) === String(turnPid));
       seatsHtml +=
-        '<div class="ll-seat" style="left:' +
+        '<div class="ll-seat' +
+        (isTurnSeat ? ' ll-seat--turn' : '') +
+        '" style="left:' +
         escapeHtml(String(x.toFixed(3))) +
         '%;top:' +
         escapeHtml(String(y.toFixed(3))) +
@@ -10885,6 +10935,36 @@
         escapeHtml(nm) +
         '</div>' +
         '</div>';
+    }
+
+    var arrowHtml = '';
+    try {
+      var rev = r && r.reveal ? r.reveal : null;
+      var byId = rev && rev.by ? String(rev.by) : '';
+      var toId = rev && rev.target ? String(rev.target) : '';
+      if (byId && toId && String(byId) !== String(toId) && seatPos[byId] && seatPos[toId]) {
+        var p1 = seatPos[byId];
+        var p2 = seatPos[toId];
+        arrowHtml =
+          '<svg class="ll-table-arrow" viewBox="0 0 100 100" preserveAspectRatio="none">' +
+          '<defs>' +
+          '<marker id="llArrowHead" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="strokeWidth">' +
+          '<path d="M0,0 L6,3 L0,6 Z" fill="var(--accent)"></path>' +
+          '</marker>' +
+          '</defs>' +
+          '<line x1="' +
+          escapeHtml(String(p1.x.toFixed(3))) +
+          '" y1="' +
+          escapeHtml(String(p1.y.toFixed(3))) +
+          '" x2="' +
+          escapeHtml(String(p2.x.toFixed(3))) +
+          '" y2="' +
+          escapeHtml(String(p2.y.toFixed(3))) +
+          '" marker-end="url(#llArrowHead)" />' +
+          '</svg>';
+      }
+    } catch (eA0) {
+      arrowHtml = '';
     }
 
     var resultHtml = '';
@@ -10914,6 +10994,7 @@
       '\n    <div class="stack">\n      <div class="big">ラブレター（テーブル）</div>\n      ' +
         (phase === 'finished' ? resultHtml + '<hr />' : '') +
         '<div class="ll-table">' +
+        (arrowHtml || '') +
         seatsHtml +
         (facedownHtml || '') +
         '<div class="ll-table-inner">' +
@@ -11698,8 +11779,20 @@
               if (v) q.v = v;
               q.room = roomId;
               q.host = '1';
-              q.player = '1';
-              q.screen = 'codenames_player';
+              try {
+                var qx = parseQuery();
+                if (qx && qx.lobby) q.lobby = String(qx.lobby);
+                if (qx && String(qx.gmdev || '') === '1') {
+                  q.gmdev = '1';
+                  q.screen = 'codenames_table';
+                } else {
+                  q.player = '1';
+                  q.screen = 'codenames_player';
+                }
+              } catch (e0) {
+                q.player = '1';
+                q.screen = 'codenames_player';
+              }
               setQuery(q);
               route();
             })
