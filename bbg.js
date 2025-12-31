@@ -886,9 +886,11 @@
     return id;
   }
 
-  function createLobby(lobbyId, hostName, isGmDevice, nonce) {
+  function createLobby(lobbyId, hostName, isGmDevice, nonce, joinAsMember) {
+    var shouldJoin = joinAsMember == null ? true : !!joinAsMember;
     var nm = String(hostName || '').trim();
-    if (!nm) return Promise.reject(new Error('名前を入力してください。'));
+    if (shouldJoin && !nm) return Promise.reject(new Error('名前を入力してください。'));
+
     var mid = getOrCreateLobbyMemberId(lobbyId);
     var now = serverNowMs ? serverNowMs() : Date.now();
 
@@ -899,10 +901,13 @@
         nonce: String(nonce || ''),
         hostMid: mid,
         members: {},
-        order: [mid],
+        order: [],
         currentGame: null
       };
-      lobby.members[mid] = { name: nm, joinedAt: now, isGmDevice: !!isGmDevice, lastSeenAt: now };
+      if (shouldJoin) {
+        lobby.order = [mid];
+        lobby.members[mid] = { name: nm, joinedAt: now, isGmDevice: !!isGmDevice, lastSeenAt: now };
+      }
       return lobby;
     });
   }
@@ -4488,7 +4493,8 @@
     return pad4(randomInt(10000));
   }
 
-  function createLobbyWithRetry(hostName, isGmDevice) {
+  function createLobbyWithRetry(hostName, isGmDevice, joinAsMember) {
+    var shouldJoin = joinAsMember == null ? true : !!joinAsMember;
     var nm = String(hostName || '').trim();
     if (!nm) nm = 'GM';
 
@@ -4497,7 +4503,7 @@
       var lobbyId = makeLobbyId4();
       var nonce = randomId(8);
       var mid = getOrCreateLobbyMemberId(lobbyId);
-      return createLobby(lobbyId, nm, !!isGmDevice, nonce).then(function (lobby) {
+      return createLobby(lobbyId, nm, !!isGmDevice, nonce, shouldJoin).then(function (lobby) {
         // Collision check: if an existing lobby was returned, nonce won't match.
         if (lobby && String(lobby.nonce || '') === String(nonce) && String(lobby.hostMid || '') === String(mid)) {
           return { lobbyId: lobbyId };
@@ -4605,6 +4611,7 @@
     var lobby = opts.lobby;
     var joinUrl = opts.joinUrl || '';
     var myName = opts.myName || '';
+    var isTableGmDevice = !!opts.isTableGmDevice;
     var currentGame = (lobby && lobby.currentGame) || null;
     var currentLabel = currentGame && currentGame.kind ? String(currentGame.kind) : '';
 
@@ -4722,6 +4729,20 @@
         '</div>';
     }
 
+    var tableGmNoteHtml = '';
+    if (isTableGmDevice) {
+      tableGmNoteHtml =
+        '<div class="card" style="padding:12px">' +
+        '<div class="muted">この端末はテーブル用GMデバイスです</div>' +
+        '<div class="muted">※ 参加者一覧には入りません。</div>' +
+        '</div>';
+    }
+
+    var gmNameCardHtml =
+      '<div class="card" style="padding:12px">\n        <div class="muted">この端末（GM）の名前</div>\n        <div class="row" style="gap:8px;align-items:center">\n          <input id="lobbyMyName" placeholder="例: GM" value="' +
+      escapeHtml(myName || loadPersistedName() || '') +
+      '" style="flex:1" />\n          <button id="lobbyUpdateMyName" class="ghost">変更</button>\n        </div>\n        <div class="muted">※ 参加者一覧に反映されます。</div>\n      </div>';
+
     render(
       viewEl,
       '\n    <div class="stack">\n      <div class="big">ロビー</div>\n      <div class="kv"><span class="muted">ロビーID</span><b>' +
@@ -4730,9 +4751,10 @@
         escapeHtml(joinUrl || '') +
         '</div>\n              <div class="row">\n                <button id="copyJoinUrl" class="ghost">コピー</button>\n              </div>\n              <div class="muted" id="copyStatus"></div>\n            </div>\n          </div>\n        </div>\n        <div class="muted center" id="qrError"></div>\n      </div>\n\n      <div class="stack">\n        <div class="muted">参加者</div>\n        ' +
         lobbyMembersSummaryHtml(lobby) +
-        '\n      </div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">この端末（GM）の名前</div>\n        <div class="row" style="gap:8px;align-items:center">\n          <input id="lobbyMyName" placeholder="例: GM" value="' +
-        escapeHtml(myName || loadPersistedName() || '') +
-        '" style="flex:1" />\n          <button id="lobbyUpdateMyName" class="ghost">変更</button>\n        </div>\n        <div class="muted">※ 参加者一覧に反映されます。</div>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>ゲーム選択</label>\n        <select id="lobbyGameKind">\n          <option value="wordwolf" ' +
+        '\n      </div>\n\n      ' +
+        (tableGmNoteHtml || '') +
+        (isTableGmDevice ? '' : '\n\n      ' + gmNameCardHtml) +
+        '\n\n      <hr />\n\n      <div class="field">\n        <label>ゲーム選択</label>\n        <select id="lobbyGameKind">\n          <option value="wordwolf" ' +
         (selectedKind === 'wordwolf' ? 'selected' : '') +
         '>ワードウルフ</option>\n          <option value="loveletter" ' +
         (selectedKind === 'loveletter' ? 'selected' : '') +
@@ -5439,6 +5461,155 @@
       var roleSel = document.getElementById('cnRole');
       if (roleSel) roleSel.value = myRole || '';
     }
+  }
+
+  function renderCodenamesTable(viewEl, opts) {
+    var roomId = opts.roomId;
+    var room = opts.room;
+    var isHost = !!opts.isHost;
+    var lobbyId = opts.lobbyId ? String(opts.lobbyId) : '';
+
+    var phase = (room && room.phase) || 'lobby';
+
+    var pendingObj = (room && room.turn && room.turn.pending) || {};
+    var board = room && room.board ? room.board : null;
+    var size = board && board.size ? board.size : 5;
+    var total = board && board.words ? board.words.length : 0;
+    var key = board && board.key ? board.key : [];
+    var revealed = board && board.revealed ? board.revealed : [];
+
+    var tt0 = phase === 'playing' && room && room.turn ? room.turn : {};
+    var turnTeam = phase === 'playing' && room && room.turn ? room.turn.team : '';
+    var turnLabel = turnTeam === 'red' ? '赤' : turnTeam === 'blue' ? '青' : '-';
+    var turnStatus = String((tt0 && tt0.status) || '');
+    var who = '';
+    if (phase === 'playing' && turnTeam) {
+      if (turnStatus === 'awaiting_clue') who = 'スパイマスター';
+      else if (turnStatus === 'guessing') who = '諜報員';
+    }
+
+    var turnCls = 'cn-turn' + (turnTeam === 'red' ? ' cn-turn-red' : turnTeam === 'blue' ? ' cn-turn-blue' : '');
+
+    var timerTopHtml = '';
+    if (phase === 'playing') {
+      timerTopHtml = '<div class="cn-timer">残り: <b id="cnTimer">-:--</b></div>';
+    }
+
+    var topLine =
+      '<div class="cn-topline">' +
+      '<div class="cn-me">テーブル表示</div>' +
+      '<div class="cn-role">諜報員表示</div>' +
+      '<div class="' +
+      turnCls +
+      '">手番: ' +
+      escapeHtml(turnLabel) +
+      (who ? '（' + escapeHtml(who) + '）' : '') +
+      '</div>' +
+      timerTopHtml +
+      '</div>';
+
+    var lobbyHtml = '';
+    if (phase === 'lobby') {
+      lobbyHtml = '<div class="stack"><div class="big">待機中</div><div class="muted">ゲーム開始をお待ちください。</div></div>';
+    }
+
+    var clueRowHtml = '';
+    if (phase === 'playing') {
+      var tt = room.turn || {};
+      var clue = tt.clue || { word: '', number: 0 };
+      var clueText = clue && clue.word ? String(clue.word) : '';
+      var clueNum = clue && clue.number != null ? String(clue.number) : '';
+      var guessesLeft = tt.guessesLeft != null ? String(tt.guessesLeft) : '0';
+      var clueLine = clueText ? escapeHtml(clueText) + ' / ' + escapeHtml(clueNum || '0') : '（未提示）';
+      clueRowHtml =
+        '<div class="cn-clue-row">' +
+        '<div class="cn-clue-view">ヒント: <b>' +
+        clueLine +
+        '</b></div>' +
+        '<div class="cn-clue-left">残り: <b>' +
+        escapeHtml(guessesLeft) +
+        '</b></div>' +
+        '</div>';
+    }
+
+    var boardHtml = '';
+    if (phase === 'playing' || phase === 'finished') {
+      var cells = '';
+      for (var i = 0; i < total; i++) {
+        var word = board && board.words ? board.words[i] : '';
+        var isRev = !!revealed[i];
+        var k = key[i];
+        var cls = codenamesCellClass(k, isRev);
+        if (!isRev && pendingObj && pendingObj[String(i)]) cls += ' cn-pending';
+        cells += '<button class="' + cls + '" disabled><span class="cn-word">' + escapeHtml(word) + '</span></button>';
+      }
+
+      boardHtml =
+        '<hr /><div class="stack">' +
+        '<div class="cn-board" style="grid-template-columns: repeat(' +
+        escapeHtml(String(size)) +
+        ', 1fr);">' +
+        cells +
+        '</div>' +
+        '</div>';
+    }
+
+    var finishedHtml = '';
+    if (phase === 'finished') {
+      var winner = room && room.result ? room.result.winner : '';
+      var wLabel = winner === 'red' ? '赤の勝ち' : winner === 'blue' ? '青の勝ち' : '-';
+      finishedHtml =
+        '<div class="stack">' +
+        '<div class="big">結果</div>' +
+        '<div class="kv"><span class="muted">勝者</span><b>' +
+        escapeHtml(wLabel) +
+        '</b></div>' +
+        (lobbyId
+          ? '<hr />' +
+            (isHost
+              ? '<div class="row"><button id="cnNextToLobby" class="primary">次へ</button></div>'
+              : '<div class="muted">※ 次へ進むのはゲームマスターです。</div>')
+          : '') +
+        '</div>';
+    }
+
+    var clueHistoryHtml = '';
+    if (phase === 'playing' || phase === 'finished') {
+      var rows = '';
+      try {
+        var log = room && Array.isArray(room.clueLog) ? room.clueLog : [];
+        var start = Math.max(0, log.length - 10);
+        for (var li = start; li < log.length; li++) {
+          var it = log[li] || {};
+          var t = it.team === 'red' ? '赤' : it.team === 'blue' ? '青' : '-';
+          var w = it.word ? String(it.word) : '';
+          var num = it.number != null ? String(it.number) : '0';
+          if (!w) continue;
+          rows += '<div class="kv"><span class="muted">' + escapeHtml(t) + '</span><b>' + escapeHtml(w) + ' / ' + escapeHtml(num) + '</b></div>';
+        }
+      } catch (e2) {
+        rows = '';
+      }
+
+      clueHistoryHtml =
+        '<hr /><div class="stack">' +
+        '<div class="big">ヒント履歴</div>' +
+        (rows || '<div class="muted">（まだありません）</div>') +
+        '</div>';
+    }
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      ' +
+        topLine +
+        '\n\n      ' +
+        (phase === 'lobby' ? lobbyHtml : '') +
+        (phase === 'playing' ? clueRowHtml : '') +
+        (phase === 'finished' ? finishedHtml : '') +
+        boardHtml +
+        clueHistoryHtml +
+        '\n    </div>\n  '
+    );
   }
 
   function renderHistory(viewEl, items) {
@@ -6197,6 +6368,248 @@
     );
   }
 
+  function renderWordwolfTable(viewEl, opts) {
+    var roomId = opts.roomId;
+    var room = opts.room;
+    var lobbyId = opts.lobbyId ? String(opts.lobbyId) : '';
+    var isHost = !!opts.isHost;
+
+    var phase = (room && room.phase) || 'lobby';
+
+    var players = (room && room.players) || {};
+    var activePlayers = [];
+    try {
+      var playerKeys = Object.keys(players);
+      for (var i = 0; i < playerKeys.length; i++) {
+        var id = playerKeys[i];
+        var p = players[id];
+        if (!p || p.role === 'spectator') continue;
+        activePlayers.push({ id: id, name: formatPlayerDisplayName(p) });
+      }
+      activePlayers.sort(function (a, b) {
+        var pa = players[a.id] || {};
+        var pb = players[b.id] || {};
+        return (pa.joinedAt || 0) - (pb.joinedAt || 0);
+      });
+    } catch (eP) {
+      activePlayers = [];
+    }
+
+    var endAt = room && room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
+    var remain = phase === 'discussion' ? Math.max(0, Math.floor((endAt - serverNowMs()) / 1000)) : 0;
+
+    var statusShort = '';
+    if (phase === 'lobby') statusShort = '待機中';
+    else if (phase === 'discussion') statusShort = 'トーク中';
+    else if (phase === 'voting') statusShort = '投票中';
+    else if (phase === 'guess') statusShort = '推理入力';
+    else if (phase === 'reveal') statusShort = '結果発表';
+    else if (phase === 'judge') statusShort = '判定';
+    else if (phase === 'finished') statusShort = '終了';
+
+    var votesObj = (room && room.votes) || {};
+
+    // Reveal panel (phase=reveal): show voted-out player or tie candidates.
+    var revealPanelHtml = '';
+    if (phase === 'reveal') {
+      try {
+        var rv = (room && room.reveal) || {};
+        var tie = rv && Array.isArray(rv.tieCandidates) ? rv.tieCandidates : null;
+        if (tie && tie.length > 1) {
+          var prevRoundR = room && room.voting && room.voting.runoff && room.voting.runoff.round ? parseIntSafe(room.voting.runoff.round, 0) : 0;
+          var isFinalTie = !!rv.tieFinal || prevRoundR >= 2;
+          var names = [];
+          for (var ti0 = 0; ti0 < tie.length; ti0++) {
+            var pid0 = String(tie[ti0] || '');
+            if (!pid0) continue;
+            names.push(players && players[pid0] ? formatPlayerDisplayName(players[pid0]) : pid0);
+          }
+          revealPanelHtml =
+            '<div class="card" style="padding:12px">' +
+            '<div class="big">投票結果：同票</div>' +
+            '<div class="muted">' +
+            (isFinalTie ? '同票が続いたため、再投票は行いません' : '次は同票の人だけで再投票します') +
+            '</div>' +
+            '<div class="card center" style="padding:14px;margin-top:10px"><div class="big">' +
+            escapeHtml(names.join(' / ') || '-') +
+            '</div></div>' +
+            (isHost
+              ? '<div class="row" style="margin-top:12px"><button id="wwTableVoteRevealNext" class="primary" style="width:100%">' +
+                (isFinalTie ? '結果へ' : '次へ') +
+                '</button></div>'
+              : '') +
+            '</div>';
+        } else {
+          var outId = rv && rv.votedOutId ? String(rv.votedOutId) : '';
+          var outName = outId && players && players[outId] ? formatPlayerDisplayName(players[outId]) : outId;
+          revealPanelHtml =
+            '<div class="card" style="padding:12px">' +
+            '<div class="big">投票結果</div>' +
+            '<div class="muted">最多票</div>' +
+            '<div class="card center" style="padding:14px;margin-top:10px"><div class="big">' +
+            escapeHtml(outName || '-') +
+            '</div></div>' +
+            (isHost ? '<div class="row" style="margin-top:12px"><button id="wwTableVoteRevealNext" class="primary" style="width:100%">次へ</button></div>' : '') +
+            '</div>';
+        }
+      } catch (eRv) {
+        revealPanelHtml = '';
+      }
+    }
+
+    // Judge panel (phase=judge): show minority guesses and let GM decide.
+    var judgePanelHtml = '';
+    if (phase === 'judge') {
+      try {
+        var guessesObjJ = (room && room.guess && room.guess.guesses) || {};
+        var gKeysJ = Object.keys(guessesObjJ);
+        var uniqJ = {};
+        var uniqListJ = [];
+        for (var giJ = 0; giJ < gKeysJ.length; giJ++) {
+          var entryJ = guessesObjJ[gKeysJ[giJ]];
+          var txtJ = entryJ && entryJ.text ? String(entryJ.text).trim() : '';
+          if (!txtJ) continue;
+          var keyJ = txtJ.toLowerCase();
+          if (uniqJ[keyJ]) continue;
+          uniqJ[keyJ] = true;
+          uniqListJ.push(txtJ);
+        }
+        judgePanelHtml =
+          '<div class="card" style="padding:12px">' +
+          '<div class="big">少数側の推測</div>' +
+          '<div class="card center" style="padding:14px;margin-top:10px"><div class="big">' +
+          escapeHtml(uniqListJ.length ? uniqListJ.join(' / ') : '-') +
+          '</div></div>' +
+          (isHost
+            ? '<div class="row" style="gap:8px;margin-top:12px">' +
+              '<button id="wwTableDecideMinority" class="primary" style="flex:1">少数側の勝ち</button>' +
+              '<button id="wwTableDecideMajority" class="danger" style="flex:1">多数側の勝ち</button>' +
+              '</div>'
+            : '') +
+          '</div>';
+      } catch (eGj) {
+        judgePanelHtml = '';
+      }
+    }
+
+    // Voting status (who has voted)
+    var voteStatusHtml = '';
+    if (phase === 'voting') {
+      var voteStatusRows = '';
+      var votedCount = 0;
+      for (var vsi = 0; vsi < activePlayers.length; vsi++) {
+        var apv = activePlayers[vsi];
+        var hasVoted = !!(votesObj && votesObj[apv.id] && votesObj[apv.id].to);
+        if (hasVoted) votedCount++;
+        voteStatusRows +=
+          '<div class="kv"><span class="muted">' +
+          escapeHtml(apv.name) +
+          '</span><b>' +
+          (hasVoted ? '投票済' : '未投票') +
+          '</b></div>';
+      }
+      voteStatusHtml =
+        '<div class="card" style="padding:12px">' +
+        '<div class="big">投票状況</div>' +
+        '<div class="muted">' +
+        votedCount +
+        '/' +
+        activePlayers.length +
+        '</div>' +
+        '<div class="stack" style="margin-top:8px">' +
+        voteStatusRows +
+        '</div>' +
+        '</div>';
+    }
+
+    // Vote result (tally) after reveal and later
+    var voteResultHtml = '';
+    try {
+      var canShowVoteResult = !!(room && room.reveal && room.reveal.revealedAt);
+      if (canShowVoteResult && (phase === 'guess' || phase === 'judge' || phase === 'finished' || phase === 'reveal')) {
+        var counts = {};
+        var voteKeys = Object.keys(votesObj);
+        for (var vki = 0; vki < voteKeys.length; vki++) {
+          var vid = voteKeys[vki];
+          var v = votesObj[vid];
+          if (!v || !v.to) continue;
+          counts[v.to] = (counts[v.to] || 0) + 1;
+        }
+        var tally = [];
+        for (var ai = 0; ai < activePlayers.length; ai++) {
+          var ap = activePlayers[ai];
+          tally.push({ id: ap.id, name: ap.name, count: counts[ap.id] || 0 });
+        }
+        tally.sort(function (a, b) {
+          return b.count - a.count;
+        });
+        var rows = '';
+        for (var ti = 0; ti < tally.length; ti++) {
+          var r = tally[ti];
+          rows += '<div class="kv"><span class="muted">' + escapeHtml(r.name) + '</span><b>' + r.count + '</b></div>';
+        }
+        voteResultHtml =
+          '<div class="card" style="padding:12px">' +
+          '<div class="big">投票結果</div>' +
+          '<div class="stack" style="margin-top:8px">' +
+          rows +
+          '</div>' +
+          '</div>';
+      }
+    } catch (eT) {
+      voteResultHtml = '';
+    }
+
+    // Result (winner only; do not show words/roles)
+    var finishedHtml = '';
+    if (phase === 'finished') {
+      var winner = (room && room.result && room.result.winner) || '';
+      var winnerLabel = winner === 'minority' ? '少数側の勝ち' : winner === 'majority' ? '多数側の勝ち' : '未確定';
+      finishedHtml =
+        '<div class="card" style="padding:12px">' +
+        '<div class="big">結果</div>' +
+        '<div class="muted">勝者</div>' +
+        '<div class="big">' +
+        escapeHtml(winnerLabel) +
+        '</div>' +
+        '</div>';
+    }
+
+    // Timer card
+    var timerCardHtml = '';
+    if (phase === 'discussion') {
+      timerCardHtml =
+        '<div class="card center" style="padding:16px">' +
+        '<div class="timer" id="wwTableTimer" style="font-size:72px">' +
+        escapeHtml(formatMMSS(remain)) +
+        '</div>' +
+        '</div>';
+    }
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="row" style="justify-content:space-between;align-items:center">' +
+        '<div class="big">ワードウルフ（テーブル用）</div>' +
+        '<div class="muted" style="text-align:right">' +
+        escapeHtml(statusShort || '') +
+        '</div>' +
+        '</div>' +
+        (timerCardHtml || '') +
+        (revealPanelHtml || '') +
+        (judgePanelHtml || '') +
+        (voteStatusHtml || '') +
+        (voteResultHtml || '') +
+        (finishedHtml || '') +
+        (phase === 'voting' && isHost && isVotingComplete(room)
+          ? '<div class="row"><button id="wwTableRevealNext" class="primary" style="width:100%">結果発表</button></div>'
+          : '') +
+        (lobbyId && phase === 'finished' && isHost
+          ? '<div class="row"><button id="wwTableNextToLobby" class="primary" style="width:100%">次へ</button></div>'
+          : '') +
+        '\n    </div>\n  '
+    );
+  }
+
   // -------------------- main (router) --------------------
   var viewEl = null;
 
@@ -6251,7 +6664,7 @@
       }
     }
 
-    function startCreate(isGmDevice) {
+    function startCreate(isGmDevice, joinAsMember, tableGmDevice) {
       disableHomeButtons(true);
 
       // If this device was previously a restricted participant, clear it before creating a new lobby.
@@ -6267,14 +6680,14 @@
 
       firebaseReady()
         .then(function () {
-          return createLobbyWithRetry(nm, !!isGmDevice);
+          return createLobbyWithRetry(nm, !!isGmDevice, joinAsMember == null ? true : !!joinAsMember);
         })
         .then(function (res) {
           var q = {};
           var v = getCacheBusterParam();
           if (v) q.v = v;
           q.lobby = res.lobbyId;
-          q.gmdev = isGmDevice ? '1' : '0';
+          q.gmdev = tableGmDevice ? '1' : '0';
           q.screen = 'lobby_host';
           setQuery(q);
           route();
@@ -6291,14 +6704,15 @@
       btnJoin.__home_bound = true;
       btnJoin.addEventListener('click', function () {
         // Creator should always be treated as GM-capable device.
-        startCreate(true);
+        startCreate(true, true, false);
       });
     }
 
     if (btnGm && !btnGm.__home_bound) {
       btnGm.__home_bound = true;
       btnGm.addEventListener('click', function () {
-        startCreate(true);
+        // Table-GM device: do not join as a participant.
+        startCreate(true, false, true);
       });
     }
   }
@@ -6408,6 +6822,14 @@
   function routeLobbyHost(lobbyId) {
     var unsub = null;
     var mid = getOrCreateLobbyMemberId(lobbyId);
+
+    var isTableGmDevice = false;
+    try {
+      var q0 = parseQuery();
+      isTableGmDevice = !!(q0 && String(q0.gmdev || '') === '1');
+    } catch (e0) {
+      isTableGmDevice = false;
+    }
     var ui = { selectedKind: '', lastLobby: null };
     var joinUrl = makeLobbyJoinUrl(lobbyId);
 
@@ -6907,6 +7329,12 @@
             if (vWw) qWw.v = vWw;
             qWw.screen = 'create';
             qWw.lobby = lobbyId;
+            try {
+              var qCur = parseQuery();
+              if (qCur && String(qCur.gmdev || '') === '1') qWw.gmdev = '1';
+            } catch (eG0) {
+              // ignore
+            }
             setQuery(qWw);
             route();
             return;
@@ -6914,6 +7342,14 @@
 
           clearInlineError('lobbyHostError');
           startBtn.disabled = true;
+
+          var isTableGm = false;
+          try {
+            var qCur0 = parseQuery();
+            isTableGm = qCur0 && String(qCur0.gmdev || '') === '1';
+          } catch (eGm) {
+            isTableGm = false;
+          }
 
           var hostMid = lobby && lobby.hostMid ? String(lobby.hostMid) : '';
           var hostName = lobby && lobby.members && hostMid && lobby.members[hostMid] ? String(lobby.members[hostMid].name || '').trim() : '';
@@ -6926,6 +7362,8 @@
                 // Pre-register all lobby members then start.
                 var ids = normalizeOrder(lobby);
                 var members = (lobby && lobby.members) || {};
+
+                var hostPid = isTableGm ? (ids && ids.length ? String(ids[0] || '') : '') : String(mid || '');
 
                 // Build assignment fallback when missing.
                 var assignMap = (lobby && lobby.codenamesAssign) || {};
@@ -6954,7 +7392,7 @@
                 if (redSm) tmpAssign[redSm].role = 'spymaster';
                 if (blueSm) tmpAssign[blueSm].role = 'spymaster';
 
-                setCodenamesPlayerId(roomId, mid);
+                if (!isTableGm) setCodenamesPlayerId(roomId, mid);
                 return createCodenamesRoom(roomId, { name: hostName, size: 5 })
                   .then(function () {
                     var seq = Promise.resolve();
@@ -6963,7 +7401,7 @@
                         seq = seq
                           .then(function () {
                             var nm = members && members[pid] && members[pid].name ? String(members[pid].name) : '';
-                            return joinPlayerInCodenamesRoom(roomId, pid, nm || '-', String(pid) === String(mid));
+                            return joinPlayerInCodenamesRoom(roomId, pid, nm || '-', hostPid && String(pid) === String(hostPid));
                           })
                           .then(function () {
                             var a1 = tmpAssign[pid] || { team: '', role: '' };
@@ -6987,7 +7425,8 @@
                 } catch (eLx) {
                   extraCards2 = [];
                 }
-                setLoveLetterPlayerId(roomId, mid);
+                var hostPid2 = isTableGm ? (order2 && order2.length ? String(order2[0] || '') : '') : String(mid || '');
+                if (!isTableGm) setLoveLetterPlayerId(roomId, mid);
                 return createLoveLetterRoom(roomId, { order: order2, extraCards: extraCards2 })
                   .then(function () {
                     var seq2 = Promise.resolve();
@@ -6995,14 +7434,17 @@
                       (function (pid2) {
                         seq2 = seq2.then(function () {
                           var nm3 = members2 && members2[pid2] && members2[pid2].name ? String(members2[pid2].name) : '';
-                          return joinPlayerInLoveLetterRoom(roomId, pid2, nm3 || '-', String(pid2) === String(mid));
+                          return joinPlayerInLoveLetterRoom(roomId, pid2, nm3 || '-', hostPid2 && String(pid2) === String(hostPid2));
                         });
                       })(order2[kA]);
                     }
                     return seq2;
                   })
                   .then(function () {
-                    return;
+                    if (!isTableGm) return;
+                    if (!hostPid2) return;
+                    // In table-GM mode, auto-start with the delegated host player.
+                    return startLoveLetterGame(roomId, hostPid2);
                   });
               }
               return;
@@ -7016,14 +7458,19 @@
               if (v) q.v = v;
               q.room = roomId;
               q.lobby = lobbyId;
+              if (isTableGm) q.gmdev = '1';
               if (kind === 'codenames') {
                 q.host = '1';
-                q.player = '1';
-                q.screen = 'codenames_player';
+                if (!isTableGm) q.player = '1';
+                q.screen = isTableGm ? 'codenames_table' : 'codenames_player';
               } else if (kind === 'loveletter') {
                 q.host = '1';
-                q.player = '1';
-                q.screen = 'loveletter_extras';
+                if (!isTableGm) {
+                  q.player = '1';
+                  q.screen = 'loveletter_extras';
+                } else {
+                  q.screen = 'loveletter_table';
+                }
               }
               setQuery(q);
               route();
@@ -7051,7 +7498,14 @@
         myName = '';
       }
 
-      renderLobbyHost(viewEl, { lobbyId: lobbyId, lobby: lobby, selectedKind: ui.selectedKind, joinUrl: joinUrl, myName: myName });
+      renderLobbyHost(viewEl, {
+        lobbyId: lobbyId,
+        lobby: lobby,
+        selectedKind: ui.selectedKind,
+        joinUrl: joinUrl,
+        myName: myName,
+        isTableGmDevice: isTableGmDevice
+      });
       bindHostButtons(lobby);
       drawQr(160);
     }
@@ -7505,9 +7959,17 @@
     }
 
     if (lobbyIdFromQuery) {
+      var isTableGmDevice = false;
+      try {
+        isTableGmDevice = !!(qCreate && String(qCreate.gmdev || '') === '1');
+      } catch (eGm0) {
+        isTableGmDevice = false;
+      }
+
       var backQ = { lobby: lobbyIdFromQuery, screen: 'lobby_host' };
       var vBack = getCacheBusterParam();
       if (vBack) backQ.v = vBack;
+      if (isTableGmDevice) backQ.gmdev = '1';
       var backHref = '?' + buildQuery(backQ);
 
       render(
@@ -7711,7 +8173,12 @@
                 q.room = roomId;
                 q.lobby = lobbyIdFromQuery;
                 q.host = '1';
-                q.player = '1';
+                if (isTableGmDevice) {
+                  q.gmdev = '1';
+                  q.screen = 'ww_table';
+                } else {
+                  q.player = '1';
+                }
                 setQuery(q);
                 route();
               });
@@ -8440,6 +8907,148 @@
     window.addEventListener('popstate', function () {
       if (unsub) unsub();
       if (timerHandle) clearInterval(timerHandle);
+    });
+  }
+
+  function routeWordwolfTable(roomId, isHost) {
+    var unsub = null;
+    var timerHandle = null;
+    var autoVoteRequested = false;
+
+    var lobbyId = '';
+    try {
+      var q0 = parseQuery();
+      lobbyId = q0 && q0.lobby ? String(q0.lobby) : '';
+    } catch (e0) {
+      lobbyId = '';
+    }
+
+    function redirectToLobby() {
+      if (!lobbyId) return;
+      var q = {};
+      var v = getCacheBusterParam();
+      if (v) q.v = v;
+      q.lobby = lobbyId;
+      q.screen = 'lobby_host';
+      q.gmdev = '1';
+      setQuery(q);
+      route();
+    }
+
+    function rerenderTimer(room) {
+      var el = document.getElementById('wwTableTimer');
+      if (!el) return;
+      if (!room || room.phase !== 'discussion') return;
+      var endAt = room && room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
+      var remain = Math.max(0, Math.floor((endAt - serverNowMs()) / 1000));
+      el.textContent = formatMMSS(remain);
+    }
+
+    firebaseReady()
+      .then(function () {
+        return subscribeRoom(roomId, function (room) {
+          if (!room) {
+            renderError(viewEl, '部屋が見つかりません');
+            return;
+          }
+
+          renderWordwolfTable(viewEl, { roomId: roomId, room: room, isHost: isHost, lobbyId: lobbyId });
+
+          if ((room && room.phase) !== 'discussion') autoVoteRequested = false;
+          if (timerHandle) clearInterval(timerHandle);
+          timerHandle = setInterval(function () {
+            rerenderTimer(room);
+            if (!autoVoteRequested && room && room.phase === 'discussion') {
+              var endAt = room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
+              if (endAt && serverNowMs() >= endAt) {
+                autoVoteRequested = true;
+                autoStartVotingIfEnded(roomId);
+              }
+            }
+          }, 250);
+
+          var revealBtn = document.getElementById('wwTableRevealNext');
+          if (revealBtn && !revealBtn.__ww_bound) {
+            revealBtn.__ww_bound = true;
+            revealBtn.addEventListener('click', function () {
+              revealAfterVoting(roomId).catch(function (e) {
+                alert((e && e.message) || '失敗');
+              });
+            });
+          }
+
+          var voteRevealNext = document.getElementById('wwTableVoteRevealNext');
+          if (voteRevealNext && !voteRevealNext.__ww_bound) {
+            voteRevealNext.__ww_bound = true;
+            voteRevealNext.addEventListener('click', function () {
+              voteRevealNext.disabled = true;
+              advanceAfterVoteReveal(roomId)
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  voteRevealNext.disabled = false;
+                });
+            });
+          }
+
+          var decideMinorityBtn = document.getElementById('wwTableDecideMinority');
+          if (decideMinorityBtn && !decideMinorityBtn.__ww_bound) {
+            decideMinorityBtn.__ww_bound = true;
+            decideMinorityBtn.addEventListener('click', function () {
+              decideWinner(roomId, 'minority').catch(function (e) {
+                alert((e && e.message) || '失敗');
+              });
+            });
+          }
+
+          var decideMajorityBtn = document.getElementById('wwTableDecideMajority');
+          if (decideMajorityBtn && !decideMajorityBtn.__ww_bound) {
+            decideMajorityBtn.__ww_bound = true;
+            decideMajorityBtn.addEventListener('click', function () {
+              decideWinner(roomId, 'majority').catch(function (e) {
+                alert((e && e.message) || '失敗');
+              });
+            });
+          }
+
+          var nextBtn = document.getElementById('wwTableNextToLobby');
+          if (nextBtn && !nextBtn.__ww_bound) {
+            nextBtn.__ww_bound = true;
+            nextBtn.addEventListener('click', function () {
+              if (!lobbyId) return;
+              nextBtn.disabled = true;
+              firebaseReady()
+                .then(function () {
+                  return setLobbyCurrentGame(lobbyId, null);
+                })
+                .then(function () {
+                  redirectToLobby();
+                })
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  nextBtn.disabled = false;
+                });
+            });
+          }
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      try {
+        if (timerHandle) clearInterval(timerHandle);
+      } catch (e0) {
+        // ignore
+      }
+      if (unsub) unsub();
     });
   }
 
@@ -10161,10 +10770,383 @@
     });
   }
 
+  function renderLoveLetterTable(viewEl, opts) {
+    var roomId = opts.roomId;
+    var room = opts.room;
+    var isHost = !!opts.isHost;
+    var lobbyId = opts.lobbyId ? String(opts.lobbyId) : '';
+
+    var phase = (room && room.phase) || 'lobby';
+    var ps = (room && room.players) || {};
+    var r = room && room.round ? room.round : {};
+
+    var order = [];
+    try {
+      order = llListPlayerIdsByJoin(room);
+    } catch (e0) {
+      order = [];
+    }
+
+    function llCardBackImgHtml() {
+      var backIcon = './assets/loveletter/Uramen.png';
+      try {
+        var v = getCacheBusterParam();
+        if (v) backIcon += '?v=' + encodeURIComponent(String(v));
+      } catch (e1) {
+        // ignore
+      }
+      return '<img class="ll-card-img" alt="裏面" src="' + escapeHtml(backIcon) + '" />';
+    }
+
+    function llCardImgHtml(rank) {
+      var d = llCardDef(rank);
+      var icon = d && d.icon ? String(d.icon) : '';
+      if (icon) {
+        return '<img class="ll-card-img" alt="' + escapeHtml(d.name || '') + '" src="' + escapeHtml(icon) + '" />';
+      }
+      return '<div class="stack" style="height:100%;justify-content:center;align-items:center"><div class="big">' + escapeHtml((d && d.name) || '-') + '</div></div>';
+    }
+
+    var deckLeft = r && Array.isArray(r.deck) ? r.deck.length : 0;
+    var graveArr = r && Array.isArray(r.grave) ? r.grave : [];
+
+    var centerHtml = '';
+    var facedownHtml = '';
+    if (phase === 'lobby') {
+      centerHtml = '<div class="stack center"><div class="big">待機中</div><div class="muted">ゲーム開始をお待ちください。</div></div>';
+    } else {
+      var backCount = deckLeft > 0 ? Math.min(5, Math.max(2, Math.ceil(deckLeft / 3))) : 0;
+      var deckStack = '';
+      for (var di = 0; di < backCount; di++) {
+        deckStack += '<div class="ll-table-pile-card" style="left:' + String(di * 8) + 'px;top:' + String(di * -3) + 'px">' + llCardBackImgHtml() + '</div>';
+      }
+
+      var graveCards = '';
+      // The first discarded card is kept face-down and should be shown separately.
+      if (graveArr && graveArr.length) {
+        facedownHtml =
+          '<div class="ll-table-facedown">' +
+          '<div class="muted">伏せ札</div>' +
+          '<div class="ll-table-facedown-card">' +
+          llCardBackImgHtml() +
+          '</div>' +
+          '</div>';
+      }
+
+      // Show the latest 10 discarded cards (excluding the face-down first one).
+      var visibleGrave = graveArr && graveArr.length > 1 ? graveArr.slice(1) : [];
+      var showStart = Math.max(0, visibleGrave.length - 10);
+      for (var gi = showStart; gi < visibleGrave.length; gi++) {
+        var gr = String(visibleGrave[gi] || '');
+        if (!gr) continue;
+        graveCards += '<div class="ll-table-grave-card">' + llCardImgHtml(gr) + '</div>';
+      }
+      if (!graveCards) graveCards = '<div class="muted">（なし）</div>';
+
+      centerHtml =
+        '<div class="ll-table-center">' +
+        '<div class="ll-table-pile">' +
+        '<div class="muted">山札</div>' +
+        '<div class="ll-table-pile-count"><b>' +
+        escapeHtml(String(deckLeft)) +
+        '</b></div>' +
+        '<div class="ll-table-pile-stack">' +
+        deckStack +
+        '</div>' +
+        '</div>' +
+        '<div class="ll-table-pile">' +
+        '<div class="muted">墓地</div>' +
+        '<div class="ll-table-grave">' +
+        graveCards +
+        '</div>' +
+        '</div>' +
+        '</div>';
+    }
+
+    var seatsHtml = '';
+    var n = order.length || 0;
+    var radius = 42;
+    for (var si = 0; si < n; si++) {
+      var pid = order[si];
+      if (!pid) continue;
+      var p = ps[pid] || {};
+      var nm = formatPlayerDisplayName(p) || String(pid);
+      var angle = -90 + (360 * si) / n;
+      var rad = (Math.PI / 180) * angle;
+      var x = 50 + radius * Math.cos(rad);
+      var y = 50 + radius * Math.sin(rad);
+      seatsHtml +=
+        '<div class="ll-seat" style="left:' +
+        escapeHtml(String(x.toFixed(3))) +
+        '%;top:' +
+        escapeHtml(String(y.toFixed(3))) +
+        '%">' +
+        '<div class="ll-seat-card">' +
+        escapeHtml(nm) +
+        '</div>' +
+        '</div>';
+    }
+
+    var resultHtml = '';
+    if (phase === 'finished' && room && room.result && Array.isArray(room.result.winners)) {
+      var fs = [];
+      for (var fi = 0; fi < room.result.winners.length; fi++) {
+        var fpid = room.result.winners[fi];
+        fs.push(ps[fpid] ? formatPlayerDisplayName(ps[fpid]) : String(fpid));
+      }
+      resultHtml =
+        '<div class="card center" style="padding:12px">' +
+        '<div class="muted">勝者</div>' +
+        '<div class="big">' +
+        escapeHtml(fs.length ? fs.join(' / ') : '-') +
+        '</div>' +
+        (lobbyId
+          ? '<hr />' +
+            (isHost
+              ? '<div class="row" style="justify-content:center;margin-top:10px"><button id="llNextToLobby" class="primary">次へ</button></div>'
+              : '<div class="muted" style="margin-top:10px">※ 次へ進むのはゲームマスターです。</div>')
+          : '') +
+        '</div>';
+    }
+
+    render(
+      viewEl,
+      '\n    <div class="stack">\n      <div class="big">ラブレター（テーブル）</div>\n      ' +
+        (phase === 'finished' ? resultHtml + '<hr />' : '') +
+        '<div class="ll-table">' +
+        seatsHtml +
+        (facedownHtml || '') +
+        '<div class="ll-table-inner">' +
+        centerHtml +
+        '</div>' +
+        '</div>' +
+        '\n    </div>\n  '
+    );
+  }
+
+  function routeLoveLetterTable(roomId, isHost) {
+    try {
+      if (document && document.body && document.body.classList) {
+        document.body.classList.remove('ll-player-screen');
+        document.body.classList.add('ll-table-screen');
+      }
+    } catch (e0) {
+      // ignore
+    }
+
+    if (!isHost) {
+      var qx0 = {};
+      var vx0 = getCacheBusterParam();
+      if (vx0) qx0.v = vx0;
+      qx0.room = roomId;
+      qx0.player = '1';
+      try {
+        var qq0 = parseQuery();
+        if (qq0 && qq0.lobby) qx0.lobby = String(qq0.lobby);
+      } catch (e1) {
+        // ignore
+      }
+      qx0.screen = 'loveletter_player';
+      setQuery(qx0);
+      route();
+      return;
+    }
+
+    var unsub = null;
+    var lobbyId = '';
+    try {
+      var q0 = parseQuery();
+      lobbyId = q0 && q0.lobby ? String(q0.lobby) : '';
+    } catch (e00) {
+      lobbyId = '';
+    }
+
+    function redirectToLobby() {
+      if (!lobbyId) return;
+      var q = {};
+      var v = getCacheBusterParam();
+      if (v) q.v = v;
+      q.lobby = lobbyId;
+      q.screen = 'lobby_host';
+      try {
+        var qx = parseQuery();
+        if (qx && String(qx.gmdev || '') === '1') q.gmdev = '1';
+      } catch (e) {
+        // ignore
+      }
+      setQuery(q);
+      route();
+    }
+
+    firebaseReady()
+      .then(function () {
+        return subscribeLoveLetterRoom(roomId, function (room) {
+          if (!room) {
+            renderError(viewEl, '部屋が見つかりません');
+            return;
+          }
+
+          renderLoveLetterTable(viewEl, { roomId: roomId, room: room, isHost: isHost, lobbyId: lobbyId });
+
+          var nextBtn = document.getElementById('llNextToLobby');
+          if (nextBtn && !nextBtn.__ll_bound) {
+            nextBtn.__ll_bound = true;
+            nextBtn.addEventListener('click', function () {
+              if (!lobbyId) return;
+              nextBtn.disabled = true;
+              firebaseReady()
+                .then(function () {
+                  var extras = [];
+                  try {
+                    extras = room && room.settings ? room.settings.extraCards : [];
+                  } catch (e0) {
+                    extras = [];
+                  }
+                  return setLobbyLoveLetterExtraCards(lobbyId, extras);
+                })
+                .then(function () {
+                  return setLobbyCurrentGame(lobbyId, null);
+                })
+                .then(function () {
+                  redirectToLobby();
+                })
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  nextBtn.disabled = false;
+                });
+            });
+          }
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+    });
+  }
+
+  function routeCodenamesTable(roomId, isHost) {
+    if (!isHost) {
+      var qx0 = {};
+      var vx0 = getCacheBusterParam();
+      if (vx0) qx0.v = vx0;
+      qx0.room = roomId;
+      qx0.player = '1';
+      try {
+        var qq0 = parseQuery();
+        if (qq0 && qq0.lobby) qx0.lobby = String(qq0.lobby);
+      } catch (e1) {
+        // ignore
+      }
+      qx0.screen = 'codenames_player';
+      setQuery(qx0);
+      route();
+      return;
+    }
+
+    var unsub = null;
+    var timerHandle = null;
+    var lobbyId = '';
+    try {
+      var q0 = parseQuery();
+      lobbyId = q0 && q0.lobby ? String(q0.lobby) : '';
+    } catch (e0) {
+      lobbyId = '';
+    }
+
+    function redirectToLobby() {
+      if (!lobbyId) return;
+      var q = {};
+      var v = getCacheBusterParam();
+      if (v) q.v = v;
+      q.lobby = lobbyId;
+      q.screen = 'lobby_host';
+      try {
+        var qx = parseQuery();
+        if (qx && String(qx.gmdev || '') === '1') q.gmdev = '1';
+      } catch (e) {
+        // ignore
+      }
+      setQuery(q);
+      route();
+    }
+
+    firebaseReady()
+      .then(function () {
+        return subscribeCodenamesRoom(roomId, function (room) {
+          if (!room) {
+            renderError(viewEl, '部屋が見つかりません');
+            return;
+          }
+
+          renderCodenamesTable(viewEl, { roomId: roomId, room: room, isHost: isHost, lobbyId: lobbyId });
+
+          function rerenderCnTimer() {
+            var el = document.getElementById('cnTimer');
+            if (!el) return;
+            if (!room || room.phase !== 'playing') return;
+            var endAt = room.turn && room.turn.endsAt ? room.turn.endsAt : 0;
+            if (!endAt) {
+              el.textContent = '-:--';
+              return;
+            }
+            var remain = Math.max(0, Math.floor((endAt - serverNowMs()) / 1000));
+            el.textContent = formatMMSS(remain);
+          }
+
+          if (timerHandle) clearInterval(timerHandle);
+          timerHandle = setInterval(function () {
+            rerenderCnTimer();
+          }, 250);
+
+          var nextBtn = document.getElementById('cnNextToLobby');
+          if (nextBtn && !nextBtn.__cn_bound) {
+            nextBtn.__cn_bound = true;
+            nextBtn.addEventListener('click', function () {
+              if (!lobbyId) return;
+              nextBtn.disabled = true;
+              firebaseReady()
+                .then(function () {
+                  return setLobbyCurrentGame(lobbyId, null);
+                })
+                .then(function () {
+                  redirectToLobby();
+                })
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  nextBtn.disabled = false;
+                });
+            });
+          }
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+      if (timerHandle) clearInterval(timerHandle);
+    });
+  }
+
   function route() {
     try {
       if (document && document.body && document.body.classList) {
         document.body.classList.remove('ll-player-screen');
+        document.body.classList.remove('ll-table-screen');
       }
     } catch (e0) {
       // ignore
@@ -10313,6 +11295,11 @@
       return routeLoveLetterPlayer(roomId, isHost);
     }
 
+    if (screen === 'loveletter_table') {
+      if (!roomId) return routeHome();
+      return routeLoveLetterTable(roomId, isHost);
+    }
+
     if (screen === 'codenames_rejoin') {
       if (!roomId) return routeHome();
       return routeCodenamesRejoin(roomId);
@@ -10330,9 +11317,15 @@
       return routeCodenamesPlayer(roomId, isHost);
     }
 
+    if (screen === 'codenames_table') {
+      if (!roomId) return routeHome();
+      return routeCodenamesTable(roomId, isHost);
+    }
+
     if (!roomId) return routeHome();
 
     if (screen === 'ww_rejoin') return routeWordwolfRejoin(roomId, isHost);
+    if (screen === 'ww_table') return routeWordwolfTable(roomId, isHost);
     if (screen === 'join') return routeJoin(roomId, isHost);
     if (isPlayer) return routePlayer(roomId, isHost);
     if (isHost) return routeHost(roomId);
