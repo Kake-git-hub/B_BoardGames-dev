@@ -114,6 +114,9 @@ body.ll-player-screen .app{padding-top:10px}
 .cn-turn-red.cn-turn-active{background:var(--text);border-color:var(--text)}
 .cn-turn-blue.cn-turn-active{background:var(--text);border-color:var(--text)}
 
+.cn-timer{white-space:nowrap;flex:0 0 auto;font-variant-numeric:tabular-nums}
+.cn-timer b{font-variant-numeric:tabular-nums}
+
 /* Codenames: emphasize only the acting player (frame) */
 #view.cn-turn-actor::before{content:"";position:absolute;inset:-3px;border:3px solid var(--text);border-radius:12px;pointer-events:none}
 
@@ -166,7 +169,7 @@ body.ll-player-screen{overflow-x:hidden}
 
 /* Love Letter: table screen */
 body.ll-table-screen .app{max-width:980px}
-.ll-table{position:relative;min-height:520px;border:1px solid var(--line);border-radius:12px;background:var(--card);overflow:hidden}
+.ll-table{position:relative;min-height:520px;border:1px solid var(--line);border-radius:12px;background:rgba(53,208,127,.18);overflow:hidden}
 .ll-table-inner{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:16px}
 .ll-seat{position:absolute;transform:translate(-50%,-50%);max-width:180px;z-index:3}
 .ll-seat-card{background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:8px 12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -181,10 +184,10 @@ body.ll-table-screen .app{max-width:980px}
 .ll-table-grave-stack-card--under{opacity:.55}
 
 .ll-table-facedown{position:absolute;left:14px;top:14px;display:flex;flex-direction:column;gap:8px;align-items:center}
-.ll-table-facedown-card{width:110px;aspect-ratio:3/4;border-radius:10px;border:1px solid var(--line);overflow:hidden;background:#0f1520}
+.ll-table-facedown-card{width:72px;aspect-ratio:3/4;border-radius:10px;border:1px solid var(--line);overflow:hidden;background:#0f1520}
 
 .ll-table-arrow{position:absolute;inset:0;pointer-events:none;z-index:2}
-.ll-table-arrow line{stroke:var(--accent);stroke-width:1.2;opacity:.95}
+.ll-table-arrow line{stroke:var(--text);stroke-width:3.2;opacity:.6;stroke-linecap:round}
 
 .ll-grave-icon{width:22px;height:22px;object-fit:contain;vertical-align:-6px;display:inline-block;margin-left:6px;border-radius:6px;border:1px solid var(--line);background:#0f1520}
 

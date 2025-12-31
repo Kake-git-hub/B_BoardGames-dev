@@ -2484,6 +2484,27 @@
     });
   }
 
+  function lockCodenamesLobbyForTimer(roomId) {
+    var base = codenamesRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'lobby') return room;
+
+      var players = assign({}, room.players || {});
+      var keys = Object.keys(players);
+      for (var i = 0; i < keys.length; i++) {
+        var id = keys[i];
+        var p = players[id];
+        if (!p) continue;
+        // Lock only players who already completed selection.
+        var hasPrefs = !!(p.team && p.role);
+        players[id] = assign({}, p, { prefsLocked: hasPrefs ? true : !!p.prefsLocked });
+      }
+
+      return assign({}, room, { lobbyStage: 'timer', lobbyLockedAt: room.lobbyLockedAt || serverNowMs(), players: players });
+    });
+  }
+
   function joinPlayerInCodenamesRoom(roomId, playerId, name, isHostPlayer) {
     var base = codenamesRoomPath(roomId);
     return runTxn(base, function (room) {
@@ -2497,7 +2518,8 @@
         joinedAt: prev.joinedAt || serverNowMs(),
         lastSeenAt: serverNowMs(),
         team: prev.team || '',
-        role: prev.role || ''
+        role: prev.role || '',
+        prefsLocked: !!prev.prefsLocked
       });
       if (isHostPlayer) next.isHost = true;
       players[playerId] = next;
@@ -2509,6 +2531,7 @@
     var path = codenamesPlayerPath(roomId, playerId);
     return runTxn(path, function (p) {
       if (!p) return p;
+      if (p.prefsLocked) return assign({}, p, { lastSeenAt: serverNowMs() });
       var t = team === 'red' || team === 'blue' ? team : '';
       var r = role === 'spymaster' || role === 'operative' ? role : '';
       return assign({}, p, { team: t, role: r, lastSeenAt: serverNowMs() });
@@ -2545,7 +2568,7 @@
         var id = keys[i];
         var p = players[id];
         if (!p) continue;
-        players[id] = assign({}, p, { team: '', role: '' });
+        players[id] = assign({}, p, { team: '', role: '', prefsLocked: false });
       }
 
       var size = room && room.board && room.board.size ? room.board.size : (room.settings && room.settings.size ? room.settings.size : 5);
@@ -2563,6 +2586,8 @@
 
       return assign({}, room, {
         phase: 'lobby',
+        lobbyStage: 'roles',
+        lobbyLockedAt: 0,
         players: players,
         clueLog: [],
         turn: assign({}, room.turn || {}, {
@@ -2590,7 +2615,7 @@
       var host = hostPlayerId ? players[hostPlayerId] : null;
       var nextPlayers = {};
       if (host) {
-        nextPlayers[hostPlayerId] = assign({}, host, { team: '', role: '' });
+        nextPlayers[hostPlayerId] = assign({}, host, { team: '', role: '', prefsLocked: false });
       }
 
       var size = room && room.board && room.board.size ? room.board.size : (room.settings && room.settings.size ? room.settings.size : 5);
@@ -2608,6 +2633,8 @@
 
       return assign({}, room, {
         phase: 'lobby',
+        lobbyStage: 'roles',
+        lobbyLockedAt: 0,
         players: nextPlayers,
         clueLog: [],
         turn: assign({}, room.turn || {}, {
@@ -2707,13 +2734,12 @@
 
       return assign({}, room, {
         clueLog: log,
-        turn: {
-          team: room.turn.team,
+        turn: assign({}, room.turn || {}, {
           status: 'guessing',
           guessesLeft: n + 1,
           clue: { word: w, number: n, by: playerId, at: serverNowMs() },
           pending: {}
-        }
+        })
       });
     });
   }
@@ -5236,21 +5262,35 @@
         playersHtml = '<div class="muted">参加者一覧を表示できませんでした。</div>';
       }
 
-      lobbyHtml =
-        '<div class="stack">' +
-        '<div class="big">待機中</div>' +
-        '<div class="muted">チームと役職を選んでください。</div>' +
-        '<div class="field"><label>チーム</label>' +
-        '<select id="cnTeam"><option value="">未選択</option><option value="red">赤</option><option value="blue">青</option></select></div>' +
-        '<div class="field"><label>役職</label>' +
-        '<select id="cnRole"><option value="">未選択</option><option value="spymaster">スパイマスター</option><option value="operative">諜報員</option></select></div>' +
-        '<div id="cnPrefsError" class="form-error" role="alert"></div>' +
-        '<button id="cnSavePrefs" class="primary">保存</button>' +
-        '<div class="muted">※ タイマー設定とスタートはテーブル端末で行います。</div>' +
-        '<hr />' +
-        '<div class="big">参加者（登録状況）</div>' +
-        playersHtml +
-        '</div>';
+      var stage = room && room.lobbyStage ? String(room.lobbyStage) : 'roles';
+      var locked = stage === 'timer';
+
+      if (locked) {
+        lobbyHtml =
+          '<div class="stack">' +
+          '<div class="big">待機中</div>' +
+          '<div class="muted">※ テーブルでタイマー設定中です（役職登録はできません）。</div>' +
+          '<hr />' +
+          '<div class="big">参加者（登録状況）</div>' +
+          playersHtml +
+          '</div>';
+      } else {
+        lobbyHtml =
+          '<div class="stack">' +
+          '<div class="big">待機中</div>' +
+          '<div class="muted">チームと役職を選んでください。</div>' +
+          '<div class="field"><label>チーム</label>' +
+          '<select id="cnTeam"><option value="">未選択</option><option value="red">赤</option><option value="blue">青</option></select></div>' +
+          '<div class="field"><label>役職</label>' +
+          '<select id="cnRole"><option value="">未選択</option><option value="spymaster">スパイマスター</option><option value="operative">諜報員</option></select></div>' +
+          '<div id="cnPrefsError" class="form-error" role="alert"></div>' +
+          '<button id="cnSavePrefs" class="primary">保存</button>' +
+          '<div class="muted">※ タイマー設定とスタートはテーブル端末で行います。</div>' +
+          '<hr />' +
+          '<div class="big">参加者（登録状況）</div>' +
+          playersHtml +
+          '</div>';
+      }
     }
 
     var clueRowHtml = '';
@@ -5323,21 +5363,13 @@
     if (phase === 'finished') {
       var winner = room && room.result ? room.result.winner : '';
       var wLabel = winner === 'red' ? '赤の勝ち' : winner === 'blue' ? '青の勝ち' : '-';
-      var amHost = !!isHost || !!(player && player.isHost);
       finishedHtml =
         '<div class="stack">' +
         '<div class="big">結果</div>' +
         '<div class="kv"><span class="muted">勝者</span><b>' +
         escapeHtml(wLabel) +
         '</b></div>' +
-        (lobbyId
-          ? '<hr />' +
-            (amHost
-              ? '<div class="row"><button id="cnNextToLobby" class="primary">次へ</button></div>'
-              : '<div class="muted">※ 次へ進むのはゲームマスターです。</div>')
-          : amHost
-            ? '<div class="row"><button id="cnContinue" class="primary">もう一度</button><button id="cnChangePlayers" class="ghost">参加者変更</button><button id="cnBackToLobby" class="ghost">ロビーに戻る</button></div>'
-            : '') +
+        '<div class="muted">※ 次へ進むのはテーブル端末です。</div>' +
         '</div>';
     }
 
@@ -9249,8 +9281,7 @@
     }
 
     function llCardBackImgHtml() {
-      // TEMP: Use Princess card as "back" to debug Uramen.png rendering.
-      var backIcon = './assets/loveletter/Hime.png';
+      var backIcon = './assets/loveletter/Uramen.png';
       try {
         var v = getCacheBusterParam();
         if (v) backIcon += '?v=' + encodeURIComponent(String(v));
@@ -9603,12 +9634,12 @@
             '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
             '<div class="ll-overlay-backdrop"></div>' +
             '<div class="ll-overlay-panel">' +
-            '<div class="big">魔術師：捨て札</div>' +
-            '<div class="ll-compare-row">' +
-            '<div class="ll-compare-col">' +
-            '<div class="ll-modal-name">' +
+            '<div class="big">魔術師：' +
             escapeHtml(tName) +
             '</div>' +
+            '<div class="ll-compare-row">' +
+            '<div class="ll-compare-col">' +
+            '<div class="ll-modal-name">捨て札</div>' +
             '<div class="ll-compare-card">' +
             llCardImgHtml(discarded) +
             '</div>' +
@@ -10686,6 +10717,25 @@
         renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
       });
 
+    // When the app comes back from background, force a tiny write to refresh state.
+    function touchOnResume() {
+      firebaseReady()
+        .then(function () {
+          return touchCodenamesPlayer(roomId, playerId);
+        })
+        .catch(function () {
+          // ignore
+        });
+    }
+    try {
+      window.addEventListener('focus', touchOnResume);
+      document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) touchOnResume();
+      });
+    } catch (eX) {
+      // ignore
+    }
+
     window.addEventListener('popstate', function () {
       if (unsub) unsub();
       try {
@@ -10728,8 +10778,7 @@
     }
 
     function llCardBackImgHtml() {
-      // TEMP: Use Princess card as "back" to debug Uramen.png rendering.
-      var backIcon = './assets/loveletter/Hime.png';
+      var backIcon = './assets/loveletter/Uramen.png';
       try {
         var v = getCacheBusterParam();
         if (v) backIcon += '?v=' + encodeURIComponent(String(v));
@@ -10854,11 +10903,21 @@
       if (byId && toId && String(byId) !== String(toId) && seatPos[byId] && seatPos[toId]) {
         var p1 = seatPos[byId];
         var p2 = seatPos[toId];
+        var dx = p2.x - p1.x;
+        var dy = p2.y - p1.y;
+        var len = Math.sqrt(dx * dx + dy * dy);
+        var pad = 6;
+        if (len > 0.0001) {
+          var ux = dx / len;
+          var uy = dy / len;
+          p1 = { x: p1.x + ux * pad, y: p1.y + uy * pad };
+          p2 = { x: p2.x - ux * pad, y: p2.y - uy * pad };
+        }
         arrowHtml =
           '<svg class="ll-table-arrow" viewBox="0 0 100 100" preserveAspectRatio="none">' +
           '<defs>' +
           '<marker id="llArrowHead" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="strokeWidth">' +
-          '<path d="M0,0 L6,3 L0,6 Z" fill="var(--accent)"></path>' +
+          '<path d="M0,0 L6,3 L0,6 Z" fill="var(--text)"></path>' +
           '</marker>' +
           '</defs>' +
           '<line x1="' +
@@ -11581,6 +11640,7 @@
     var qrOnly = q0 && q0.qr === '1';
     var joinUrl = qrOnly ? makeCodenamesRejoinUrl(roomId) : makeCodenamesJoinUrl(roomId);
     var hostPlayerId = getOrCreateCodenamesPlayerId(roomId);
+    var didLockLobby = false;
 
     function drawQr() {
       return new Promise(function (resolve) {
@@ -11661,6 +11721,13 @@
     function renderWithRoom(room) {
       renderCodenamesHost(viewEl, { roomId: roomId, joinUrl: joinUrl, room: room, hostPlayerId: hostPlayerId, qrOnly: qrOnly });
       if (qrOnly) drawQr();
+
+      if (!qrOnly && !didLockLobby && room && String(room.phase || '') === 'lobby') {
+        didLockLobby = true;
+        lockCodenamesLobbyForTimer(roomId).catch(function () {
+          // ignore
+        });
+      }
 
       var copyBtn = document.getElementById('copyJoinUrl');
       if (copyBtn) {
@@ -12162,6 +12229,25 @@
       .catch(function (e) {
         renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
       });
+
+    // When the app comes back from background, force a tiny write to refresh state.
+    function touchOnResume() {
+      firebaseReady()
+        .then(function () {
+          return touchLoveLetterPlayer(roomId, playerId);
+        })
+        .catch(function () {
+          // ignore
+        });
+    }
+    try {
+      window.addEventListener('focus', touchOnResume);
+      document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) touchOnResume();
+      });
+    } catch (eX) {
+      // ignore
+    }
 
     window.addEventListener('popstate', function () {
       if (unsub) unsub();
