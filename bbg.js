@@ -8550,7 +8550,32 @@
         isTableGmDevice: isTableGmDevice
       });
       bindHostButtons(lobby);
-      drawQr(160);
+      try {
+        var qe = document.getElementById('qrError');
+        if (qe) qe.textContent = 'QR: drawQr起動...';
+      } catch (eQ) {
+        // ignore
+      }
+      try {
+        var p = drawQr(160);
+        if (p && typeof p.catch === 'function') {
+          p.catch(function (eQ2) {
+            try {
+              var qe2 = document.getElementById('qrError');
+              if (qe2) qe2.textContent = 'QR: 生成エラー（' + escapeHtml((eQ2 && eQ2.message) || String(eQ2)) + '）';
+            } catch (eQ3) {
+              // ignore
+            }
+          });
+        }
+      } catch (eQ4) {
+        try {
+          var qe3 = document.getElementById('qrError');
+          if (qe3) qe3.textContent = 'QR: 生成例外（' + ((eQ4 && eQ4.message) || String(eQ4)) + '）';
+        } catch (eQ5) {
+          // ignore
+        }
+      }
     }
 
     function lobbyRenderKey(lobby) {
@@ -14290,7 +14315,7 @@
     viewEl = qs('#view');
     setupRulesButton();
     // --- Version string with alphabetic suffix ---
-    var versionSuffix = 'c'; // ← Change this letter for each push (a, b, c, ...)
+    var versionSuffix = 'd'; // ← Change this letter for each push (a, b, c, ...)
     var versionDate = '20260101'; // YYYYMMDD
     var versionString = 'v' + versionDate + versionSuffix;
     var versionEl = document.getElementById('versionString');
