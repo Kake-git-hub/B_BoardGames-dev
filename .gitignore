@@ -5,3 +5,7 @@ src/config.js
 .DS_Store
 Thumbs.db
 .vscode/
+
+# Copilot handoff notes (local only)
+COPILOT_HANDOFF_*.md
+COPILOT_MIGRATION_CHECKLIST.md
