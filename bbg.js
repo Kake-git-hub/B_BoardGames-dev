@@ -110,6 +110,25 @@
     return Math.floor(Math.random() * max);
   }
 
+  function randomId(len) {
+    var l = Math.max(1, Math.floor(Math.abs(len || 8)));
+    var alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    var out = '';
+    var bytes = null;
+    try {
+      if (typeof crypto !== 'undefined' && crypto.getRandomValues && typeof Uint8Array !== 'undefined') {
+        bytes = crypto.getRandomValues(new Uint8Array(l));
+      }
+    } catch (e) {
+      bytes = null;
+    }
+    for (var i = 0; i < l; i++) {
+      var v = bytes ? bytes[i] : Math.floor(Math.random() * 256);
+      out += alphabet[v % alphabet.length];
+    }
+    return out;
+  }
+
   // TEMP (testing): force discussion time to 10 seconds.
   // Revert later by setting to 0 (or removing override).
   var FORCE_TALK_SECONDS = 0;
@@ -129,37 +148,21 @@
     return s.length >= 2 ? s : '0' + s;
   }
 
-  function formatMMSS(totalSeconds) {
-    var s = Math.max(0, Math.floor(totalSeconds));
-    return pad2(Math.floor(s / 60)) + ':' + pad2(s % 60);
-  }
-
-  function parseIntSafe(v, fallback) {
-    var n = parseInt(String(v), 10);
-    return isFinite(n) ? n : fallback;
-  }
-
   function clamp(n, min, max) {
-    return Math.max(min, Math.min(max, n));
+    var x = Number(n);
+    if (isNaN(x)) x = 0;
+    var a = Number(min);
+    var b = Number(max);
+    if (isNaN(a)) a = x;
+    if (isNaN(b)) b = x;
+    return Math.max(a, Math.min(b, x));
   }
 
-  function randomId(len) {
-    var l = len == null ? 20 : len;
-    var alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    var out = '';
-    var bytes = null;
-    try {
-      if (typeof crypto !== 'undefined' && crypto.getRandomValues && typeof Uint8Array !== 'undefined') {
-        bytes = crypto.getRandomValues(new Uint8Array(l));
-      }
-    } catch (e) {
-      bytes = null;
-    }
-    for (var i = 0; i < l; i++) {
-      var v = bytes ? bytes[i] : Math.floor(Math.random() * 256);
-      out += alphabet[v % alphabet.length];
-    }
-    return out;
+  function formatMMSS(totalSeconds) {
+    var s = Math.max(0, Math.floor(Math.abs(totalSeconds || 0)));
+    var mm = Math.floor(s / 60);
+    var ss = s % 60;
+    return pad2(mm) + ':' + pad2(ss);
   }
 
   // -------------------- query helpers (no URL/URLSearchParams) --------------------
@@ -2732,13 +2735,19 @@
       log.push({ team: room.turn.team, word: w, number: n, by: playerId, at: serverNowMs() });
       if (log.length > 20) log = log.slice(log.length - 20);
 
+      // Reset timer when switching roles: spymaster -> operative
+      var now2 = serverNowMs();
+      var normalSec2 = getCodenamesTimerNormalSec(room);
+
       return assign({}, room, {
         clueLog: log,
         turn: assign({}, room.turn || {}, {
           status: 'guessing',
           guessesLeft: n + 1,
-          clue: { word: w, number: n, by: playerId, at: serverNowMs() },
-          pending: {}
+          clue: { word: w, number: n, by: playerId, at: now2 },
+          pending: {},
+          startedAt: now2,
+          endsAt: now2 + normalSec2 * 1000
         })
       });
     });
@@ -4522,7 +4531,7 @@
       viewEl,
       '\n    <div class="stack">\n      ' +
         (verHtml || '') +
-        '\n      <div class="row">\n        <button id="homeCreateJoin" class="primary">ロビー作成（この端末もゲームに参加）</button>\n      </div>\n      <div class="row">\n        <button id="homeCreateGm" class="ghost">ロビー作成（この端末をゲームマスターデバイス）</button>\n      </div>\n    </div>\n  '
+        '\n      <div class="row">\n        <button id="homeCreateJoin" class="primary">ロビー作成（この端末もゲームに参加）</button>\n      </div>\n      <div class="row">\n        <button id="homeCreateGm" class="ghost">ロビー作成（この端末をゲームマスターデバイス）</button>\n      </div>\n      <div class="row">\n        <button id="homeLoveLetterSim" class="ghost">ラブレター（デバッグ）テーブルシミュレーション</button>\n      </div>\n    </div>\n  '
     );
   }
 
@@ -5228,6 +5237,7 @@
       (who ? '（' + escapeHtml(who) + '）' : '') +
       '</div>' +
       timerTopHtml +
+      (lobbyId && isHost ? '<button id="cnAbortToLobby" class="ghost">ロビーへ</button>' : '') +
       '</div>';
 
     var gmToolsHtml = '';
@@ -5465,6 +5475,7 @@
       (who ? '（' + escapeHtml(who) + '）' : '') +
       '</div>' +
       timerTopHtml +
+      (lobbyId && isHost ? '<button id="cnAbortToLobbyTable" class="ghost">ロビーへ</button>' : '') +
       '</div>';
 
     var lobbyHtml = '';
@@ -6613,11 +6624,13 @@
 
     var btnJoin = document.getElementById('homeCreateJoin');
     var btnGm = document.getElementById('homeCreateGm');
+    var btnSim = document.getElementById('homeLoveLetterSim');
 
     function disableHomeButtons(disabled) {
       try {
         if (btnJoin) btnJoin.disabled = !!disabled;
         if (btnGm) btnGm.disabled = !!disabled;
+        if (btnSim) btnSim.disabled = !!disabled;
       } catch (e) {
         // ignore
       }
@@ -6674,6 +6687,170 @@
         startCreate(true, false, true);
       });
     }
+
+    if (btnSim && !btnSim.__home_bound) {
+      btnSim.__home_bound = true;
+      btnSim.addEventListener('click', function () {
+        var q = {};
+        var v = getCacheBusterParam();
+        if (v) q.v = v;
+        q.screen = 'loveletter_sim_table';
+        setQuery(q);
+        route();
+      });
+    }
+  }
+
+  // Love Letter: debug table simulation (no Firebase)
+  function routeLoveLetterSimTable() {
+    try {
+      if (document && document.body && document.body.classList) {
+        document.body.classList.add('ll-table-screen');
+      }
+    } catch (e0) {
+      // ignore
+    }
+
+    var sim = window.__ll_sim_state || null;
+
+    function initSim() {
+      var ids = ['p1', 'p2', 'p3', 'p4', 'p5'];
+      var players = {};
+      for (var i = 0; i < ids.length; i++) {
+        players[ids[i]] = { name: 'P' + String(i + 1), joinedAt: serverNowMs(), lastSeenAt: serverNowMs() };
+      }
+      var deck = [];
+      // Use known ranks so images render.
+      for (var j = 0; j < 18; j++) {
+        deck.push(String(1 + randomInt(8)));
+      }
+      var grave = [String(1 + randomInt(8))];
+      var eliminated = {};
+      for (var k = 0; k < ids.length; k++) eliminated[ids[k]] = false;
+      sim = {
+        room: {
+          createdAt: serverNowMs(),
+          phase: 'playing',
+          settings: { extraCards: [] },
+          players: players,
+          round: {
+            no: 1,
+            state: 'playing',
+            order: ids.slice(),
+            currentIndex: 0,
+            currentPlayerId: ids[0],
+            deck: deck,
+            grave: grave,
+            eliminated: eliminated,
+            reveal: null
+          },
+          result: null
+        }
+      };
+      window.__ll_sim_state = sim;
+    }
+
+    function listAlive(order, eliminatedMap) {
+      var out = [];
+      for (var i = 0; i < order.length; i++) {
+        var id = String(order[i] || '');
+        if (!id) continue;
+        if (eliminatedMap && eliminatedMap[id]) continue;
+        out.push(id);
+      }
+      return out;
+    }
+
+    function advanceOne() {
+      if (!sim) initSim();
+      var room = sim.room;
+      var r = room.round;
+      var order = Array.isArray(r.order) ? r.order : [];
+      var eliminated = r.eliminated || {};
+
+      var alive = listAlive(order, eliminated);
+      if (alive.length <= 1 || !(r.deck && r.deck.length)) {
+        room.phase = 'finished';
+        room.result = { winners: alive.slice(0, 1) };
+        r.reveal = null;
+        return;
+      }
+
+      var actor = r.currentPlayerId;
+      if (!actor || eliminated[actor]) actor = alive[0];
+
+      var candidates = [];
+      for (var i2 = 0; i2 < alive.length; i2++) {
+        if (alive[i2] !== actor) candidates.push(alive[i2]);
+      }
+      var target = candidates.length ? candidates[randomInt(candidates.length)] : '';
+
+      if (r.deck && r.deck.length) {
+        var drawn = String(r.deck.pop());
+        if (!Array.isArray(r.grave)) r.grave = [];
+        r.grave.push(drawn);
+      }
+
+      // Occasionally eliminate to test the hatch styling.
+      if (target && randomInt(4) === 0) {
+        eliminated[target] = true;
+      }
+      r.eliminated = eliminated;
+
+      r.reveal = target ? { type: 'sim', by: actor, target: target } : null;
+
+      var idx = -1;
+      for (var j2 = 0; j2 < order.length; j2++) {
+        if (String(order[j2]) === String(actor)) {
+          idx = j2;
+          break;
+        }
+      }
+      var nextIndex = idx;
+      for (var step = 0; step < order.length; step++) {
+        nextIndex = (nextIndex + 1) % order.length;
+        var nid = String(order[nextIndex] || '');
+        if (nid && !eliminated[nid]) {
+          r.currentIndex = nextIndex;
+          r.currentPlayerId = nid;
+          break;
+        }
+      }
+    }
+
+    function renderSim() {
+      if (!sim) initSim();
+      render(
+        viewEl,
+        '\n    <div class="stack">\n      <div class="big">ラブレター（デバッグ）テーブルシミュレーション</div>\n      <div class="row" style="justify-content:center">\n        <button id="llSimStep" class="primary">1ターン進める</button>\n        <button id="llSimReset" class="ghost">リセット</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n      <section id="llSimView"></section>\n    </div>\n  '
+      );
+
+      var inner = document.getElementById('llSimView');
+      if (inner) {
+        renderLoveLetterTable(inner, { roomId: 'SIM', room: sim.room, isHost: true, lobbyId: '' });
+      }
+
+      var stepBtn = document.getElementById('llSimStep');
+      if (stepBtn && !stepBtn.__ll_bound) {
+        stepBtn.__ll_bound = true;
+        stepBtn.addEventListener('click', function () {
+          advanceOne();
+          renderSim();
+        });
+      }
+
+      var resetBtn = document.getElementById('llSimReset');
+      if (resetBtn && !resetBtn.__ll_bound) {
+        resetBtn.__ll_bound = true;
+        resetBtn.addEventListener('click', function () {
+          window.__ll_sim_state = null;
+          sim = null;
+          renderSim();
+        });
+      }
+    }
+
+    renderSim();
   }
 
   function routeLobbyLogin(lobbyId) {
@@ -7385,7 +7562,7 @@
                   extraCards2 = [];
                 }
                 var hostPid2 = isTableGm ? (order2 && order2.length ? String(order2[0] || '') : '') : String(mid || '');
-                if (!isTableGm) setLoveLetterPlayerId(roomId, mid);
+                setLoveLetterPlayerId(roomId, hostPid2 || String(mid || ''));
                 return createLoveLetterRoom(roomId, { order: order2, extraCards: extraCards2 })
                   .then(function () {
                     var seq2 = Promise.resolve();
@@ -7400,10 +7577,7 @@
                     return seq2;
                   })
                   .then(function () {
-                    if (!isTableGm) return;
-                    if (!hostPid2) return;
-                    // In table-GM mode, auto-start with the delegated host player.
-                    return startLoveLetterGame(roomId, hostPid2);
+                    return;
                   });
               }
               return;
@@ -7429,12 +7603,8 @@
                 }
               } else if (kind === 'loveletter') {
                 q.host = '1';
-                if (!isTableGm) {
-                  q.player = '1';
-                  q.screen = 'loveletter_extras';
-                } else {
-                  q.screen = 'loveletter_table';
-                }
+                q.player = '1';
+                q.screen = 'loveletter_extras';
               }
               setQuery(q);
               route();
@@ -8613,7 +8783,9 @@
         .then(function () {
           return subscribeLobby(lobbyId, function (lobby) {
             var cg = (lobby && lobby.currentGame) || null;
-            if (!cg) {
+            var kind = cg && cg.kind ? String(cg.kind) : '';
+            var rid = cg && cg.roomId ? String(cg.roomId) : '';
+            if (!cg || kind !== 'loveletter' || rid !== String(roomId || '')) {
               try {
                 if (ui.lobbyUnsub) ui.lobbyUnsub();
               } catch (e) {
@@ -9668,7 +9840,9 @@
         pilesHtml +
         '\n\n      <div class="card ll-status-card" style="padding:10px">\n        <div class="ll-topline">\n          <div class="ll-status">' +
         escapeHtml(statusText || '') +
-        '</div>\n        </div>\n      </div>\n\n      ' +
+        '</div>\n          ' +
+        (lobbyId && isHost ? '<button id="llAbortToLobby" class="ghost">ロビーへ</button>' : '') +
+        '\n        </div>\n      </div>\n\n      ' +
         (resultHtml || '') +
         '\n\n      ' +
         (spectateHtml || '') +
@@ -10078,9 +10252,73 @@
   function routeLoveLetterExtras(roomId, isHost) {
     var unsub = null;
     var playerId = getOrCreateLoveLetterPlayerId(roomId);
+    var isTableGm = false;
+    try {
+      var q0 = parseQuery();
+      isTableGm = q0 && String(q0.gmdev || '') === '1';
+    } catch (eGm0) {
+      isTableGm = false;
+    }
+
+    var lobbyId = '';
+    try {
+      var qLobby = parseQuery();
+      lobbyId = qLobby && qLobby.lobby ? String(qLobby.lobby) : '';
+    } catch (eLobby0) {
+      lobbyId = '';
+    }
+
+    function redirectToLobby() {
+      if (!lobbyId) return;
+      var q = {};
+      var v = getCacheBusterParam();
+      if (v) q.v = v;
+      q.lobby = lobbyId;
+      q.screen = 'lobby_host';
+      try {
+        var qx = parseQuery();
+        if (qx && String(qx.gmdev || '') === '1') q.gmdev = '1';
+      } catch (e) {
+        // ignore
+      }
+      setQuery(q);
+      route();
+    }
+
+    var lobbyReturnWatching = false;
+    var lobbyUnsub = null;
+    function ensureLobbyReturnWatcher() {
+      if (!lobbyId) return;
+      if (lobbyReturnWatching) return;
+      lobbyReturnWatching = true;
+      firebaseReady()
+        .then(function () {
+          return subscribeLobby(lobbyId, function (lobby) {
+            var cg = (lobby && lobby.currentGame) || null;
+            var kind = cg && cg.kind ? String(cg.kind) : '';
+            var rid = cg && cg.roomId ? String(cg.roomId) : '';
+            if (!cg || kind !== 'loveletter' || rid !== String(roomId || '')) {
+              try {
+                if (lobbyUnsub) lobbyUnsub();
+              } catch (e) {
+                // ignore
+              }
+              lobbyUnsub = null;
+              redirectToLobby();
+            }
+          });
+        })
+        .then(function (u2) {
+          lobbyUnsub = u2;
+        })
+        .catch(function () {
+          // ignore
+        });
+    }
 
     firebaseReady()
       .then(function () {
+        if (lobbyId) ensureLobbyReturnWatcher();
         return subscribeLoveLetterRoom(roomId, function (room) {
           if (!room) {
             renderError(viewEl, '部屋が見つかりません');
@@ -10114,15 +10352,16 @@
             var vy = getCacheBusterParam();
             if (vy) qy.v = vy;
             qy.room = roomId;
-            qy.player = '1';
             qy.host = '1';
             try {
               var qq2 = parseQuery();
               if (qq2 && qq2.lobby) qy.lobby = String(qq2.lobby);
+              if (qq2 && String(qq2.gmdev || '') === '1') qy.gmdev = '1';
             } catch (e1) {
               // ignore
             }
-            qy.screen = 'loveletter_player';
+            if (!isTableGm) qy.player = '1';
+            qy.screen = isTableGm ? 'loveletter_table' : 'loveletter_player';
             setQuery(qy);
             route();
             return;
@@ -10202,15 +10441,16 @@
                   var vz = getCacheBusterParam();
                   if (vz) qz.v = vz;
                   qz.room = roomId;
-                  qz.player = '1';
                   qz.host = '1';
                   try {
                     var qq3 = parseQuery();
                     if (qq3 && qq3.lobby) qz.lobby = String(qq3.lobby);
+                    if (qq3 && String(qq3.gmdev || '') === '1') qz.gmdev = '1';
                   } catch (e5) {
                     // ignore
                   }
-                  qz.screen = 'loveletter_player';
+                  if (!isTableGm) qz.player = '1';
+                  qz.screen = isTableGm ? 'loveletter_table' : 'loveletter_player';
                   setQuery(qz);
                   route();
                 })
@@ -10278,7 +10518,9 @@
         .then(function () {
           return subscribeLobby(lobbyId, function (lobby) {
             var cg = (lobby && lobby.currentGame) || null;
-            if (!cg) {
+            var kind = cg && cg.kind ? String(cg.kind) : '';
+            var rid = cg && cg.roomId ? String(cg.roomId) : '';
+            if (!cg || kind !== 'codenames' || rid !== String(roomId || '')) {
               try {
                 if (ui.lobbyUnsub) ui.lobbyUnsub();
               } catch (e) {
@@ -10452,6 +10694,7 @@
       if (backBtn && !backBtn.__ll_bound) {
         backBtn.__ll_bound = true;
         backBtn.addEventListener('click', function () {
+          if (!confirm('【注意】ゲームを中断してロビーに戻します。\nこの操作は全員の画面に反映されます。\nよろしいですか？')) return;
           var qx = parseQuery();
           var lobbyId = qx && qx.lobby ? String(qx.lobby) : '';
           if (!lobbyId) {
@@ -10490,6 +10733,34 @@
         });
       }
 
+      var abortBtn = document.getElementById('llAbortToLobby');
+      if (abortBtn && !abortBtn.__ll_bound) {
+        abortBtn.__ll_bound = true;
+        abortBtn.addEventListener('click', function () {
+          if (!confirm('【注意】ゲームを中断してロビーに戻します。\nこの操作は全員の画面に反映されます。\nよろしいですか？')) return;
+          var qx = parseQuery();
+          var lobbyId = qx && qx.lobby ? String(qx.lobby) : '';
+          if (!lobbyId) {
+            alert('ロビーIDがありません');
+            return;
+          }
+          abortBtn.disabled = true;
+          firebaseReady()
+            .then(function () {
+              return setLobbyCurrentGame(lobbyId, null);
+            })
+            .then(function () {
+              redirectToLobby();
+            })
+            .catch(function (e) {
+              alert((e && e.message) || '失敗');
+            })
+            .finally(function () {
+              abortBtn.disabled = false;
+            });
+        });
+      }
+
       var nextGameBtn = document.getElementById('llNextGame');
       if (nextGameBtn && !nextGameBtn.__ll_bound) {
         nextGameBtn.__ll_bound = true;
@@ -10515,9 +10786,7 @@
         });
       }
 
-      if (lobbyId && room && String(room.phase || '') === 'finished') {
-        ensureLobbyReturnWatcher();
-      }
+      if (lobbyId) ensureLobbyReturnWatcher();
 
       var cancelBtn = document.getElementById('llCancelPlay');
       if (cancelBtn) {
@@ -10881,9 +11150,11 @@
       var y = 50 + radius * Math.sin(rad);
       seatPos[String(pid)] = { x: x, y: y };
       var isTurnSeat = !!(turnPid && String(pid) === String(turnPid));
+      var isElimSeat = !!(r && r.eliminated && r.eliminated[String(pid)]);
       seatsHtml +=
         '<div class="ll-seat' +
         (isTurnSeat ? ' ll-seat--turn' : '') +
+        (isElimSeat ? ' ll-seat--eliminated' : '') +
         '" style="left:' +
         escapeHtml(String(x.toFixed(3))) +
         '%;top:' +
@@ -10903,6 +11174,9 @@
       if (byId && toId && String(byId) !== String(toId) && seatPos[byId] && seatPos[toId]) {
         var p1 = seatPos[byId];
         var p2 = seatPos[toId];
+        // Clamp endpoints to keep the indicator inside the visible table.
+        p1 = { x: clamp(p1.x, 8, 92), y: clamp(p1.y, 8, 92) };
+        p2 = { x: clamp(p2.x, 8, 92), y: clamp(p2.y, 8, 92) };
         var dx = p2.x - p1.x;
         var dy = p2.y - p1.y;
         var len = Math.sqrt(dx * dx + dy * dy);
@@ -10915,12 +11189,7 @@
         }
         arrowHtml =
           '<svg class="ll-table-arrow" viewBox="0 0 100 100" preserveAspectRatio="none">' +
-          '<defs>' +
-          '<marker id="llArrowHead" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="strokeWidth">' +
-          '<path d="M0,0 L6,3 L0,6 Z" fill="var(--text)"></path>' +
-          '</marker>' +
-          '</defs>' +
-          '<line x1="' +
+          '<line class="ll-table-arrow-line" x1="' +
           escapeHtml(String(p1.x.toFixed(3))) +
           '" y1="' +
           escapeHtml(String(p1.y.toFixed(3))) +
@@ -10928,7 +11197,17 @@
           escapeHtml(String(p2.x.toFixed(3))) +
           '" y2="' +
           escapeHtml(String(p2.y.toFixed(3))) +
-          '" marker-end="url(#llArrowHead)" />' +
+          '" />' +
+          '<circle class="ll-table-arrow-dot" cx="' +
+          escapeHtml(String(p1.x.toFixed(3))) +
+          '" cy="' +
+          escapeHtml(String(p1.y.toFixed(3))) +
+          '" r="2.2" />' +
+          '<circle class="ll-table-arrow-target" cx="' +
+          escapeHtml(String(p2.x.toFixed(3))) +
+          '" cy="' +
+          escapeHtml(String(p2.y.toFixed(3))) +
+          '" r="5.2" />' +
           '</svg>';
       }
     } catch (eA0) {
@@ -10960,6 +11239,10 @@
     render(
       viewEl,
       '\n    <div class="stack">\n      <div class="big">ラブレター（テーブル）</div>\n      ' +
+        (lobbyId && isHost
+          ? '<div class="row" style="justify-content:flex-end"><button id="llAbortToLobbyTable" class="ghost">ロビーへ</button></div>'
+          : '') +
+        '\n      ' +
         (phase === 'finished' ? resultHtml + '<hr />' : '') +
         '<div class="ll-table">' +
         (arrowHtml || '') +
@@ -11027,8 +11310,40 @@
       route();
     }
 
+    var lobbyReturnWatching = false;
+    var lobbyUnsub = null;
+    function ensureLobbyReturnWatcher() {
+      if (!lobbyId) return;
+      if (lobbyReturnWatching) return;
+      lobbyReturnWatching = true;
+      firebaseReady()
+        .then(function () {
+          return subscribeLobby(lobbyId, function (lobby) {
+            var cg = (lobby && lobby.currentGame) || null;
+            var kind = cg && cg.kind ? String(cg.kind) : '';
+            var rid = cg && cg.roomId ? String(cg.roomId) : '';
+            if (!cg || kind !== 'loveletter' || rid !== String(roomId || '')) {
+              try {
+                if (lobbyUnsub) lobbyUnsub();
+              } catch (e) {
+                // ignore
+              }
+              lobbyUnsub = null;
+              redirectToLobby();
+            }
+          });
+        })
+        .then(function (u2) {
+          lobbyUnsub = u2;
+        })
+        .catch(function () {
+          // ignore
+        });
+    }
+
     firebaseReady()
       .then(function () {
+        if (lobbyId) ensureLobbyReturnWatcher();
         return subscribeLoveLetterRoom(roomId, function (room) {
           if (!room) {
             renderError(viewEl, '部屋が見つかりません');
@@ -11036,6 +11351,29 @@
           }
 
           renderLoveLetterTable(viewEl, { roomId: roomId, room: room, isHost: isHost, lobbyId: lobbyId });
+
+          var abortBtn = document.getElementById('llAbortToLobbyTable');
+          if (abortBtn && !abortBtn.__ll_bound) {
+            abortBtn.__ll_bound = true;
+            abortBtn.addEventListener('click', function () {
+              if (!confirm('【注意】ゲームを中断してロビーに戻します。\nこの操作は全員の画面に反映されます。\nよろしいですか？')) return;
+              if (!lobbyId) return;
+              abortBtn.disabled = true;
+              firebaseReady()
+                .then(function () {
+                  return setLobbyCurrentGame(lobbyId, null);
+                })
+                .then(function () {
+                  redirectToLobby();
+                })
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  abortBtn.disabled = false;
+                });
+            });
+          }
 
           var nextBtn = document.getElementById('llNextToLobby');
           if (nextBtn && !nextBtn.__ll_bound) {
@@ -11127,8 +11465,40 @@
       route();
     }
 
+    var lobbyReturnWatching = false;
+    var lobbyUnsub = null;
+    function ensureLobbyReturnWatcher() {
+      if (!lobbyId) return;
+      if (lobbyReturnWatching) return;
+      lobbyReturnWatching = true;
+      firebaseReady()
+        .then(function () {
+          return subscribeLobby(lobbyId, function (lobby) {
+            var cg = (lobby && lobby.currentGame) || null;
+            var kind = cg && cg.kind ? String(cg.kind) : '';
+            var rid = cg && cg.roomId ? String(cg.roomId) : '';
+            if (!cg || kind !== 'codenames' || rid !== String(roomId || '')) {
+              try {
+                if (lobbyUnsub) lobbyUnsub();
+              } catch (e) {
+                // ignore
+              }
+              lobbyUnsub = null;
+              redirectToLobby();
+            }
+          });
+        })
+        .then(function (u2) {
+          lobbyUnsub = u2;
+        })
+        .catch(function () {
+          // ignore
+        });
+    }
+
     firebaseReady()
       .then(function () {
+        if (lobbyId) ensureLobbyReturnWatcher();
         return subscribeCodenamesRoom(roomId, function (room) {
           if (!room) {
             renderError(viewEl, '部屋が見つかりません');
@@ -11154,6 +11524,54 @@
           timerHandle = setInterval(function () {
             rerenderCnTimer();
           }, 250);
+
+          var abortBtn = document.getElementById('cnAbortToLobbyTable');
+          if (abortBtn && !abortBtn.__cn_bound) {
+            abortBtn.__cn_bound = true;
+            abortBtn.addEventListener('click', function () {
+              if (!confirm('【注意】ゲームを中断してロビーに戻します。\nこの操作は全員の画面に反映されます。\nよろしいですか？')) return;
+              if (!lobbyId) return;
+              abortBtn.disabled = true;
+              firebaseReady()
+                .then(function () {
+                  return setLobbyCurrentGame(lobbyId, null);
+                })
+                .then(function () {
+                  redirectToLobby();
+                })
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  abortBtn.disabled = false;
+                });
+            });
+          }
+
+          if (lobbyId) ensureLobbyReturnWatcher();
+
+          var abortBtn = document.getElementById('cnAbortToLobby');
+          if (abortBtn && !abortBtn.__cn_bound) {
+            abortBtn.__cn_bound = true;
+            abortBtn.addEventListener('click', function () {
+              if (!confirm('【注意】ゲームを中断してロビーに戻します。\nこの操作は全員の画面に反映されます。\nよろしいですか？')) return;
+              if (!lobbyId) return;
+              abortBtn.disabled = true;
+              firebaseReady()
+                .then(function () {
+                  return setLobbyCurrentGame(lobbyId, null);
+                })
+                .then(function () {
+                  redirectToLobby();
+                })
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  abortBtn.disabled = false;
+                });
+            });
+          }
 
           var nextBtn = document.getElementById('cnNextToLobby');
           if (nextBtn && !nextBtn.__cn_bound) {
@@ -11347,6 +11765,10 @@
     if (screen === 'loveletter_table') {
       if (!roomId) return routeHome();
       return routeLoveLetterTable(roomId, isHost);
+    }
+
+    if (screen === 'loveletter_sim_table') {
+      return routeLoveLetterSimTable();
     }
 
     if (screen === 'codenames_rejoin') {
@@ -12034,6 +12456,7 @@
           if (backBtn && !backBtn.__cn_bound) {
             backBtn.__cn_bound = true;
             backBtn.addEventListener('click', function () {
+              if (!confirm('【注意】ゲームを中断してロビーに戻します。\nこの操作は全員の画面に反映されます。\nよろしいですか？')) return;
               var qx = parseQuery();
               var lobbyId = qx && qx.lobby ? String(qx.lobby) : '';
               if (!lobbyId) {
@@ -12061,10 +12484,6 @@
                   backBtn.disabled = false;
                 });
             });
-          }
-
-          if (lobbyId && room && String(room.phase || '') === 'finished') {
-            ensureLobbyReturnWatcher();
           }
 
           var changeBtn = document.getElementById('cnChangePlayers');
@@ -12284,6 +12703,15 @@
   try {
     viewEl = qs('#view');
     setupRulesButton();
+    // --- Version string with alphabetic suffix ---
+    var versionSuffix = 'a'; // ← Change this letter for each push (a, b, c, ...)
+    var versionDate = '20260101'; // YYYYMMDD
+    var versionString = 'v' + versionDate + versionSuffix;
+    var versionEl = document.getElementById('versionString');
+    if (versionEl) {
+      versionEl.textContent = versionString;
+      versionEl.title = 'Build: ' + versionDate + ' Suffix: ' + versionSuffix;
+    }
     var buildInfoEl = document.querySelector('#buildInfo');
     if (buildInfoEl) {
       // Save vertical space.
