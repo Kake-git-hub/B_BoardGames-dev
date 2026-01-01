@@ -6719,25 +6719,22 @@
       for (var i = 0; i < ids.length; i++) {
         players[ids[i]] = { name: 'P' + String(i + 1), joinedAt: serverNowMs(), lastSeenAt: serverNowMs() };
       }
-      var deck = [];
-      // Use known ranks so images render.
-      for (var j = 0; j < 40; j++) {
-        deck.push(String(1 + randomInt(8)));
-      }
-
-      function draw1() {
-        if (deck && deck.length) return String(deck.pop());
-        return String(1 + randomInt(8));
-      }
-
-      var grave = [draw1()];
+      var deck = llShuffle(llBuildDeck({ extraCards: [] }));
+      var grave = [];
+      // Match production: discard 1 face-down before dealing.
+      if (deck.length) grave.push(String(deck.pop()));
       var eliminated = {};
       for (var k = 0; k < ids.length; k++) eliminated[ids[k]] = false;
 
       var hands = {};
       for (var h = 0; h < ids.length; h++) {
-        hands[ids[h]] = [draw1(), draw1()];
+        hands[ids[h]] = [];
+        if (deck.length) hands[ids[h]].push(String(deck.pop()));
       }
+
+      // Start player draws 2nd card (like production).
+      var startId = ids[0];
+      if (startId && hands[startId] && deck.length) hands[startId].push(String(deck.pop()));
       sim = {
         room: {
           createdAt: serverNowMs(),
@@ -6828,6 +6825,12 @@
       // Occasionally eliminate to test the hatch styling.
       if (target && randomInt(4) === 0) {
         eliminated[target] = true;
+        try {
+          if (hands) hands[target] = [];
+          r.hands = hands;
+        } catch (eEl0) {
+          // ignore
+        }
       }
       r.eliminated = eliminated;
 
@@ -11274,16 +11277,12 @@
         var dx = p2.x - p1.x;
         var dy = p2.y - p1.y;
         var len = Math.sqrt(dx * dx + dy * dy);
-        var pad = 6;
         if (len > 0.0001) {
           var ux = dx / len;
           var uy = dy / len;
-          p1 = { x: p1.x + ux * pad, y: p1.y + uy * pad };
-          p2 = { x: p2.x - ux * pad, y: p2.y - uy * pad };
-
           // Simple thin arrow head geometry.
-          var headLen = 4.6;
-          var headW = 2.8;
+          var headLen = 2.0;
+          var headW = 1.2;
           var base = { x: p2.x - ux * headLen, y: p2.y - uy * headLen };
           var px = -uy;
           var py = ux;
