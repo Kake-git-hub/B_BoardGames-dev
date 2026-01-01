@@ -3842,12 +3842,7 @@
       var bv0 = llCardRank(b0);
       var total0 = (av0 || 0) + (bv0 || 0);
       if ((a0 === '7' || b0 === '7') && total0 >= 12) {
-        // eliminate and store reveal
-        eliminated[startId] = true;
-        protectedMap[startId] = false;
-        for (var di0 = 0; di0 < startHand.length; di0++) discards[startId].push(String(startHand[di0]));
-        hands[startId] = [];
-        // keep turn on startId until ack
+        // Keep turn on startId until ack; apply elimination after the modal is advanced.
         return {
           no: parseIntSafe(room && room.round && room.round.no, 0) + 1,
           state: 'playing',
@@ -3866,7 +3861,7 @@
           protected: protectedMap,
           peek: null,
           reveal: { type: 'minister_overload', by: startId, had: '7', drew: b0 },
-          waitFor: { type: 'minister_overload_ack', by: startId },
+          waitFor: { type: 'minister_overload_ack', by: startId, pending: { type: 'eliminate', pid: startId, reason: 'minister_overload' } },
           winners: []
         };
       }
@@ -4306,17 +4301,14 @@
           // Minister overload: if you have base '7' and your 2-card total >= 12, you immediately lose.
             var total = (llCardRank(before) || 0) + (llCardRank(drawn2) || 0);
             if ((before === '7' || String(drawn2) === '7') && total >= 12) {
-              // eliminate and pause until ack
-              eliminated[next.id] = true;
-              protectedMap[next.id] = false;
-              for (var mdi = 0; mdi < nextHand.length; mdi++) pushDiscard(next.id, nextHand[mdi]);
-              hands[next.id] = [];
+              // Pause and apply elimination after ack.
+              hands[next.id] = nextHand;
               round.hands = hands;
               round.discards = discards;
               round.eliminated = eliminated;
               round.protected = protectedMap;
               round.reveal = { type: 'minister_overload', by: next.id, had: '7', drew: String(drawn2) };
-              round.waitFor = { type: 'minister_overload_ack', by: next.id };
+              round.waitFor = { type: 'minister_overload_ack', by: next.id, pending: { type: 'eliminate', pid: next.id, reason: 'minister_overload' } };
               nextRoom.round = round;
               return nextRoom;
           }
@@ -11341,6 +11333,7 @@
       var rev = r && r.reveal ? r.reveal : null;
       var byId = rev && rev.by ? String(rev.by) : '';
       var toId = rev && rev.target ? String(rev.target) : '';
+      var isBidirectional = !!(rev && String(rev.type || '') === 'general_swap');
       if (!byId || !toId || String(byId) === String(toId)) {
         svg.innerHTML = '';
         return;
@@ -11383,6 +11376,16 @@
         };
       }
 
+      function seatPad(el) {
+        try {
+          var rc = el.getBoundingClientRect();
+          var r0 = Math.max(12, Math.min(48, Math.min(rc.width, rc.height) / 2));
+          return r0 + 10;
+        } catch (e) {
+          return 26;
+        }
+      }
+
       var p1 = centerOf(byEl);
       var p2 = centerOf(toEl);
       var dx = p2.x - p1.x;
@@ -11398,36 +11401,76 @@
       var minDim = Math.min(w, h);
       var headLen = Math.max(12, Math.min(26, minDim * 0.045));
       var headW = headLen * 0.65;
-      var base = { x: p2.x - ux * headLen, y: p2.y - uy * headLen };
+
+      // Shorten from both ends so arrows do not overlap player name bubbles.
+      var pad1 = seatPad(byEl);
+      var pad2 = seatPad(toEl);
+      var sp1 = { x: p1.x + ux * pad1, y: p1.y + uy * pad1 };
+      var sp2 = { x: p2.x - ux * pad2, y: p2.y - uy * pad2 };
+      var sdx = sp2.x - sp1.x;
+      var sdy = sp2.y - sp1.y;
+      var slen = Math.sqrt(sdx * sdx + sdy * sdy);
+      if (!(slen > headLen * (isBidirectional ? 2.4 : 1.6))) {
+        svg.innerHTML = '';
+        return;
+      }
+
+      // Arrow head at the "to" end.
+      var tip2 = sp2;
+      var base2 = { x: tip2.x - ux * headLen, y: tip2.y - uy * headLen };
       var px = -uy;
       var py = ux;
-      var left = { x: base.x + px * headW, y: base.y + py * headW };
-      var right = { x: base.x - px * headW, y: base.y - py * headW };
+      var left2 = { x: base2.x + px * headW, y: base2.y + py * headW };
+      var right2 = { x: base2.x - px * headW, y: base2.y - py * headW };
+
+      // Optional arrow head at the "from" end (General swap).
+      var tip1 = sp1;
+      var base1 = { x: tip1.x + ux * headLen, y: tip1.y + uy * headLen };
+      var left1 = { x: base1.x + px * headW, y: base1.y + py * headW };
+      var right1 = { x: base1.x - px * headW, y: base1.y - py * headW };
+
+      var lineStart = isBidirectional ? base1 : sp1;
+      var lineEnd = base2;
 
       svg.setAttribute('viewBox', '0 0 ' + String(w) + ' ' + String(h));
       svg.setAttribute('preserveAspectRatio', 'none');
       svg.innerHTML =
         '<line class="ll-table-arrow-line" x1="' +
-        escapeHtml(String(p1.x.toFixed(2))) +
+        escapeHtml(String(lineStart.x.toFixed(2))) +
         '" y1="' +
-        escapeHtml(String(p1.y.toFixed(2))) +
+        escapeHtml(String(lineStart.y.toFixed(2))) +
         '" x2="' +
-        escapeHtml(String(base.x.toFixed(2))) +
+        escapeHtml(String(lineEnd.x.toFixed(2))) +
         '" y2="' +
-        escapeHtml(String(base.y.toFixed(2))) +
+        escapeHtml(String(lineEnd.y.toFixed(2))) +
         '" />' +
+        (isBidirectional
+          ? '<path class="ll-table-arrow-head" d="M ' +
+            escapeHtml(String(tip1.x.toFixed(2))) +
+            ' ' +
+            escapeHtml(String(tip1.y.toFixed(2))) +
+            ' L ' +
+            escapeHtml(String(left1.x.toFixed(2))) +
+            ' ' +
+            escapeHtml(String(left1.y.toFixed(2))) +
+            ' L ' +
+            escapeHtml(String(right1.x.toFixed(2))) +
+            ' ' +
+            escapeHtml(String(right1.y.toFixed(2))) +
+            ' Z" />'
+          : '') +
         '<path class="ll-table-arrow-head" d="M ' +
-        escapeHtml(String(p2.x.toFixed(2))) +
+        escapeHtml(String(tip2.x.toFixed(2))) +
         ' ' +
-        escapeHtml(String(p2.y.toFixed(2))) +
+        escapeHtml(String(tip2.y.toFixed(2))) +
         ' L ' +
-        escapeHtml(String(left.x.toFixed(2))) +
+        escapeHtml(String(left2.x.toFixed(2))) +
         ' ' +
-        escapeHtml(String(left.y.toFixed(2))) +
+        escapeHtml(String(left2.y.toFixed(2))) +
         ' L ' +
-        escapeHtml(String(right.x.toFixed(2))) +
+        escapeHtml(String(right2.x.toFixed(2))) +
         ' ' +
-        escapeHtml(String(right.y.toFixed(2))) +
+        escapeHtml(String(right2.y.toFixed(2))) +
         ' Z" />';
 
       // One extra pass after layout settles (fonts / async measurements).
