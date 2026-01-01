@@ -7066,31 +7066,41 @@
         var errEl = document.getElementById('qrError');
         var wrapEl = document.getElementById('qrWrap');
         if (errEl) errEl.textContent = '';
+
+        function showAsRemoteImage() {
+          if (!wrapEl) return resolve();
+          var src =
+            'https://api.qrserver.com/v1/create-qr-code/?size=' +
+            encodeURIComponent(String(w) + 'x' + String(w)) +
+            '&data=' +
+            encodeURIComponent(String(joinUrl || ''));
+          wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(src) + '" />';
+          if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
+          return resolve();
+        }
+
         if (!canvas) {
           if (errEl) errEl.textContent = 'QR表示領域が見つかりません。';
           return resolve();
         }
         var qr = window.QRCode || window.qrcode || window.QR;
         if (!qr || !qr.toCanvas) {
-          if (errEl) errEl.textContent = 'QRの生成に失敗しました（ライブラリ未読込）。';
-          return resolve();
+          return showAsRemoteImage();
         }
 
         function showAsImage() {
-          if (!qr.toDataURL || !wrapEl) return;
+          if (!qr.toDataURL || !wrapEl) return showAsRemoteImage();
           try {
             qr.toDataURL(joinUrl, { margin: 1, width: w }, function (err, url) {
               if (err || !url) {
-                if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-                return resolve();
+                return showAsRemoteImage();
               }
               wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />';
               if (errEl) errEl.textContent = '（QRは画像で表示しています）';
               return resolve();
             });
           } catch (e) {
-            if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-            return resolve();
+            return showAsRemoteImage();
           }
         }
 
@@ -7112,7 +7122,7 @@
             }
             return allZero || allWhite;
           } catch (e) {
-            return false;
+            return true;
           }
         }
 
@@ -8704,6 +8714,19 @@
         var errEl = document.getElementById('qrError');
         var wrapEl = document.getElementById('qrWrap');
         if (errEl) errEl.textContent = '';
+
+        function showAsRemoteImage() {
+          if (!wrapEl) return resolve();
+          var src =
+            'https://api.qrserver.com/v1/create-qr-code/?size=' +
+            encodeURIComponent('240x240') +
+            '&data=' +
+            encodeURIComponent(String(joinUrl || ''));
+          wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(src) + '" />';
+          if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
+          return resolve();
+        }
+
         if (!canvas) {
           if (errEl) errEl.textContent = 'QR表示領域が見つかりません。';
           return resolve();
@@ -8711,25 +8734,22 @@
 
         var qr = window.QRCode || window.qrcode || window.QR;
         if (!qr || !qr.toCanvas) {
-          if (errEl) errEl.textContent = 'QRの生成に失敗しました（ライブラリ未読込）。';
-          return resolve();
+          return showAsRemoteImage();
         }
 
         function showAsImage() {
-          if (!qr.toDataURL || !wrapEl) return;
+          if (!qr.toDataURL || !wrapEl) return showAsRemoteImage();
           try {
             qr.toDataURL(joinUrl, { margin: 1, width: 240 }, function (err, url) {
               if (err || !url) {
-                if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-                return resolve();
+                return showAsRemoteImage();
               }
               wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />';
               if (errEl) errEl.textContent = '（QRは画像で表示しています）';
               return resolve();
             });
           } catch (e) {
-            if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-            return resolve();
+            return showAsRemoteImage();
           }
         }
 
@@ -8752,8 +8772,8 @@
             }
             return allZero || allWhite;
           } catch (e) {
-            // If we can't read pixels, don't assume blank.
-            return false;
+            // If we can't read pixels (e.g., SecurityError), treat as blank and fallback.
+            return true;
           }
         }
 
@@ -10210,31 +10230,41 @@
         var errEl = document.getElementById('qrError');
         var wrapEl = document.getElementById('qrWrap');
         if (errEl) errEl.textContent = '';
+
+        function showAsRemoteImage() {
+          if (!wrapEl) return resolve();
+          var src =
+            'https://api.qrserver.com/v1/create-qr-code/?size=' +
+            encodeURIComponent('240x240') +
+            '&data=' +
+            encodeURIComponent(String(joinUrl || ''));
+          wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(src) + '" />';
+          if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
+          return resolve();
+        }
+
         if (!canvas) {
           if (errEl) errEl.textContent = 'QR表示領域が見つかりません。';
           return resolve();
         }
         var qr = window.QRCode || window.qrcode || window.QR;
         if (!qr || !qr.toCanvas) {
-          if (errEl) errEl.textContent = 'QRの生成に失敗しました（ライブラリ未読込）。';
-          return resolve();
+          return showAsRemoteImage();
         }
 
         function showAsImage() {
-          if (!qr.toDataURL || !wrapEl) return;
+          if (!qr.toDataURL || !wrapEl) return showAsRemoteImage();
           try {
             qr.toDataURL(joinUrl, { margin: 1, width: 240 }, function (err, url) {
               if (err || !url) {
-                if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-                return resolve();
+                return showAsRemoteImage();
               }
               wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />';
               if (errEl) errEl.textContent = '（QRは画像で表示しています）';
               return resolve();
             });
           } catch (e) {
-            if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-            return resolve();
+            return showAsRemoteImage();
           }
         }
 
@@ -10256,7 +10286,7 @@
             }
             return allZero || allWhite;
           } catch (e) {
-            return false;
+            return true;
           }
         }
 
@@ -12309,31 +12339,41 @@
         var errEl = document.getElementById('qrError');
         var wrapEl = document.getElementById('qrWrap');
         if (errEl) errEl.textContent = '';
+
+        function showAsRemoteImage() {
+          if (!wrapEl) return resolve();
+          var src =
+            'https://api.qrserver.com/v1/create-qr-code/?size=' +
+            encodeURIComponent('240x240') +
+            '&data=' +
+            encodeURIComponent(String(joinUrl || ''));
+          wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(src) + '" />';
+          if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
+          return resolve();
+        }
+
         if (!canvas) {
           if (errEl) errEl.textContent = 'QR表示領域が見つかりません。';
           return resolve();
         }
         var qr = window.QRCode || window.qrcode || window.QR;
         if (!qr || !qr.toCanvas) {
-          if (errEl) errEl.textContent = 'QRの生成に失敗しました（ライブラリ未読込）。';
-          return resolve();
+          return showAsRemoteImage();
         }
 
         function showAsImage() {
-          if (!qr.toDataURL || !wrapEl) return;
+          if (!qr.toDataURL || !wrapEl) return showAsRemoteImage();
           try {
             qr.toDataURL(joinUrl, { margin: 1, width: 240 }, function (err, url) {
               if (err || !url) {
-                if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-                return resolve();
+                return showAsRemoteImage();
               }
               wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />';
               if (errEl) errEl.textContent = '（QRは画像で表示しています）';
               return resolve();
             });
           } catch (e) {
-            if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-            return resolve();
+            return showAsRemoteImage();
           }
         }
 
@@ -12355,7 +12395,7 @@
             }
             return allZero || allWhite;
           } catch (e) {
-            return false;
+            return true;
           }
         }
 
