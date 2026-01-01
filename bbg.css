@@ -179,7 +179,7 @@ body.ll-table-screen .app{max-width:980px}
 .ll-seat--eliminated .ll-seat-card::before{transform:translateY(-50%) rotate(45deg)}
 .ll-seat--eliminated .ll-seat-card::after{transform:translateY(-50%) rotate(-45deg)}
 .ll-seat--turn.ll-seat--eliminated .ll-seat-card::before,.ll-seat--turn.ll-seat--eliminated .ll-seat-card::after{background:var(--bg);opacity:.55}
-.ll-seat--effect .ll-seat-card{box-shadow:0 0 0 3px var(--accent)}
+.ll-seat--effect .ll-seat-card{box-shadow:0 0 0 6px var(--accent)}
 .ll-table-center{display:flex;gap:24px;align-items:flex-start;justify-content:center;flex-wrap:wrap}
 .ll-table-pile{display:flex;flex-direction:column;gap:8px;align-items:center}
 .ll-table-pile-count{font-variant-numeric:tabular-nums}

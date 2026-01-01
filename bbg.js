@@ -6603,10 +6603,27 @@
   function routeHome() {
     setHeaderLobbyId('');
 
+    // Allow forcing the home screen even on a previously restricted participant device.
+    // Usage: add ?home=1 (or ?forceHome=1) to the URL.
+    var forceHome = false;
+    try {
+      var qForce = parseQuery();
+      if (qForce && (String(qForce.home || '') === '1' || String(qForce.forceHome || '') === '1')) {
+        forceHome = true;
+        try {
+          setActiveLobby('', false);
+        } catch (eForce2) {
+          // ignore
+        }
+      }
+    } catch (eForce1) {
+      forceHome = false;
+    }
+
     // QR参加者はホームに戻れない（待機画面へ戻す）
     try {
       var activeLobbyId = loadActiveLobbyId();
-      if (activeLobbyId && isRestrictedDevice()) {
+      if (!forceHome && activeLobbyId && isRestrictedDevice()) {
         var q0 = {};
         var v0 = getCacheBusterParam();
         if (v0) q0.v = v0;
@@ -6865,6 +6882,7 @@
       var inner = document.getElementById('llSimView');
       if (inner) {
         renderLoveLetterTable(inner, { roomId: 'SIM', room: sim.room, isHost: true, lobbyId: '' });
+        updateLoveLetterTableEffectArrow(inner, sim.room);
       }
 
       var handsEl = document.getElementById('llSimHands');
@@ -11236,7 +11254,6 @@
     var seatsHtml = '';
     var n = order.length || 0;
     var radius = 42;
-    var seatPos = {};
     for (var si = 0; si < n; si++) {
       var pid = order[si];
       if (!pid) continue;
@@ -11246,7 +11263,6 @@
       var rad = (Math.PI / 180) * angle;
       var x = 50 + radius * Math.cos(rad);
       var y = 50 + radius * Math.sin(rad);
-      seatPos[String(pid)] = { x: x, y: y };
       var isTurnSeat = !!(turnPid && String(pid) === String(turnPid));
       var isElimSeat = !!(r && r.eliminated && r.eliminated[String(pid)]);
       var isSoloEffectSeat = !!(effectSoloId && String(pid) === String(effectSoloId));
@@ -11255,6 +11271,8 @@
         (isTurnSeat ? ' ll-seat--turn' : '') +
         (isElimSeat ? ' ll-seat--eliminated' : '') +
         (isSoloEffectSeat ? ' ll-seat--effect' : '') +
+        '" data-ll-pid="' +
+        escapeHtml(String(pid)) +
         '" style="left:' +
         escapeHtml(String(x.toFixed(3))) +
         '%;top:' +
@@ -11266,59 +11284,8 @@
         '</div>';
     }
 
-    var arrowHtml = '';
-    try {
-      if (byId && toId && String(byId) !== String(toId) && seatPos[byId] && seatPos[toId]) {
-        var p1 = seatPos[byId];
-        var p2 = seatPos[toId];
-        // Clamp endpoints to keep the indicator inside the visible table.
-        p1 = { x: clamp(p1.x, 8, 92), y: clamp(p1.y, 8, 92) };
-        p2 = { x: clamp(p2.x, 8, 92), y: clamp(p2.y, 8, 92) };
-        var dx = p2.x - p1.x;
-        var dy = p2.y - p1.y;
-        var len = Math.sqrt(dx * dx + dy * dy);
-        if (len > 0.0001) {
-          var ux = dx / len;
-          var uy = dy / len;
-          // Simple thin arrow head geometry.
-          var headLen = 2.0;
-          var headW = 1.2;
-          var base = { x: p2.x - ux * headLen, y: p2.y - uy * headLen };
-          var px = -uy;
-          var py = ux;
-          var left = { x: base.x + px * headW, y: base.y + py * headW };
-          var right = { x: base.x - px * headW, y: base.y - py * headW };
-
-          arrowHtml =
-            '<svg class="ll-table-arrow" viewBox="0 0 100 100" preserveAspectRatio="none">' +
-            '<line class="ll-table-arrow-line" x1="' +
-            escapeHtml(String(p1.x.toFixed(3))) +
-            '" y1="' +
-            escapeHtml(String(p1.y.toFixed(3))) +
-            '" x2="' +
-            escapeHtml(String(base.x.toFixed(3))) +
-            '" y2="' +
-            escapeHtml(String(base.y.toFixed(3))) +
-            '" />' +
-            '<path class="ll-table-arrow-head" d="M ' +
-            escapeHtml(String(p2.x.toFixed(3))) +
-            ' ' +
-            escapeHtml(String(p2.y.toFixed(3))) +
-            ' L ' +
-            escapeHtml(String(left.x.toFixed(3))) +
-            ' ' +
-            escapeHtml(String(left.y.toFixed(3))) +
-            ' L ' +
-            escapeHtml(String(right.x.toFixed(3))) +
-            ' ' +
-            escapeHtml(String(right.y.toFixed(3))) +
-            ' Z" />' +
-            '</svg>';
-        }
-      }
-    } catch (eA0) {
-      arrowHtml = '';
-    }
+    // Effect arrow is drawn from real DOM positions after rendering to avoid layout-dependent drift.
+    var arrowHtml = '<svg class="ll-table-arrow" data-ll-arrow="1" preserveAspectRatio="none" aria-hidden="true"></svg>';
 
     var resultHtml = '';
     if (phase === 'finished' && room && room.result && Array.isArray(room.result.winners)) {
@@ -11351,7 +11318,7 @@
         '\n      ' +
         (phase === 'finished' ? resultHtml + '<hr />' : '') +
         '<div class="ll-table">' +
-        (arrowHtml || '') +
+        arrowHtml +
         seatsHtml +
         (facedownHtml || '') +
         '<div class="ll-table-inner">' +
@@ -11360,6 +11327,128 @@
         '</div>' +
         '\n    </div>\n  '
     );
+  }
+
+  function updateLoveLetterTableEffectArrow(rootEl, room, _attempted) {
+    try {
+      if (!rootEl) return;
+      var tableEl = rootEl.querySelector ? rootEl.querySelector('.ll-table') : null;
+      if (!tableEl) return;
+      var svg = tableEl.querySelector ? tableEl.querySelector('svg.ll-table-arrow[data-ll-arrow="1"]') : null;
+      if (!svg) return;
+
+      var r = room && room.round ? room.round : null;
+      var rev = r && r.reveal ? r.reveal : null;
+      var byId = rev && rev.by ? String(rev.by) : '';
+      var toId = rev && rev.target ? String(rev.target) : '';
+      if (!byId || !toId || String(byId) === String(toId)) {
+        svg.innerHTML = '';
+        return;
+      }
+
+      var byEl = null;
+      var toEl = null;
+      var seatEls = tableEl.querySelectorAll ? tableEl.querySelectorAll('.ll-seat') : [];
+      for (var i = 0; i < seatEls.length; i++) {
+        var el = seatEls[i];
+        var pid = '';
+        try {
+          pid = String(el && el.getAttribute ? el.getAttribute('data-ll-pid') : '');
+        } catch (ePid) {
+          pid = '';
+        }
+        if (!pid) continue;
+        if (!byEl && pid === byId) byEl = el;
+        if (!toEl && pid === toId) toEl = el;
+        if (byEl && toEl) break;
+      }
+      if (!byEl || !toEl) {
+        svg.innerHTML = '';
+        return;
+      }
+
+      var tableRect = tableEl.getBoundingClientRect();
+      var w = tableRect && tableRect.width ? tableRect.width : 0;
+      var h = tableRect && tableRect.height ? tableRect.height : 0;
+      if (!(w > 0 && h > 0)) {
+        svg.innerHTML = '';
+        return;
+      }
+
+      function centerOf(el) {
+        var rc = el.getBoundingClientRect();
+        return {
+          x: (rc.left + rc.width / 2) - tableRect.left,
+          y: (rc.top + rc.height / 2) - tableRect.top
+        };
+      }
+
+      var p1 = centerOf(byEl);
+      var p2 = centerOf(toEl);
+      var dx = p2.x - p1.x;
+      var dy = p2.y - p1.y;
+      var len = Math.sqrt(dx * dx + dy * dy);
+      if (!(len > 0.0001)) {
+        svg.innerHTML = '';
+        return;
+      }
+
+      var ux = dx / len;
+      var uy = dy / len;
+      var minDim = Math.min(w, h);
+      var headLen = Math.max(12, Math.min(26, minDim * 0.045));
+      var headW = headLen * 0.65;
+      var base = { x: p2.x - ux * headLen, y: p2.y - uy * headLen };
+      var px = -uy;
+      var py = ux;
+      var left = { x: base.x + px * headW, y: base.y + py * headW };
+      var right = { x: base.x - px * headW, y: base.y - py * headW };
+
+      svg.setAttribute('viewBox', '0 0 ' + String(w) + ' ' + String(h));
+      svg.setAttribute('preserveAspectRatio', 'none');
+      svg.innerHTML =
+        '<line class="ll-table-arrow-line" x1="' +
+        escapeHtml(String(p1.x.toFixed(2))) +
+        '" y1="' +
+        escapeHtml(String(p1.y.toFixed(2))) +
+        '" x2="' +
+        escapeHtml(String(base.x.toFixed(2))) +
+        '" y2="' +
+        escapeHtml(String(base.y.toFixed(2))) +
+        '" />' +
+        '<path class="ll-table-arrow-head" d="M ' +
+        escapeHtml(String(p2.x.toFixed(2))) +
+        ' ' +
+        escapeHtml(String(p2.y.toFixed(2))) +
+        ' L ' +
+        escapeHtml(String(left.x.toFixed(2))) +
+        ' ' +
+        escapeHtml(String(left.y.toFixed(2))) +
+        ' L ' +
+        escapeHtml(String(right.x.toFixed(2))) +
+        ' ' +
+        escapeHtml(String(right.y.toFixed(2))) +
+        ' Z" />';
+
+      // One extra pass after layout settles (fonts / async measurements).
+      if (!_attempted && typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(function () {
+          try {
+            updateLoveLetterTableEffectArrow(rootEl, room, true);
+          } catch (e2) {
+            // ignore
+          }
+        });
+      }
+    } catch (e0) {
+      try {
+        var tableEl2 = rootEl && rootEl.querySelector ? rootEl.querySelector('.ll-table') : null;
+        var svg2 = tableEl2 && tableEl2.querySelector ? tableEl2.querySelector('svg.ll-table-arrow[data-ll-arrow="1"]') : null;
+        if (svg2) svg2.innerHTML = '';
+      } catch (e1) {
+        // ignore
+      }
+    }
   }
 
   function routeLoveLetterTable(roomId, isHost) {
@@ -11457,6 +11546,7 @@
           }
 
           renderLoveLetterTable(viewEl, { roomId: roomId, room: room, isHost: isHost, lobbyId: lobbyId });
+          updateLoveLetterTableEffectArrow(viewEl, room);
 
           var abortBtn = document.getElementById('llAbortToLobbyTable');
           if (abortBtn && !abortBtn.__ll_bound) {
