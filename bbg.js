@@ -7130,18 +7130,18 @@
           qr.toCanvas(canvas, joinUrl, { margin: 1, width: w }, function (err) {
             if (err) {
               if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-              showAsImage();
+              showAsRemoteImage();
               return;
             }
             if (looksBlank(canvas)) {
-              showAsImage();
+              showAsRemoteImage();
               return;
             }
             resolve();
           });
         } catch (e) {
           if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-          showAsImage();
+          showAsRemoteImage();
         }
       });
     }
@@ -8781,18 +8781,18 @@
           qr.toCanvas(canvas, joinUrl, { margin: 1, width: 240 }, function (err) {
             if (err) {
               if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-              showAsImage();
+              showAsRemoteImage();
               return;
             }
             if (looksBlank(canvas)) {
-              showAsImage();
+              showAsRemoteImage();
               return;
             }
             resolve();
           });
         } catch (e) {
           if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-          showAsImage();
+          showAsRemoteImage();
         }
       });
     }
@@ -10294,18 +10294,18 @@
           qr.toCanvas(canvas, joinUrl, { margin: 1, width: 240 }, function (err) {
             if (err) {
               if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-              showAsImage();
+              showAsRemoteImage();
               return;
             }
             if (looksBlank(canvas)) {
-              showAsImage();
+              showAsRemoteImage();
               return;
             }
             resolve();
           });
         } catch (e) {
           if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-          showAsImage();
+          showAsRemoteImage();
         }
       });
     }
@@ -12403,18 +12403,18 @@
           qr.toCanvas(canvas, joinUrl, { margin: 1, width: 240 }, function (err) {
             if (err) {
               if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-              showAsImage();
+              showAsRemoteImage();
               return;
             }
             if (looksBlank(canvas)) {
-              showAsImage();
+              showAsRemoteImage();
               return;
             }
             resolve();
           });
         } catch (e) {
           if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-          showAsImage();
+          showAsRemoteImage();
         }
       });
     }
