@@ -5342,6 +5342,49 @@
         '</div>';
     }
 
+    var hanninSetupHtml = '';
+    if (selectedKind === 'hannin') {
+      var listHtmlH = '';
+      for (var iH = 0; iH < order.length; iH++) {
+        var midH = String(order[iH] || '');
+        if (!midH) continue;
+        var mH = members[midH] || {};
+        var nmH = String(mH.name || '').trim();
+        if (!nmH) nmH = '（無名）';
+
+        listHtmlH +=
+          '<div class="row" style="align-items:center; gap:8px">' +
+          '<div class="muted" style="min-width:18px">' +
+          (iH + 1) +
+          '</div>' +
+          '<div style="flex:1"><b>' +
+          escapeHtml(nmH) +
+          '</b></div>' +
+          '<button class="ghost lobbyOrderUp" data-mid="' +
+          escapeHtml(midH) +
+          '" ' +
+          (iH === 0 ? 'disabled' : '') +
+          '>↑</button>' +
+          '<button class="ghost lobbyOrderDown" data-mid="' +
+          escapeHtml(midH) +
+          '" ' +
+          (iH === order.length - 1 ? 'disabled' : '') +
+          '>↓</button>' +
+          '</div>';
+      }
+      if (!listHtmlH) listHtmlH = '<div class="muted">参加者がいません。</div>';
+
+      hanninSetupHtml =
+        '<hr />' +
+        '<div class="stack">' +
+        '<div class="muted">順番決め（犯人は踊る）</div>' +
+        listHtmlH +
+        '<div class="row">' +
+        '<button id="lobbyShuffle" class="ghost">シャッフル</button>' +
+        '</div>' +
+        '</div>';
+    }
+
     var codenamesSetupHtml = '';
     if (selectedKind === 'codenames') {
       var assign = (lobby && lobby.codenamesAssign) || {};
@@ -5443,6 +5486,7 @@
         escapeHtml(currentLabel || '未開始') +
         '</div>\n      </div>' +
         loveletterSetupHtml +
+        hanninSetupHtml +
         codenamesSetupHtml +
         '\n\n      <hr />\n\n      <div class="row">\n        <button id="lobbyStartGame" class="primary">ゲーム開始</button>\n      </div>\n\n      <div id="lobbyHostError" class="form-error" role="alert"></div>\n    </div>\n  '
     );
@@ -7729,7 +7773,6 @@
             if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
             resolve();
           }
-          return resolve();
         }
 
         if (!canvas) {
@@ -7780,7 +7823,11 @@
         }
 
         try {
-          qr.toCanvas(canvas, joinUrl, { margin: 1, width: w }, function (err) {
+          qr.toCanvas(
+            canvas,
+            joinUrl,
+            { margin: 1, width: w, color: { dark: '#000000', light: '#ffffff' } },
+            function (err) {
             if (err) {
               if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
               showAsRemoteImage();
@@ -7791,7 +7838,8 @@
               return;
             }
             resolve();
-          });
+            }
+          );
         } catch (e) {
           if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
           showAsRemoteImage();
@@ -8432,6 +8480,33 @@
       drawQr(160);
     }
 
+    function lobbyRenderKey(lobby) {
+      try {
+        var out = {
+          hostMid: lobby && lobby.hostMid ? String(lobby.hostMid) : '',
+          currentGame: lobby && lobby.currentGame ? lobby.currentGame : null,
+          lastKind: lobby && lobby.lastKind ? String(lobby.lastKind) : '',
+          selectedKind: ui.selectedKind || '',
+          order: Array.isArray(lobby && lobby.order) ? lobby.order.slice() : [],
+          members: {},
+          loveletterExtraCards: Array.isArray(lobby && lobby.loveletterExtraCards) ? lobby.loveletterExtraCards.slice() : [],
+          codenamesAssign: lobby && lobby.codenamesAssign ? lobby.codenamesAssign : null
+        };
+        var members = (lobby && lobby.members) || {};
+        var keys = Object.keys(members);
+        keys.sort();
+        for (var i = 0; i < keys.length; i++) {
+          var k = keys[i];
+          var m = members[k] || {};
+          // Ignore volatile fields like lastSeenAt/joinedAt.
+          out.members[k] = { name: String(m.name || ''), isGmDevice: !!m.isGmDevice };
+        }
+        return JSON.stringify(out);
+      } catch (e) {
+        return String(Math.random());
+      }
+    }
+
     firebaseReady()
       .then(function () {
         return subscribeLobby(lobbyId, function (lobby) {
@@ -8454,6 +8529,10 @@
             return;
           }
 
+          // Avoid re-rendering on high-frequency heartbeat updates (keeps QR from resetting).
+          var key = lobbyRenderKey(lobby);
+          if (ui._lastRenderKey === key) return;
+          ui._lastRenderKey = key;
           renderWithLobby(lobby);
         });
       })
