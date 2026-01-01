@@ -241,6 +241,41 @@ body.ll-table-screen .app{max-width:980px}
 .ll-spectate-cards.ll-spectate-cards--stack .ll-spectate-card + .ll-spectate-card{margin-left:clamp(-72px, -18vw, -28px)}
 .ll-spectate-card{width:min(180px, 40vw);aspect-ratio:3/4;border-radius:10px;border:1px solid var(--line);overflow:hidden;background:#0f1520}
 
+/* Hannin (犯人は踊る): player hand (LoveLetter-like tap/hold) */
+.hn-hand-wrap{display:flex;flex-direction:column;gap:10px}
+.hn-hand{
+  position:relative;
+  width:min(340px, 90vw);
+  margin:0 auto;
+  aspect-ratio:3/4;
+  touch-action:manipulation;
+}
+.hn-card{
+  position:absolute;
+  inset:0;
+  border-radius:12px;
+  border:1px solid var(--line);
+  background:#0f1520;
+  overflow:hidden;
+  -webkit-user-select:none;
+  user-select:none;
+}
+.hn-card--selected{box-shadow:0 0 0 4px var(--accent)}
+.hn-hint{font-size:13px}
+
+.hn-rumor-row{display:flex;gap:10px;justify-content:center;align-items:flex-start;flex-wrap:wrap}
+.hn-rumor-card{
+  width:min(160px, 42vw);
+  aspect-ratio:3/4;
+  border-radius:10px;
+  border:1px solid var(--line);
+  overflow:hidden;
+  background:#0f1520;
+  -webkit-user-select:none;
+  user-select:none;
+  touch-action:manipulation;
+}
+
 /* Modal spacing tweaks */
 .ll-overlay-panel .stack{gap:14px}
 .ll-guess-grid{gap:14px}
