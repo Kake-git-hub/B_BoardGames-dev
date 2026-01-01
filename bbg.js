@@ -7743,7 +7743,23 @@
         var canvas = document.getElementById('qr');
         var errEl = document.getElementById('qrError');
         var wrapEl = document.getElementById('qrWrap');
-        if (errEl) errEl.textContent = '';
+        if (errEl) errEl.textContent = 'QR生成中...';
+
+        var done = false;
+        function finish() {
+          if (done) return;
+          done = true;
+          resolve();
+        }
+
+        function setStatus(text) {
+          try {
+            if (errEl) errEl.textContent = String(text || '');
+          } catch (e) {
+            // ignore
+          }
+          showInlineStatus(text);
+        }
 
         function setWrap(html) {
           if (!wrapEl) return;
@@ -7765,6 +7781,7 @@
         }
 
         function showFatal(msg) {
+          setStatus(String(msg || 'QRの生成に失敗しました。'));
           setWrap(
             '<div class="card" style="padding:10px">' +
               '<div class="form-error">' +
@@ -7773,11 +7790,11 @@
               '<div class="muted" style="margin-top:6px">URLコピーで参加してください。</div>' +
             '</div>'
           );
-          resolve();
+          finish();
         }
 
         function showRemoteProviders() {
-          if (!wrapEl) return resolve();
+          if (!wrapEl) return finish();
           var data = String(joinUrl || '');
           var sizeStr = String(w) + 'x' + String(w);
           var srcs = [
@@ -7796,10 +7813,10 @@
               return showFatal('QR画像の読み込みに失敗しました（ネットワーク/フィルタの可能性）。');
             }
             var src = srcs[i++];
-            showInlineStatus('QR: 外部画像読み込み中...');
+            setStatus('QR: 外部画像読み込み中...');
             img.onload = function () {
-              showInlineStatus('QR: 外部画像');
-              resolve();
+              setStatus('QR: 外部画像');
+              finish();
             };
             img.onerror = function () {
               tryNext();
@@ -7821,14 +7838,56 @@
         function showAsImage() {
           if (!qr.toDataURL || !wrapEl) return showRemoteProviders();
           try {
-            qr.toDataURL(joinUrl, { margin: 1, width: w, color: { dark: '#000000', light: '#ffffff' } }, function (err, url) {
+            setStatus('QR: 生成中...');
+
+            var timedOut = false;
+            var t = setTimeout(function () {
+              timedOut = true;
+              if (done) return;
+              setStatus('QR: 生成が遅いので外部画像に切替...');
+              showRemoteProviders();
+            }, 1500);
+
+            function onUrl(err, url) {
+              if (done) return;
+              try {
+                clearTimeout(t);
+              } catch (eT) {
+                // ignore
+              }
+              if (timedOut) return;
               if (err || !url) {
                 return showRemoteProviders();
               }
-              setWrap('<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />');
-              showInlineStatus('QR: 画像（dataURL）');
-              resolve();
-            });
+              setWrap('<img id="qrImg" alt="QR" src="' + escapeHtml(String(url)) + '" />');
+              setStatus('QR: 画像（dataURL）');
+              finish();
+            }
+
+            var ret = null;
+            try {
+              ret = qr.toDataURL(joinUrl, { margin: 1, width: w, color: { dark: '#000000', light: '#ffffff' } }, onUrl);
+            } catch (eCall) {
+              ret = null;
+            }
+
+            // Support Promise-based toDataURL implementations.
+            if (ret && typeof ret.then === 'function') {
+              ret
+                .then(function (url2) {
+                  onUrl(null, url2);
+                })
+                .catch(function () {
+                  if (done) return;
+                  try {
+                    clearTimeout(t);
+                  } catch (eT2) {
+                    // ignore
+                  }
+                  if (timedOut) return;
+                  showRemoteProviders();
+                });
+            }
           } catch (e) {
             return showRemoteProviders();
           }
@@ -14231,7 +14290,7 @@
     viewEl = qs('#view');
     setupRulesButton();
     // --- Version string with alphabetic suffix ---
-    var versionSuffix = 'b'; // ← Change this letter for each push (a, b, c, ...)
+    var versionSuffix = 'c'; // ← Change this letter for each push (a, b, c, ...)
     var versionDate = '20260101'; // YYYYMMDD
     var versionString = 'v' + versionDate + versionSuffix;
     var versionEl = document.getElementById('versionString');
