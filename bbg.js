@@ -7091,8 +7091,27 @@
             encodeURIComponent(String(w) + 'x' + String(w)) +
             '&data=' +
             encodeURIComponent(String(joinUrl || ''));
-          wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(src) + '" />';
-          if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
+          try {
+            wrapEl.innerHTML = '';
+            var img = document.createElement('img');
+            img.id = 'qrImg';
+            img.alt = 'QR';
+            img.referrerPolicy = 'no-referrer';
+            img.onload = function () {
+              if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
+              resolve();
+            };
+            img.onerror = function () {
+              if (errEl) errEl.textContent = 'QR画像の読み込みに失敗しました（ネットワーク/フィルタの可能性）。URLコピーで参加してください。';
+              resolve();
+            };
+            img.src = src;
+            wrapEl.appendChild(img);
+          } catch (e) {
+            wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(src) + '" />';
+            if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
+            resolve();
+          }
           return resolve();
         }
 
@@ -8739,9 +8758,28 @@
             encodeURIComponent('240x240') +
             '&data=' +
             encodeURIComponent(String(joinUrl || ''));
-          wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(src) + '" />';
-          if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
-          return resolve();
+          try {
+            wrapEl.innerHTML = '';
+            var img = document.createElement('img');
+            img.id = 'qrImg';
+            img.alt = 'QR';
+            img.referrerPolicy = 'no-referrer';
+            img.onload = function () {
+              if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
+              resolve();
+            };
+            img.onerror = function () {
+              if (errEl) errEl.textContent = 'QR画像の読み込みに失敗しました（ネットワーク/フィルタの可能性）。URLコピーで参加してください。';
+              resolve();
+            };
+            img.src = src;
+            wrapEl.appendChild(img);
+            return;
+          } catch (e) {
+            wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(src) + '" />';
+            if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
+            return resolve();
+          }
         }
 
         if (!canvas) {
@@ -10255,9 +10293,28 @@
             encodeURIComponent('240x240') +
             '&data=' +
             encodeURIComponent(String(joinUrl || ''));
-          wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(src) + '" />';
-          if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
-          return resolve();
+          try {
+            wrapEl.innerHTML = '';
+            var img = document.createElement('img');
+            img.id = 'qrImg';
+            img.alt = 'QR';
+            img.referrerPolicy = 'no-referrer';
+            img.onload = function () {
+              if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
+              resolve();
+            };
+            img.onerror = function () {
+              if (errEl) errEl.textContent = 'QR画像の読み込みに失敗しました（ネットワーク/フィルタの可能性）。URLコピーで参加してください。';
+              resolve();
+            };
+            img.src = src;
+            wrapEl.appendChild(img);
+            return;
+          } catch (e) {
+            wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(src) + '" />';
+            if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
+            return resolve();
+          }
         }
 
         if (!canvas) {
@@ -12364,9 +12421,28 @@
             encodeURIComponent('240x240') +
             '&data=' +
             encodeURIComponent(String(joinUrl || ''));
-          wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(src) + '" />';
-          if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
-          return resolve();
+          try {
+            wrapEl.innerHTML = '';
+            var img = document.createElement('img');
+            img.id = 'qrImg';
+            img.alt = 'QR';
+            img.referrerPolicy = 'no-referrer';
+            img.onload = function () {
+              if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
+              resolve();
+            };
+            img.onerror = function () {
+              if (errEl) errEl.textContent = 'QR画像の読み込みに失敗しました（ネットワーク/フィルタの可能性）。URLコピーで参加してください。';
+              resolve();
+            };
+            img.src = src;
+            wrapEl.appendChild(img);
+            return;
+          } catch (e) {
+            wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(src) + '" />';
+            if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
+            return resolve();
+          }
         }
 
         if (!canvas) {
