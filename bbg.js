@@ -3802,56 +3802,6 @@
   }
 
   function createLoveLetterRoom(roomId, settings) {
-  
-      function createHanninRoom(roomId, settings) {
-        var base = hanninRoomPath(roomId);
-        var st = {};
-        try {
-          if (settings && Array.isArray(settings.order)) st.order = settings.order.slice();
-        } catch (e0) {
-          st = {};
-        }
-  
-        var room = {
-          createdAt: serverNowMs(),
-          phase: 'lobby',
-          settings: st,
-          players: {},
-          state: {
-            order: Array.isArray(st.order) ? st.order.slice() : [],
-            hands: {},
-            graveyard: [],
-            turn: { index: 0, playerId: '' },
-            log: [],
-            result: { winner: '', decidedAt: 0, reason: '' }
-          }
-        };
-        return setValue(base, room);
-      }
-  
-      function joinPlayerInHanninRoom(roomId, playerId, name, isHostPlayer) {
-        var base = hanninRoomPath(roomId);
-        return runTxn(base, function (room) {
-          if (!room) return room;
-          if (room.phase !== 'lobby') return room;
-  
-          var players = assign({}, room.players || {});
-          var prev = players[playerId] || {};
-          var next = assign({}, prev, {
-            name: name,
-            joinedAt: prev.joinedAt || serverNowMs(),
-            lastSeenAt: serverNowMs()
-          });
-          if (isHostPlayer) next.isHost = true;
-          players[playerId] = next;
-  
-          var st = assign({}, room.state || {});
-          if (!Array.isArray(st.order)) st.order = [];
-          if (st.order.indexOf(playerId) === -1) st.order = st.order.concat([playerId]);
-  
-          return assign({}, room, { players: players, state: st });
-        });
-      }
     var base = loveletterRoomPath(roomId);
     var st = {};
     try {
@@ -3871,6 +3821,56 @@
       players: {}
     };
     return setValue(base, room);
+  }
+
+  function createHanninRoom(roomId, settings) {
+    var base = hanninRoomPath(roomId);
+    var st = {};
+    try {
+      if (settings && Array.isArray(settings.order)) st.order = settings.order.slice();
+    } catch (e0) {
+      st = {};
+    }
+
+    var room = {
+      createdAt: serverNowMs(),
+      phase: 'lobby',
+      settings: st,
+      players: {},
+      state: {
+        order: Array.isArray(st.order) ? st.order.slice() : [],
+        hands: {},
+        graveyard: [],
+        turn: { index: 0, playerId: '' },
+        log: [],
+        result: { winner: '', decidedAt: 0, reason: '' }
+      }
+    };
+    return setValue(base, room);
+  }
+
+  function joinPlayerInHanninRoom(roomId, playerId, name, isHostPlayer) {
+    var base = hanninRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'lobby') return room;
+
+      var players = assign({}, room.players || {});
+      var prev = players[playerId] || {};
+      var next = assign({}, prev, {
+        name: name,
+        joinedAt: prev.joinedAt || serverNowMs(),
+        lastSeenAt: serverNowMs()
+      });
+      if (isHostPlayer) next.isHost = true;
+      players[playerId] = next;
+
+      var st = assign({}, room.state || {});
+      if (!Array.isArray(st.order)) st.order = [];
+      if (st.order.indexOf(playerId) === -1) st.order = st.order.concat([playerId]);
+
+      return assign({}, room, { players: players, state: st });
+    });
   }
 
   function hnShuffle(list) {
@@ -7764,7 +7764,7 @@
         var canvas = document.getElementById('qr');
         var errEl = document.getElementById('qrError');
         var wrapEl = document.getElementById('qrWrap');
-        if (errEl) errEl.textContent = 'QR生成中...';
+        if (errEl) errEl.textContent = '';
 
         var done = false;
         function finish() {
@@ -7773,36 +7773,17 @@
           resolve();
         }
 
-        function setStatus(text) {
-          try {
-            if (errEl) errEl.textContent = String(text || '');
-          } catch (e) {
-            // ignore
-          }
-          showInlineStatus(text);
-        }
-
         function setWrap(html) {
           if (!wrapEl) return;
           wrapEl.innerHTML = html;
         }
 
-        function showInlineStatus(text) {
-          if (!wrapEl) return;
-          var s = wrapEl.querySelector('#qrInlineStatus');
-          if (!s) {
-            s = document.createElement('div');
-            s.id = 'qrInlineStatus';
-            s.className = 'muted';
-            s.style.marginTop = '6px';
-            s.style.textAlign = 'center';
-            wrapEl.appendChild(s);
-          }
-          s.textContent = String(text || '');
-        }
-
         function showFatal(msg) {
-          setStatus(String(msg || 'QRの生成に失敗しました。'));
+          try {
+            if (errEl) errEl.textContent = String(msg || 'QRの生成に失敗しました。');
+          } catch (e0) {
+            // ignore
+          }
           setWrap(
             '<div class="card" style="padding:10px">' +
               '<div class="form-error">' +
@@ -7834,9 +7815,12 @@
               return showFatal('QR画像の読み込みに失敗しました（ネットワーク/フィルタの可能性）。');
             }
             var src = srcs[i++];
-            setStatus('QR: 外部画像読み込み中...');
             img.onload = function () {
-              setStatus('QR: 外部画像');
+              try {
+                if (errEl) errEl.textContent = '';
+              } catch (e1) {
+                // ignore
+              }
               finish();
             };
             img.onerror = function () {
@@ -7859,13 +7843,10 @@
         function showAsImage() {
           if (!qr.toDataURL || !wrapEl) return showRemoteProviders();
           try {
-            setStatus('QR: 生成中...');
-
             var timedOut = false;
             var t = setTimeout(function () {
               timedOut = true;
               if (done) return;
-              setStatus('QR: 生成が遅いので外部画像に切替...');
               showRemoteProviders();
             }, 1500);
 
@@ -7881,7 +7862,11 @@
                 return showRemoteProviders();
               }
               setWrap('<img id="qrImg" alt="QR" src="' + escapeHtml(String(url)) + '" />');
-              setStatus('QR: 画像（dataURL）');
+              try {
+                if (errEl) errEl.textContent = '';
+              } catch (e2) {
+                // ignore
+              }
               finish();
             }
 
@@ -8572,30 +8557,9 @@
       });
       bindHostButtons(lobby);
       try {
-        var qe = document.getElementById('qrError');
-        if (qe) qe.textContent = 'QR: drawQr起動...';
-      } catch (eQ) {
-        // ignore
-      }
-      try {
-        var p = drawQr(160);
-        if (p && typeof p.catch === 'function') {
-          p.catch(function (eQ2) {
-            try {
-              var qe2 = document.getElementById('qrError');
-              if (qe2) qe2.textContent = 'QR: 生成エラー（' + escapeHtml((eQ2 && eQ2.message) || String(eQ2)) + '）';
-            } catch (eQ3) {
-              // ignore
-            }
-          });
-        }
+        drawQr(160);
       } catch (eQ4) {
-        try {
-          var qe3 = document.getElementById('qrError');
-          if (qe3) qe3.textContent = 'QR: 生成例外（' + ((eQ4 && eQ4.message) || String(eQ4)) + '）';
-        } catch (eQ5) {
-          // ignore
-        }
+        // ignore
       }
     }
 
@@ -11568,7 +11532,7 @@
             var cg = (lobby && lobby.currentGame) || null;
             var kind = cg && cg.kind ? String(cg.kind) : '';
             var rid = cg && cg.roomId ? String(cg.roomId) : '';
-            if (!cg || kind !== 'codenames' || rid !== String(roomId || '')) {
+            if (!cg || kind !== 'loveletter' || rid !== String(roomId || '')) {
               try {
                 if (ui.lobbyUnsub) ui.lobbyUnsub();
               } catch (e) {
@@ -14336,7 +14300,7 @@
     viewEl = qs('#view');
     setupRulesButton();
     // --- Version string with alphabetic suffix ---
-    var versionSuffix = 'e'; // ← Change this letter for each push (a, b, c, ...)
+    var versionSuffix = 'f'; // ← Change this letter for each push (a, b, c, ...)
     var versionDate = '20260101'; // YYYYMMDD
     var versionString = 'v' + versionDate + versionSuffix;
     var versionEl = document.getElementById('versionString');
