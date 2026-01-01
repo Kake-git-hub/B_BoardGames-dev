@@ -761,6 +761,15 @@
   function subscribeLoveLetterRoom(roomId, cb) {
     return onValue(loveletterRoomPath(roomId), cb);
   }
+  
+  // -------------------- hannin (state) --------------------
+  function hanninRoomPath(roomId) {
+    return 'hanninRooms/' + roomId;
+  }
+  
+  function subscribeHanninRoom(roomId, cb) {
+    return onValue(hanninRoomPath(roomId), cb);
+  }
 
   // -------------------- shared (persisted name) --------------------
   var BBG_NAME_KEY = 'bbg_name_v1';
@@ -3772,6 +3781,56 @@
   }
 
   function createLoveLetterRoom(roomId, settings) {
+  
+      function createHanninRoom(roomId, settings) {
+        var base = hanninRoomPath(roomId);
+        var st = {};
+        try {
+          if (settings && Array.isArray(settings.order)) st.order = settings.order.slice();
+        } catch (e0) {
+          st = {};
+        }
+  
+        var room = {
+          createdAt: serverNowMs(),
+          phase: 'lobby',
+          settings: st,
+          players: {},
+          state: {
+            order: Array.isArray(st.order) ? st.order.slice() : [],
+            hands: {},
+            graveyard: [],
+            turn: { index: 0, playerId: '' },
+            log: [],
+            result: { winner: '', decidedAt: 0, reason: '' }
+          }
+        };
+        return setValue(base, room);
+      }
+  
+      function joinPlayerInHanninRoom(roomId, playerId, name, isHostPlayer) {
+        var base = hanninRoomPath(roomId);
+        return runTxn(base, function (room) {
+          if (!room) return room;
+          if (room.phase !== 'lobby') return room;
+  
+          var players = assign({}, room.players || {});
+          var prev = players[playerId] || {};
+          var next = assign({}, prev, {
+            name: name,
+            joinedAt: prev.joinedAt || serverNowMs(),
+            lastSeenAt: serverNowMs()
+          });
+          if (isHostPlayer) next.isHost = true;
+          players[playerId] = next;
+  
+          var st = assign({}, room.state || {});
+          if (!Array.isArray(st.order)) st.order = [];
+          if (st.order.indexOf(playerId) === -1) st.order = st.order.concat([playerId]);
+  
+          return assign({}, room, { players: players, state: st });
+        });
+      }
     var base = loveletterRoomPath(roomId);
     var st = {};
     try {
@@ -4822,7 +4881,9 @@
         (selectedKind === 'loveletter' ? 'selected' : '') +
         '>ラブレター</option>\n          <option value="codenames" ' +
         (selectedKind === 'codenames' ? 'selected' : '') +
-        '>コードネーム</option>\n        </select>\n        <div class="muted">現在: ' +
+        '>コードネーム</option>\n          <option value="hannin" ' +
+        (selectedKind === 'hannin' ? 'selected' : '') +
+        '>犯人は踊る</option>\n        </select>\n        <div class="muted">現在: ' +
         escapeHtml(currentLabel || '未開始') +
         '</div>\n      </div>' +
         loveletterSetupHtml +
@@ -7582,11 +7643,19 @@
             var min = 0;
             if (kind === 'loveletter') min = 2;
             else if (kind === 'codenames') min = 4;
+            else if (kind === 'hannin') min = 3;
             else min = 3; // wordwolf
 
             if (n0 < min) {
               clearInlineError('lobbyHostError');
-              var gameLabel = kind === 'loveletter' ? 'ラブレター' : kind === 'codenames' ? 'コードネーム' : 'ワードウルフ';
+              var gameLabel =
+                kind === 'loveletter'
+                  ? 'ラブレター'
+                  : kind === 'codenames'
+                    ? 'コードネーム'
+                    : kind === 'hannin'
+                      ? '犯人は踊る'
+                      : 'ワードウルフ';
               setInlineError('lobbyHostError', '参加者が足りません（' + gameLabel + 'は' + String(min) + '人以上必要です）');
               return;
             }
@@ -7595,7 +7664,7 @@
           }
 
           // Wordwolf requires the legacy settings screen.
-          if (kind !== 'codenames' && kind !== 'loveletter') {
+          if (kind !== 'codenames' && kind !== 'loveletter' && kind !== 'hannin') {
             var qWw = {};
             var vWw = getCacheBusterParam();
             if (vWw) qWw.v = vWw;
@@ -7716,6 +7785,29 @@
                     return;
                   });
               }
+  
+              if (kind === 'hannin') {
+                var orderH = normalizeOrder(lobby);
+                var membersH = (lobby && lobby.members) || {};
+                var hostPidH = isTableGm ? (orderH && orderH.length ? String(orderH[0] || '') : '') : String(mid || '');
+                if (orderH.indexOf(hostPidH) === -1) hostPidH = orderH && orderH.length ? String(orderH[0] || '') : hostPidH;
+                return createHanninRoom(roomId, { order: orderH })
+                  .then(function () {
+                    var seqH = Promise.resolve();
+                    for (var hA = 0; hA < orderH.length; hA++) {
+                      (function (pidH) {
+                        seqH = seqH.then(function () {
+                          var nmH = membersH && membersH[pidH] && membersH[pidH].name ? String(membersH[pidH].name) : '';
+                          return joinPlayerInHanninRoom(roomId, pidH, nmH || '-', hostPidH && String(pidH) === String(hostPidH));
+                        });
+                      })(orderH[hA]);
+                    }
+                    return seqH;
+                  })
+                  .then(function () {
+                    return;
+                  });
+              }
               return;
             })
             .then(function () {
@@ -7741,6 +7833,9 @@
                 q.host = '1';
                 q.player = '1';
                 q.screen = 'loveletter_extras';
+              } else if (kind === 'hannin') {
+                q.host = '1';
+                q.screen = 'hannin_table';
               }
               setQuery(q);
               route();
@@ -7852,6 +7947,9 @@
           q.host = '1';
           q.player = '1';
         }
+      } else if (kind === 'hannin') {
+        q.screen = 'hannin_table';
+        if (isHostDevice) q.host = '1';
       } else {
         // Wordwolf: members are pre-registered from lobby; go directly.
         try {
@@ -11763,6 +11861,171 @@
   }
 
   function routeCodenamesTable(roomId, isHost) {
+  
+      function renderHanninTable(viewEl, opts) {
+        var roomId = opts.roomId;
+        var room = opts.room;
+        var isHost = !!opts.isHost;
+        var lobbyId = opts.lobbyId ? String(opts.lobbyId) : '';
+  
+        var players = (room && room.players) || {};
+        var st = (room && room.state) || {};
+        var order = Array.isArray(st.order) ? st.order : [];
+        var hands = (st && st.hands) || {};
+        var grave = Array.isArray(st.graveyard) ? st.graveyard : [];
+        var result = (st && st.result) || {};
+  
+        function cardHtml(cardId) {
+          var id = String(cardId || '');
+          var def = HANNIN_CARD_DEFS[id] || { name: id || '-', icon: '', desc: '' };
+          var img = def.icon
+            ? '<img src="' + escapeHtml(def.icon) + '" alt="' + escapeHtml(def.name || id) + '" style="width:42px;height:auto;border-radius:8px;border:1px solid var(--line)" />'
+            : '';
+          return '<div class="row" style="gap:10px;align-items:center">' + img + '<div><b>' + escapeHtml(def.name || id) + '</b></div></div>';
+        }
+  
+        var playersHtml = '';
+        for (var i = 0; i < order.length; i++) {
+          var pid = String(order[i] || '');
+          if (!pid) continue;
+          var p = players[pid] || {};
+          var nm = String(p.name || '').trim();
+          if (!nm) nm = '（無名）';
+          var h = hands && Array.isArray(hands[pid]) ? hands[pid] : [];
+          var handHtml = '';
+          if (!isHost) {
+            handHtml = '<div class="muted">（手札は非表示）</div>';
+          } else {
+            if (!h.length) handHtml = '<div class="muted">（手札なし）</div>';
+            else {
+              for (var k = 0; k < h.length; k++) {
+                handHtml += '<div class="card" style="padding:10px">' + cardHtml(h[k]) + '</div>';
+              }
+            }
+          }
+  
+          playersHtml +=
+            '<div class="card" style="padding:12px">' +
+            '<div class="row" style="justify-content:space-between">' +
+            '<b>' +
+            escapeHtml(nm) +
+            '</b>' +
+            (p && p.isHost ? '<span class="badge">HOST</span>' : '') +
+            '</div>' +
+            '<div class="stack" style="margin-top:8px">' +
+            handHtml +
+            '</div>' +
+            '</div>';
+        }
+        if (!playersHtml) playersHtml = '<div class="muted">参加者がいません。</div>';
+  
+        var graveHtml = '';
+        if (!grave.length) graveHtml = '<div class="muted">（なし）</div>';
+        else {
+          for (var g = 0; g < grave.length; g++) {
+            graveHtml += '<div class="card" style="padding:10px">' + cardHtml(grave[g]) + '</div>';
+          }
+        }
+  
+        render(
+          viewEl,
+          '<div class="stack">' +
+            '<div class="big">犯人は踊る</div>' +
+            '<div class="kv"><span class="muted">ルームID</span><b>' +
+            escapeHtml(roomId) +
+            '</b></div>' +
+            (result && result.winner ? '<div class="card"><b>勝者: ' + escapeHtml(String(result.winner)) + '</b><div class="muted">' + escapeHtml(String(result.reason || '')) + '</div></div>' : '') +
+            (isHost
+              ? '<div class="row">' +
+                '<button id="hnDeal" class="ghost">（仮）配布/開始</button>' +
+                (lobbyId ? '<button id="hnAbortToLobby" class="danger">中断してロビーへ</button>' : '') +
+                '</div>'
+              : '<div class="muted">※ この画面は閲覧用です（操作はホスト端末のみ）</div>') +
+            '<div class="stack"><div class="muted">プレイヤー</div>' +
+            playersHtml +
+            '</div>' +
+            '<div class="stack"><div class="muted">墓地</div>' +
+            graveHtml +
+            '</div>' +
+          '</div>'
+        );
+      }
+  
+      function routeHanninTable(roomId, isHost) {
+        var unsub = null;
+        var lobbyId = '';
+        try {
+          var q0 = parseQuery();
+          lobbyId = q0 && q0.lobby ? String(q0.lobby) : '';
+        } catch (e0) {
+          lobbyId = '';
+        }
+  
+        function redirectToLobbyHost() {
+          if (!lobbyId) return;
+          var q = {};
+          var v = getCacheBusterParam();
+          if (v) q.v = v;
+          q.lobby = lobbyId;
+          q.screen = 'lobby_host';
+          setQuery(q);
+          route();
+        }
+  
+        firebaseReady()
+          .then(function () {
+            return subscribeHanninRoom(roomId, function (room) {
+              if (!room) {
+                renderError(viewEl, '部屋が見つかりません');
+                return;
+              }
+              renderHanninTable(viewEl, { roomId: roomId, room: room, isHost: isHost, lobbyId: lobbyId });
+  
+              if (!isHost) return;
+  
+              var abortBtn = document.getElementById('hnAbortToLobby');
+              if (abortBtn && !abortBtn.__hn_bound) {
+                abortBtn.__hn_bound = true;
+                abortBtn.addEventListener('click', function () {
+                  if (!confirm('【注意】ゲームを中断してロビーに戻します。\nこの操作は全員の画面に反映されます。\nよろしいですか？')) return;
+                  if (!lobbyId) return;
+                  abortBtn.disabled = true;
+                  firebaseReady()
+                    .then(function () {
+                      return setLobbyCurrentGame(lobbyId, null);
+                    })
+                    .then(function () {
+                      redirectToLobbyHost();
+                    })
+                    .catch(function (e) {
+                      alert((e && e.message) || '失敗');
+                    })
+                    .finally(function () {
+                      abortBtn.disabled = false;
+                    });
+                });
+              }
+  
+              var dealBtn = document.getElementById('hnDeal');
+              if (dealBtn && !dealBtn.__hn_bound) {
+                dealBtn.__hn_bound = true;
+                dealBtn.addEventListener('click', function () {
+                  alert('配布/開始ロジックは次ステップで実装します（仕様どおりに入れます）。');
+                });
+              }
+            });
+          })
+          .then(function (u) {
+            unsub = u;
+          })
+          .catch(function (e) {
+            renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+          });
+  
+        window.addEventListener('popstate', function () {
+          if (unsub) unsub();
+        });
+      }
     if (!isHost) {
       var qx0 = {};
       var vx0 = getCacheBusterParam();
@@ -12036,7 +12299,8 @@
         loveletter_player: 1,
         codenames_join: 1,
         codenames_player: 1,
-        codenames_rejoin: 1
+        codenames_rejoin: 1,
+        hannin_table: 1
       };
 
       // Host-mode is never allowed on restricted devices (even if URL is tampered).
@@ -12134,6 +12398,11 @@
     if (screen === 'codenames_table') {
       if (!roomId) return routeHome();
       return routeCodenamesTable(roomId, isHost);
+    }
+  
+    if (screen === 'hannin_table') {
+      if (!roomId) return routeHome();
+      return routeHanninTable(roomId, isHost);
     }
 
     if (!roomId) return routeHome();
