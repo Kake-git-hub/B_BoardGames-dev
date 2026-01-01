@@ -787,6 +787,18 @@
   function hanninRoomPath(roomId) {
     return 'hanninRooms/' + roomId;
   }
+
+  function isDevDebugSite() {
+    try {
+      var h = String((location && location.hostname) || '');
+      var p = String((location && location.pathname) || '');
+      if (h === 'localhost' || h === '127.0.0.1') return true;
+      if (p.indexOf('B_BoardGames-dev') >= 0) return true;
+    } catch (e) {
+      // ignore
+    }
+    return false;
+  }
   
   function subscribeHanninRoom(roomId, cb) {
     return onValue(hanninRoomPath(roomId), cb);
@@ -3552,6 +3564,24 @@
     citizen: { name: '一般人', desc: '', icon: './assets/hannin/一般人.png' }
   };
 
+  function hnCardImgHtml(cardId) {
+    var id = String(cardId || '');
+    var def = HANNIN_CARD_DEFS[id] || { name: id || '-', icon: '' };
+    var icon = def && def.icon ? String(def.icon) : '';
+    if (!icon) return '';
+    return '<img class="ll-card-img" alt="' + escapeHtml(def.name || id) + '" src="' + escapeHtml(icon) + '" />';
+  }
+
+  function hnTestPlayerLabel(pid) {
+    try {
+      var m = /^__hn_test_(\d+)$/.exec(String(pid || ''));
+      if (m) return 'テスト' + String(m[1] || '');
+    } catch (e) {
+      // ignore
+    }
+    return '';
+  }
+
   function llCardRankStr(cardId) {
     var s = String(cardId || '');
     // Card IDs may include variants like "7:countess". Base rank is the leading number.
@@ -4046,6 +4076,355 @@
     } catch (e) {
       return String(pid || '');
     }
+  }
+
+  function renderHanninPlayer(viewEl, opts) {
+    var roomId = opts.roomId;
+    var room = opts.room;
+    var playerId = opts.playerId ? String(opts.playerId) : '';
+    var lobbyId = opts.lobbyId ? String(opts.lobbyId) : '';
+
+    var players = (room && room.players) || {};
+    var st = (room && room.state) || {};
+    var hands = (st && st.hands) || {};
+    var phase = String((room && room.phase) || '');
+    var turnPid = st && st.turn && st.turn.playerId ? String(st.turn.playerId) : '';
+    var isMyTurn = !!(turnPid && playerId && String(turnPid) === String(playerId));
+    var pending = (st && st.pending) || null;
+    var myHand = playerId && hands && Array.isArray(hands[playerId]) ? hands[playerId] : [];
+
+    var alreadyChosen = false;
+    try {
+      alreadyChosen = !!(pending && pending.type === 'info' && pending.choices && pending.choices[String(playerId)] !== undefined);
+    } catch (e1) {
+      alreadyChosen = false;
+    }
+
+    var handHtml = '';
+    if (!myHand.length) {
+      handHtml = '<div class="muted">（手札なし）</div>';
+    } else {
+      handHtml = '<div class="ll-spectate-cards">';
+      for (var i = 0; i < myHand.length; i++) {
+        var cid = String(myHand[i] || '');
+        handHtml +=
+          '<button class="ll-spectate-card hnPCard" data-hn-idx="' +
+          escapeHtml(String(i)) +
+          '" style="padding:0">' +
+          hnCardImgHtml(cid) +
+          '</button>';
+      }
+      handHtml += '</div>';
+    }
+
+    var modalHtml = '';
+    try {
+      if (ui && ui.hnModal && ui.hnModal.type === 'card') {
+        var idx = parseIntSafe(ui.hnModal.idx, -1);
+        var cardId = idx >= 0 && idx < myHand.length ? String(myHand[idx] || '') : '';
+        var def = HANNIN_CARD_DEFS[String(cardId || '')] || { name: String(cardId || '-'), desc: '' };
+        var title = pending && pending.type === 'info' ? '渡すカード' : 'プレイするカード';
+        var okLabel = pending && pending.type === 'info' ? '渡す' : 'プレイ';
+        var canOk = !!(cardId && (pending && pending.type === 'info' ? !alreadyChosen : isMyTurn && phase === 'playing'));
+
+        modalHtml =
+          '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
+          '<div class="ll-overlay-backdrop" id="hnModalBg"></div>' +
+          '<div class="ll-overlay-panel">' +
+          '<div class="stack">' +
+          '<div class="big ll-modal-title">' +
+          escapeHtml(title) +
+          '</div>' +
+          '<div class="ll-action-card">' +
+          hnCardImgHtml(cardId) +
+          '</div>' +
+          '<div class="ll-modal-name">' +
+          escapeHtml(String(def.name || '')) +
+          '</div>' +
+          (def.desc ? '<div class="muted">' + escapeHtml(String(def.desc || '')) + '</div>' : '') +
+          '<div class="row ll-modal-actions" style="justify-content:space-between">' +
+          '<button class="ghost" id="hnModalCancel">キャンセル</button>' +
+          '<button class="primary" id="hnModalOk" ' +
+          (canOk ? '' : 'disabled') +
+          '>' +
+          escapeHtml(okLabel) +
+          '</button>' +
+          '</div>' +
+          '</div>' +
+          '</div>' +
+          '</div>';
+      }
+    } catch (eM) {
+      modalHtml = '';
+    }
+
+    try {
+      if (document && document.body && document.body.classList) {
+        document.body.classList.add('ll-player-screen');
+        document.body.classList.remove('ll-table-screen');
+      }
+    } catch (eCls) {
+      // ignore
+    }
+
+    try {
+      if (viewEl && viewEl.classList) {
+        viewEl.classList.toggle('ll-turn-actor', !!isMyTurn);
+        viewEl.classList.toggle('ll-turn-waiting', !isMyTurn);
+      }
+    } catch (eC2) {
+      // ignore
+    }
+
+    render(
+      viewEl,
+      '<div class="stack ll-player">' +
+        '<div class="ll-topline">' +
+        '<div class="ll-status">犯人は踊る</div>' +
+        '<div class="badge">' +
+        escapeHtml(isMyTurn ? 'TURN' : 'WAIT') +
+        '</div>' +
+        '</div>' +
+        (modalHtml || '') +
+        (handHtml || '') +
+      '</div>'
+    );
+  }
+
+  function routeHanninPlayer(roomId, isHost) {
+    var unsub = null;
+    var lobbyId = '';
+    try {
+      var q0 = parseQuery();
+      lobbyId = q0 && q0.lobby ? String(q0.lobby) : '';
+    } catch (e0) {
+      lobbyId = '';
+    }
+
+    var playerId = '';
+    try {
+      var q1 = parseQuery();
+      playerId = q1 && q1.player ? String(q1.player) : '';
+    } catch (eP) {
+      playerId = '';
+    }
+
+    if (!playerId && lobbyId) {
+      try {
+        playerId = String(getOrCreateLobbyMemberId(lobbyId) || '');
+      } catch (eMid) {
+        playerId = '';
+      }
+    }
+
+    var lastRoom = null;
+
+    function clearModal() {
+      try {
+        if (ui) ui.hnModal = null;
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    function chooseTargetPid(room, actorPid, allowSelf) {
+      var players = (room && room.players) || {};
+      var order = room && room.state && Array.isArray(room.state.order) ? room.state.order : Object.keys(players || {});
+      var opts = [];
+      for (var i = 0; i < order.length; i++) {
+        var pid = String(order[i] || '');
+        if (!pid) continue;
+        if (!allowSelf && String(pid) === String(actorPid)) continue;
+        opts.push(pid);
+      }
+      if (!opts.length) return '';
+      var msg =
+        '対象を選んでください:\n' +
+        opts
+          .map(function (p, idx) {
+            return String(idx + 1) + '. ' + hnPlayerName(room, p);
+          })
+          .join('\n');
+      var s = prompt(msg, '1');
+      var n = parseIntSafe(s, 0);
+      if (n < 1 || n > opts.length) return '';
+      return String(opts[n - 1] || '');
+    }
+
+    function chooseHiddenCardIndex(room, pid) {
+      var h = room && room.state && room.state.hands && Array.isArray(room.state.hands[pid]) ? room.state.hands[pid] : [];
+      if (!h.length) return -1;
+      var msg = '相手の手札から選んでください（番号）: 1〜' + String(h.length);
+      var s = prompt(msg, '1');
+      var n = parseIntSafe(s, 0);
+      if (n < 1 || n > h.length) return -1;
+      return n - 1;
+    }
+
+    firebaseReady()
+      .then(function () {
+        return subscribeHanninRoom(roomId, function (room) {
+          if (!room) {
+            renderError(viewEl, '部屋が見つかりません');
+            return;
+          }
+          lastRoom = room;
+          renderHanninPlayer(viewEl, { roomId: roomId, room: room, playerId: playerId, lobbyId: lobbyId, isHost: isHost });
+
+          var cards = document.querySelectorAll('.hnPCard');
+          for (var iC = 0; iC < cards.length; iC++) {
+            var el = cards[iC];
+            if (!el || el.__hn_bound) continue;
+            el.__hn_bound = true;
+            el.addEventListener('click', function (ev) {
+              var t = ev && ev.currentTarget ? ev.currentTarget : null;
+              if (!t) return;
+              var idx = parseIntSafe(t.getAttribute('data-hn-idx'), -1);
+              if (idx < 0) return;
+              try {
+                if (!ui) return;
+                ui.hnModal = { type: 'card', idx: idx };
+              } catch (e) {
+                // ignore
+              }
+              renderHanninPlayer(viewEl, { roomId: roomId, room: lastRoom, playerId: playerId, lobbyId: lobbyId, isHost: isHost });
+            });
+          }
+
+          var bg = document.getElementById('hnModalBg');
+          if (bg && !bg.__hn_bound) {
+            bg.__hn_bound = true;
+            bg.addEventListener('click', function () {
+              clearModal();
+              renderHanninPlayer(viewEl, { roomId: roomId, room: lastRoom, playerId: playerId, lobbyId: lobbyId, isHost: isHost });
+            });
+          }
+
+          var cancelBtn = document.getElementById('hnModalCancel');
+          if (cancelBtn && !cancelBtn.__hn_bound) {
+            cancelBtn.__hn_bound = true;
+            cancelBtn.addEventListener('click', function () {
+              clearModal();
+              renderHanninPlayer(viewEl, { roomId: roomId, room: lastRoom, playerId: playerId, lobbyId: lobbyId, isHost: isHost });
+            });
+          }
+
+          var okBtn = document.getElementById('hnModalOk');
+          if (okBtn && !okBtn.__hn_bound) {
+            okBtn.__hn_bound = true;
+            okBtn.addEventListener('click', function () {
+              if (!lastRoom || !lastRoom.state) return;
+              var st = lastRoom.state;
+              var myHand = playerId && st.hands && Array.isArray(st.hands[playerId]) ? st.hands[playerId] : [];
+              var m = ui && ui.hnModal ? ui.hnModal : null;
+              var idx = m ? parseIntSafe(m.idx, -1) : -1;
+              if (idx < 0 || idx >= myHand.length) return;
+
+              var pending = st.pending || null;
+              if (pending && pending.type === 'info') {
+                if (pending.choices && pending.choices[String(playerId)] !== undefined) return;
+                okBtn.disabled = true;
+                submitHanninInfoChoice(roomId, playerId, idx)
+                  .catch(function (e) {
+                    alert((e && e.message) || '失敗');
+                  })
+                  .finally(function () {
+                    okBtn.disabled = false;
+                    clearModal();
+                  });
+                return;
+              }
+
+              var turnPid = st.turn && st.turn.playerId ? String(st.turn.playerId) : '';
+              if (!turnPid || String(turnPid) !== String(playerId)) return;
+              if (String((lastRoom && lastRoom.phase) || '') !== 'playing') return;
+
+              var cardId = String(myHand[idx] || '');
+              var action = {};
+              if (cardId === 'detective') {
+                var t = chooseTargetPid(lastRoom, playerId, false);
+                if (!t) return;
+                action = { targetPid: t };
+              } else if (cardId === 'dog') {
+                var t2 = chooseTargetPid(lastRoom, playerId, false);
+                if (!t2) return;
+                var pick = chooseHiddenCardIndex(lastRoom, t2);
+                if (pick < 0) return;
+                action = { targetPid: t2, targetIndex: pick };
+              } else if (cardId === 'deal') {
+                var t3 = chooseTargetPid(lastRoom, playerId, false);
+                if (!t3) return;
+                // After discarding "deal" itself, choose one from remaining hand.
+                var h0 = myHand.slice();
+                if (idx >= 0 && idx < h0.length) h0.splice(idx, 1);
+                if (!h0.length) return;
+                var msg0 =
+                  '渡すカードを選んでください:\n' +
+                  h0
+                    .map(function (id, ix) {
+                      var def = HANNIN_CARD_DEFS[String(id || '')] || { name: String(id || '-') };
+                      return String(ix + 1) + '. ' + String(def.name || id);
+                    })
+                    .join('\n');
+                var s0 = prompt(msg0, '1');
+                var n0 = parseIntSafe(s0, 0);
+                var give = n0 >= 1 && n0 <= h0.length ? n0 - 1 : -1;
+                if (give < 0) return;
+                var take = chooseHiddenCardIndex(lastRoom, t3);
+                if (take < 0) return;
+                action = { targetPid: t3, giveIndex: give, takeIndex: take };
+              } else if (cardId === 'witness') {
+                var t4 = chooseTargetPid(lastRoom, playerId, false);
+                if (!t4) return;
+                action = { targetPid: t4 };
+              }
+
+              okBtn.disabled = true;
+              playHanninCard(roomId, playerId, idx, action)
+                .then(function () {
+                  clearModal();
+                  // Post-play private reveals
+                  try {
+                    var st2 = lastRoom && lastRoom.state ? lastRoom.state : null;
+                    if (!st2) return;
+                    if (cardId === 'witness') {
+                      var tp = action && action.targetPid ? String(action.targetPid) : '';
+                      if (!tp) return;
+                      var th = st2.hands && Array.isArray(st2.hands[tp]) ? st2.hands[tp] : [];
+                      var names = th.map(function (id) {
+                        var def = HANNIN_CARD_DEFS[String(id || '')] || { name: String(id || '-') };
+                        return String(def.name || id);
+                      });
+                      alert('目撃者：' + hnPlayerName(lastRoom, tp) + ' の手札\n' + names.join(' / '));
+                    } else if (cardId === 'boy') {
+                      var order = st2.order || [];
+                      var cpid = hnFindCulpritHolder(order, st2.hands);
+                      if (cpid) alert('少年：犯人は ' + hnPlayerName(lastRoom, cpid));
+                    }
+                  } catch (eR) {
+                    // ignore
+                  }
+                })
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  okBtn.disabled = false;
+                });
+            });
+          }
+        });
+      })
+      .then(function (u) {
+        unsub = u;
+      })
+      .catch(function (e) {
+        renderError(viewEl, (e && e.message) || 'Firebase接続に失敗しました');
+      });
+
+    window.addEventListener('popstate', function () {
+      if (unsub) unsub();
+    });
   }
 
   function hnOrderIdx(order, pid) {
@@ -8323,6 +8702,17 @@
           try {
             var ids0 = normalizeOrder(lobby);
             var n0 = Array.isArray(ids0) ? ids0.length : 0;
+            if (kind === 'hannin' && isDevDebugSite() && Array.isArray(ids0)) {
+              var real0 = 0;
+              for (var r0 = 0; r0 < ids0.length; r0++) {
+                var id0 = String(ids0[r0] || '');
+                if (!id0) continue;
+                if (/^__hn_test_\d+$/.test(id0)) continue;
+                real0++;
+              }
+              // Only boost to 5 when at least one real participant exists.
+              if (real0 >= 1) n0 = Math.max(n0, 5);
+            }
             var min = 0;
             if (kind === 'loveletter') min = 2;
             else if (kind === 'codenames') min = 4;
@@ -8474,6 +8864,26 @@
               if (kind === 'hannin') {
                 var orderH = normalizeOrder(lobby);
                 var membersH = (lobby && lobby.members) || {};
+
+                // Dev-only: auto-inject test players for quick UI iteration.
+                if (isDevDebugSite() && Array.isArray(orderH)) {
+                  var realH = 0;
+                  for (var rr = 0; rr < orderH.length; rr++) {
+                    var idH0 = String(orderH[rr] || '');
+                    if (!idH0) continue;
+                    if (/^__hn_test_\d+$/.test(idH0)) continue;
+                    realH++;
+                  }
+                  if (realH >= 1) {
+                  var nextNo = 1;
+                  while (orderH.length < 5) {
+                    var tid = '__hn_test_' + String(nextNo++);
+                    if (orderH.indexOf(tid) === -1) orderH.push(tid);
+                    if (nextNo > 20) break;
+                  }
+                  }
+                }
+
                 hostPidH = isTableGm ? (orderH && orderH.length ? String(orderH[0] || '') : '') : String(mid || '');
                 if (orderH.indexOf(hostPidH) === -1) hostPidH = orderH && orderH.length ? String(orderH[0] || '') : hostPidH;
                 return createHanninRoom(roomId, { order: orderH })
@@ -8483,6 +8893,7 @@
                       (function (pidH) {
                         seqH = seqH.then(function () {
                           var nmH = membersH && membersH[pidH] && membersH[pidH].name ? String(membersH[pidH].name) : '';
+                          if (!nmH) nmH = hnTestPlayerLabel(pidH) || '-';
                           return joinPlayerInHanninRoom(roomId, pidH, nmH || '-', hostPidH && String(pidH) === String(hostPidH));
                         });
                       })(orderH[hA]);
@@ -8521,7 +8932,7 @@
               } else if (kind === 'hannin') {
                 q.host = '1';
                 if (hostPidH) q.player = String(hostPidH);
-                q.screen = 'hannin_table';
+                q.screen = isTableGm ? 'hannin_table' : 'hannin_player';
               }
               setQuery(q);
               route();
@@ -8669,7 +9080,7 @@
           q.player = '1';
         }
       } else if (kind === 'hannin') {
-        q.screen = 'hannin_table';
+        q.screen = 'hannin_player';
         if (isHostDevice) q.host = '1';
         q.player = String(mid);
       } else {
@@ -12707,6 +13118,37 @@
     var started = !!(st && st.started);
     var pending = (st && st.pending) || null;
 
+    var debugIframeHtml = '';
+    try {
+      var isTableGmDevice = false;
+      var qx = parseQuery();
+      isTableGmDevice = qx && String(qx.gmdev || '') === '1';
+      if (isHost && isTableGmDevice && isDevDebugSite()) {
+        var dbgPid = turn && turn.playerId ? String(turn.playerId) : '';
+        if (dbgPid) {
+          var qd = {
+            v: getCacheBusterParam(),
+            screen: 'hannin_player',
+            room: String(roomId || ''),
+            lobby: lobbyId || '',
+            player: dbgPid
+          };
+          var src = '?' + buildQuery(qd);
+          debugIframeHtml =
+            '<div class="card" style="padding:12px">' +
+            '<div class="muted">（dev）デバッグ：手番プレイヤー画面</div>' +
+            '<div style="margin-top:8px">' +
+            '<iframe title="hannin turn debug" src="' +
+            escapeHtml(src) +
+            '" style="width:100%;height:520px;border:1px solid var(--line);border-radius:10px" loading="lazy"></iframe>' +
+            '</div>' +
+            '</div>';
+        }
+      }
+    } catch (eDbg) {
+      debugIframeHtml = '';
+    }
+
     function cardHtml(cardId, pid, idx) {
       var id = String(cardId || '');
       var def = HANNIN_CARD_DEFS[id] || { name: id || '-', icon: '', desc: '' };
@@ -12833,6 +13275,7 @@
             (lobbyId ? '<button id="hnAbortToLobby" class="danger">中断してロビーへ</button>' : '') +
             '</div>'
           : '') +
+        (debugIframeHtml || '') +
         '<div class="stack"><div class="muted">プレイヤー</div>' +
         playersHtml +
         '</div>' +
@@ -12844,6 +13287,24 @@
   }
 
   function routeHanninTable(roomId, isHost) {
+    if (!isHost) {
+      var qx0 = {};
+      var vx0 = getCacheBusterParam();
+      if (vx0) qx0.v = vx0;
+      qx0.room = roomId;
+      try {
+        var qq0 = parseQuery();
+        if (qq0 && qq0.lobby) qx0.lobby = String(qq0.lobby);
+        if (qq0 && qq0.player) qx0.player = String(qq0.player);
+      } catch (e0x) {
+        // ignore
+      }
+      qx0.screen = 'hannin_player';
+      setQuery(qx0);
+      route();
+      return;
+    }
+
     var unsub = null;
     var lobbyId = '';
     try {
@@ -13351,7 +13812,8 @@
         codenames_join: 1,
         codenames_player: 1,
         codenames_rejoin: 1,
-        hannin_table: 1
+        hannin_table: 1,
+        hannin_player: 1
       };
 
       // Host-mode is never allowed on restricted devices (even if URL is tampered).
@@ -13454,6 +13916,11 @@
     if (screen === 'hannin_table') {
       if (!roomId) return routeHome();
       return routeHanninTable(roomId, isHost);
+    }
+
+    if (screen === 'hannin_player') {
+      if (!roomId) return routeHome();
+      return routeHanninPlayer(roomId, isHost);
     }
 
     if (!roomId) return routeHome();
