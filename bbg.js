@@ -3852,6 +3852,562 @@
     return setValue(base, room);
   }
 
+  function hnShuffle(list) {
+    var a = Array.isArray(list) ? list.slice() : [];
+    for (var i = a.length - 1; i > 0; i--) {
+      var r = randomInt(i + 1);
+      var t = a[i];
+      a[i] = a[r];
+      a[r] = t;
+    }
+    return a;
+  }
+
+  function hnBuildDeck(playerCount) {
+    var n = parseIntSafe(playerCount, 0) || 0;
+    var need = n > 0 ? 4 * n : 0;
+    if (need <= 0) return [];
+
+    var pool = [];
+    function addMany(id, count) {
+      var c = parseIntSafe(count, 0) || 0;
+      for (var i = 0; i < c; i++) pool.push(String(id));
+    }
+
+    // Card totals (32):
+    // culprit/dog/first/boy x1
+    // citizen/plot x2
+    // witness/info x3
+    // detective/rumor x4
+    // alibi/deal x5
+    addMany('culprit', 1);
+    addMany('dog', 1);
+    addMany('first', 1);
+    addMany('boy', 1);
+    addMany('citizen', 2);
+    addMany('plot', 2);
+    addMany('witness', 3);
+    addMany('info', 3);
+    addMany('detective', 4);
+    addMany('rumor', 4);
+    addMany('alibi', 5);
+    addMany('deal', 5);
+
+    if (n >= 8) return hnShuffle(pool);
+
+    var mandatory = [];
+    function takeMandatory(id, count) {
+      var c = parseIntSafe(count, 0) || 0;
+      for (var i = 0; i < c; i++) mandatory.push(String(id));
+    }
+
+    if (n === 3) {
+      takeMandatory('first', 1);
+      takeMandatory('culprit', 1);
+      takeMandatory('detective', 1);
+      takeMandatory('alibi', 1);
+    } else if (n === 4) {
+      takeMandatory('first', 1);
+      takeMandatory('culprit', 1);
+      takeMandatory('detective', 1);
+      takeMandatory('alibi', 1);
+      takeMandatory('plot', 1);
+    } else if (n === 5) {
+      takeMandatory('first', 1);
+      takeMandatory('culprit', 1);
+      takeMandatory('detective', 1);
+      takeMandatory('alibi', 2);
+      takeMandatory('plot', 1);
+    } else if (n === 6) {
+      takeMandatory('first', 1);
+      takeMandatory('culprit', 1);
+      takeMandatory('detective', 2);
+      takeMandatory('alibi', 2);
+      takeMandatory('plot', 2);
+    } else if (n === 7) {
+      takeMandatory('first', 1);
+      takeMandatory('culprit', 1);
+      takeMandatory('detective', 2);
+      takeMandatory('alibi', 3);
+      takeMandatory('plot', 2);
+    } else {
+      // Fallback: use all cards, then slice.
+      return hnShuffle(pool).slice(0, need);
+    }
+
+    // Remove mandatory cards from pool.
+    var remaining = pool.slice();
+    for (var m = 0; m < mandatory.length; m++) {
+      var id = mandatory[m];
+      var idx = remaining.indexOf(id);
+      if (idx < 0) return [];
+      remaining.splice(idx, 1);
+    }
+
+    var out = mandatory.slice();
+    remaining = hnShuffle(remaining);
+    while (out.length < need && remaining.length) out.push(remaining.shift());
+    if (out.length !== need) return [];
+    return hnShuffle(out);
+  }
+
+  function hnFindFirstHolder(order, hands) {
+    if (!Array.isArray(order)) return '';
+    for (var i = 0; i < order.length; i++) {
+      var pid = String(order[i] || '');
+      if (!pid) continue;
+      var h = hands && Array.isArray(hands[pid]) ? hands[pid] : [];
+      for (var k = 0; k < h.length; k++) {
+        if (String(h[k] || '') === 'first') return pid;
+      }
+    }
+    return order.length ? String(order[0] || '') : '';
+  }
+
+  function dealHanninGame(roomId) {
+    var base = hanninRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'lobby') return room;
+
+      var st = assign({}, room.state || {});
+      var order = Array.isArray(st.order) ? st.order.slice() : [];
+      if (!order.length) {
+        // Fall back to player join order.
+        var keys = Object.keys(room.players || {});
+        keys.sort();
+        order = keys;
+      }
+
+      var n = order.length;
+      if (n < 3) return room;
+
+      var deck = hnBuildDeck(n);
+      if (deck.length < 4 * n) return room;
+
+      var hands = {};
+      var idx = 0;
+      for (var i = 0; i < order.length; i++) {
+        var pid = String(order[i] || '');
+        if (!pid) continue;
+        hands[pid] = [String(deck[idx++]), String(deck[idx++]), String(deck[idx++]), String(deck[idx++])];
+      }
+
+      var firstPid = hnFindFirstHolder(order, hands);
+      st.order = order;
+      st.hands = hands;
+      st.graveyard = [];
+      st.turn = { index: order.indexOf(firstPid), playerId: firstPid };
+      st.started = false;
+      st.pending = null;
+      st.allies = {};
+      st.lastPlay = { at: 0, playerId: '', cardId: '' };
+      st.result = { side: '', winners: [], culpritId: '', decidedAt: 0, reason: '' };
+      st.deckInfo = { playerCount: n, usedCount: deck.length };
+      st.log = ['配布しました。第一発見者の人が「第一発見者」を捨てて開始します。'];
+
+      return assign({}, room, { phase: 'playing', state: st });
+    });
+  }
+
+  function hnNextTurn(order, currentPid) {
+    if (!Array.isArray(order) || !order.length) return { index: 0, playerId: '' };
+    var cur = String(currentPid || '');
+    var idx = order.indexOf(cur);
+    if (idx < 0) idx = 0;
+    var nextIdx = (idx + 1) % order.length;
+    return { index: nextIdx, playerId: String(order[nextIdx] || '') };
+  }
+
+  function hnPlayerName(room, pid) {
+    try {
+      return String((room && room.players && room.players[pid] && room.players[pid].name) || pid || '');
+    } catch (e) {
+      return String(pid || '');
+    }
+  }
+
+  function hnOrderIdx(order, pid) {
+    if (!Array.isArray(order)) return -1;
+    return order.indexOf(String(pid || ''));
+  }
+
+  function hnLeftPid(order, pid) {
+    if (!Array.isArray(order) || !order.length) return '';
+    var idx = hnOrderIdx(order, pid);
+    if (idx < 0) idx = 0;
+    var left = (idx - 1 + order.length) % order.length;
+    return String(order[left] || '');
+  }
+
+  function hnFindCulpritHolder(order, hands) {
+    if (!Array.isArray(order)) return '';
+    for (var i = 0; i < order.length; i++) {
+      var pid = String(order[i] || '');
+      var h = hands && Array.isArray(hands[pid]) ? hands[pid] : [];
+      for (var k = 0; k < h.length; k++) if (String(h[k] || '') === 'culprit') return pid;
+    }
+    return '';
+  }
+
+  function hnSetResult(st, side, room, culpritId, reason) {
+    var order = Array.isArray(st.order) ? st.order.slice() : [];
+    var allies = st.allies && typeof st.allies === 'object' ? st.allies : {};
+    var winners = [];
+    var cid = String(culpritId || '');
+    if (!cid) cid = hnFindCulpritHolder(order, st.hands);
+
+    if (side === 'culprit') {
+      if (cid) winners.push(cid);
+      for (var i = 0; i < order.length; i++) {
+        var pid = String(order[i] || '');
+        if (!pid) continue;
+        if (pid === cid) continue;
+        if (allies && allies[pid]) winners.push(pid);
+      }
+    } else if (side === 'citizen') {
+      for (var j = 0; j < order.length; j++) {
+        var pid2 = String(order[j] || '');
+        if (!pid2) continue;
+        if (pid2 === cid) continue;
+        if (allies && allies[pid2]) continue;
+        winners.push(pid2);
+      }
+    }
+
+    st.result = {
+      side: String(side || ''),
+      winners: winners,
+      culpritId: cid,
+      decidedAt: serverNowMs(),
+      reason: String(reason || '')
+    };
+    return st;
+  }
+
+  function playHanninCard(roomId, actorId, cardIndex, action) {
+    var base = hanninRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room) return room;
+      if (room.phase !== 'playing') return room;
+
+      var st = assign({}, room.state || {});
+      if (st.result && st.result.decidedAt) return room;
+
+      var order = Array.isArray(st.order) ? st.order.slice() : [];
+      var hands = assign({}, st.hands || {});
+      var grave = Array.isArray(st.graveyard) ? st.graveyard.slice() : [];
+
+      var turnPid = String(st.turn && st.turn.playerId ? st.turn.playerId : '');
+      var pid = String(actorId || '');
+      if (!pid || pid !== turnPid) return room;
+
+      if (st.pending && st.pending.type) {
+        // Cannot play while a pending group effect is active.
+        return room;
+      }
+
+      var h = hands && Array.isArray(hands[pid]) ? hands[pid].slice() : [];
+      var idx = parseIntSafe(cardIndex, -1);
+      if (idx < 0 || idx >= h.length) return room;
+
+      var cardId = String(h[idx] || '');
+
+      // Start rule: first discoverer must play "first" to begin.
+      if (!st.started) {
+        if (cardId !== 'first') return room;
+      }
+
+      // Culprit can only be played when it's the only card in hand.
+      if (cardId === 'culprit') {
+        if (h.length !== 1) return room;
+      }
+
+      var a = action && typeof action === 'object' ? action : {};
+
+      // Discard the played card.
+      h.splice(idx, 1);
+      hands[pid] = h;
+      grave.push(cardId);
+
+      st.hands = hands;
+      st.graveyard = grave;
+      st.lastPlay = { at: serverNowMs(), playerId: pid, cardId: cardId };
+      if (!Array.isArray(st.log)) st.log = [];
+
+      var nm = hnPlayerName(room, pid);
+      var cardNm = (HANNIN_CARD_DEFS[cardId] ? HANNIN_CARD_DEFS[cardId].name : cardId);
+      st.log = st.log.concat([nm + '：' + cardNm + ' をプレイ']);
+
+      function advanceTurn() {
+        st.turn = hnNextTurn(order, pid);
+      }
+
+      // Resolve effects
+      if (cardId === 'first') {
+        st.started = true;
+        st.log = st.log.concat(['ゲーム開始']);
+        advanceTurn();
+        return assign({}, room, { state: st });
+      }
+
+      if (cardId === 'citizen' || cardId === 'alibi') {
+        advanceTurn();
+        return assign({}, room, { state: st });
+      }
+
+      if (cardId === 'plot') {
+        if (!st.allies || typeof st.allies !== 'object') st.allies = {};
+        st.allies[pid] = true;
+        st.log = st.log.concat([nm + ' は犯人側についた']);
+        advanceTurn();
+        return assign({}, room, { state: st });
+      }
+
+      if (cardId === 'culprit') {
+        // Culprit wins (with allies)
+        hnSetResult(st, 'culprit', room, pid, '犯人が最後の手札「犯人」を出した');
+        st.log = st.log.concat(['犯人側の勝利']);
+        return assign({}, room, { state: st });
+      }
+
+      if (cardId === 'detective') {
+        var tPid = String(a.targetPid || '');
+        if (!tPid || tPid === pid) {
+          advanceTurn();
+          return assign({}, room, { state: st });
+        }
+        var th = hands && Array.isArray(hands[tPid]) ? hands[tPid] : [];
+        var hasC = false;
+        var hasA = false;
+        for (var iC = 0; iC < th.length; iC++) {
+          if (String(th[iC] || '') === 'culprit') hasC = true;
+          if (String(th[iC] || '') === 'alibi') hasA = true;
+        }
+        if (hasC && !hasA) {
+          hnSetResult(st, 'citizen', room, tPid, '探偵が犯人を指摘した');
+          st.log = st.log.concat(['一般人側の勝利']);
+          return assign({}, room, { state: st });
+        }
+        if (hasC && hasA) st.log = st.log.concat(['アリバイにより指摘は無効']);
+        advanceTurn();
+        return assign({}, room, { state: st });
+      }
+
+      if (cardId === 'dog') {
+        var tPid2 = String(a.targetPid || '');
+        var pick = parseIntSafe(a.targetIndex, -1);
+        if (!tPid2 || tPid2 === pid) {
+          advanceTurn();
+          return assign({}, room, { state: st });
+        }
+        var th2 = hands && Array.isArray(hands[tPid2]) ? hands[tPid2] : [];
+        if (pick < 0 || pick >= th2.length) {
+          advanceTurn();
+          return assign({}, room, { state: st });
+        }
+        if (String(th2[pick] || '') === 'culprit') {
+          hnSetResult(st, 'citizen', room, tPid2, 'いぬが犯人カードを当てた');
+          st.log = st.log.concat(['一般人側の勝利']);
+          return assign({}, room, { state: st });
+        }
+        advanceTurn();
+        return assign({}, room, { state: st });
+      }
+
+      if (cardId === 'witness') {
+        // Viewing is handled client-side; state change is only discard.
+        advanceTurn();
+        return assign({}, room, { state: st });
+      }
+
+      if (cardId === 'boy') {
+        // Reveal is handled client-side.
+        advanceTurn();
+        return assign({}, room, { state: st });
+      }
+
+      if (cardId === 'deal') {
+        var tPid3 = String(a.targetPid || '');
+        var giveIdx = parseIntSafe(a.giveIndex, -1);
+        var takeIdx = parseIntSafe(a.takeIndex, -1);
+        if (!tPid3 || tPid3 === pid) {
+          advanceTurn();
+          return assign({}, room, { state: st });
+        }
+        var myHand = hands && Array.isArray(hands[pid]) ? hands[pid].slice() : [];
+        var theirHand = hands && Array.isArray(hands[tPid3]) ? hands[tPid3].slice() : [];
+        if (giveIdx < 0 || giveIdx >= myHand.length) {
+          advanceTurn();
+          return assign({}, room, { state: st });
+        }
+        if (takeIdx < 0 || takeIdx >= theirHand.length) {
+          advanceTurn();
+          return assign({}, room, { state: st });
+        }
+        var giveCard = String(myHand[giveIdx] || '');
+        var takeCard = String(theirHand[takeIdx] || '');
+        myHand.splice(giveIdx, 1);
+        theirHand.splice(takeIdx, 1);
+        myHand.push(takeCard);
+        theirHand.push(giveCard);
+        hands[pid] = myHand;
+        hands[tPid3] = theirHand;
+        st.hands = hands;
+        st.log = st.log.concat([nm + ' は ' + hnPlayerName(room, tPid3) + ' と手札を1枚交換']);
+        advanceTurn();
+        return assign({}, room, { state: st });
+      }
+
+      if (cardId === 'rumor') {
+        // Everyone draws 1 random card from the right neighbor.
+        // Equivalent: each player gives 1 random card to the left neighbor.
+        var snapshot = {};
+        for (var iS = 0; iS < order.length; iS++) {
+          var pS = String(order[iS] || '');
+          snapshot[pS] = hands && Array.isArray(hands[pS]) ? hands[pS].slice() : [];
+        }
+        var give = {};
+        var giveIdxMap = {};
+        for (var iG = 0; iG < order.length; iG++) {
+          var pG = String(order[iG] || '');
+          var sh = snapshot[pG] || [];
+          if (!sh.length) continue;
+          var ri = randomInt(sh.length);
+          giveIdxMap[pG] = ri;
+          give[pG] = String(sh[ri] || '');
+        }
+        // Apply
+        for (var iA = 0; iA < order.length; iA++) {
+          var pA = String(order[iA] || '');
+          if (!give[pA]) continue;
+          var real = hands && Array.isArray(hands[pA]) ? hands[pA].slice() : [];
+          var rmi = parseIntSafe(giveIdxMap[pA], -1);
+          if (rmi >= 0 && rmi < real.length) real.splice(rmi, 1);
+          else {
+            // fallback remove first occurrence
+            var fx = real.indexOf(give[pA]);
+            if (fx >= 0) real.splice(fx, 1);
+          }
+          hands[pA] = real;
+        }
+        for (var iR = 0; iR < order.length; iR++) {
+          var pR = String(order[iR] || '');
+          if (!give[pR]) continue;
+          var leftPid = hnLeftPid(order, pR);
+          if (!leftPid) continue;
+          var lh = hands && Array.isArray(hands[leftPid]) ? hands[leftPid].slice() : [];
+          lh.push(give[pR]);
+          hands[leftPid] = lh;
+        }
+        st.hands = hands;
+        st.log = st.log.concat(['うわさ：全員が右隣からランダムに1枚引いた']);
+        advanceTurn();
+        return assign({}, room, { state: st });
+      }
+
+      if (cardId === 'info') {
+        // Pending group action: each player selects 1 card to pass to left neighbor.
+        st.pending = {
+          type: 'info',
+          actorId: pid,
+          createdAt: serverNowMs(),
+          choices: {},
+          resumeTurn: hnNextTurn(order, pid)
+        };
+        st.log = st.log.concat(['情報操作：全員が左隣へ渡すカードを選択中']);
+        return assign({}, room, { state: st });
+      }
+
+      // Unknown card: just advance.
+      advanceTurn();
+      return assign({}, room, { state: st });
+    });
+  }
+
+  function submitHanninInfoChoice(roomId, playerId, passIndex) {
+    var base = hanninRoomPath(roomId);
+    return runTxn(base, function (room) {
+      if (!room || room.phase !== 'playing') return room;
+      var st = assign({}, room.state || {});
+      if (!st.pending || st.pending.type !== 'info') return room;
+      if (st.result && st.result.decidedAt) return room;
+
+      var pid = String(playerId || '');
+      var idx = parseIntSafe(passIndex, -1);
+      if (!pid || idx < 0) return room;
+
+      var hands = assign({}, st.hands || {});
+      var h = hands && Array.isArray(hands[pid]) ? hands[pid] : [];
+      if (idx >= h.length) return room;
+
+      var order = Array.isArray(st.order) ? st.order.slice() : [];
+      if (order.indexOf(pid) < 0) return room;
+
+      if (!st.pending.choices || typeof st.pending.choices !== 'object') st.pending.choices = {};
+      if (st.pending.choices[pid] !== undefined) return room;
+      st.pending.choices[pid] = idx;
+
+      // If all submitted, resolve simultaneously.
+      var done = true;
+      for (var i = 0; i < order.length; i++) {
+        var p = String(order[i] || '');
+        if (st.pending.choices[p] === undefined) {
+          done = false;
+          break;
+        }
+      }
+      if (!done) return assign({}, room, { state: st });
+
+      var snapshot = {};
+      for (var iS = 0; iS < order.length; iS++) {
+        var pS = String(order[iS] || '');
+        snapshot[pS] = hands && Array.isArray(hands[pS]) ? hands[pS].slice() : [];
+      }
+
+      var giveCard = {};
+      for (var iG = 0; iG < order.length; iG++) {
+        var pG = String(order[iG] || '');
+        var hG = snapshot[pG] || [];
+        var choose = parseIntSafe(st.pending.choices[pG], -1);
+        if (choose < 0 || choose >= hG.length) return room;
+        giveCard[pG] = String(hG[choose] || '');
+      }
+
+      // Remove chosen cards
+      for (var iR = 0; iR < order.length; iR++) {
+        var pR = String(order[iR] || '');
+        var real = hands && Array.isArray(hands[pR]) ? hands[pR].slice() : [];
+        var choose2 = parseIntSafe(st.pending.choices[pR], -1);
+        if (choose2 >= 0 && choose2 < real.length) real.splice(choose2, 1);
+        else {
+          var fx = real.indexOf(giveCard[pR]);
+          if (fx >= 0) real.splice(fx, 1);
+        }
+        hands[pR] = real;
+      }
+
+      // Give to left
+      for (var iL = 0; iL < order.length; iL++) {
+        var pL = String(order[iL] || '');
+        var left = hnLeftPid(order, pL);
+        if (!left) continue;
+        var lh = hands && Array.isArray(hands[left]) ? hands[left].slice() : [];
+        lh.push(giveCard[pL]);
+        hands[left] = lh;
+      }
+
+      st.hands = hands;
+      var resume = st.pending && st.pending.resumeTurn ? st.pending.resumeTurn : (room.state && room.state.pending && room.state.pending.resumeTurn ? room.state.pending.resumeTurn : null);
+      st.pending = null;
+      if (resume) st.turn = resume;
+
+      if (!Array.isArray(st.log)) st.log = [];
+      st.log = st.log.concat(['情報操作：全員が左隣へ1枚渡した']);
+      return assign({}, room, { state: st });
+    });
+  }
+
   function joinPlayerInLoveLetterRoom(roomId, playerId, name, isHostPlayer) {
     var base = loveletterRoomPath(roomId);
     return runTxn(base, function (room) {
@@ -7835,6 +8391,7 @@
                 q.screen = 'loveletter_extras';
               } else if (kind === 'hannin') {
                 q.host = '1';
+                if (hostPidH) q.player = String(hostPidH);
                 q.screen = 'hannin_table';
               }
               setQuery(q);
@@ -7950,6 +8507,7 @@
       } else if (kind === 'hannin') {
         q.screen = 'hannin_table';
         if (isHostDevice) q.host = '1';
+        q.player = String(mid);
       } else {
         // Wordwolf: members are pre-registered from lobby; go directly.
         try {
@@ -11863,6 +12421,7 @@
   function routeCodenamesTable(roomId, isHost) {
   
       function renderHanninTable(viewEl, opts) {
+          var viewerId = opts && opts.playerId ? String(opts.playerId) : '';
         var roomId = opts.roomId;
         var room = opts.room;
         var isHost = !!opts.isHost;
@@ -11874,14 +12433,55 @@
         var hands = (st && st.hands) || {};
         var grave = Array.isArray(st.graveyard) ? st.graveyard : [];
         var result = (st && st.result) || {};
+        var turn = (st && st.turn) || { index: 0, playerId: '' };
+        var phase = String((room && room.phase) || '');
+        var started = !!(st && st.started);
+        var pending = (st && st.pending) || null;
   
-        function cardHtml(cardId) {
+        function cardHtml(cardId, pid, idx) {
           var id = String(cardId || '');
           var def = HANNIN_CARD_DEFS[id] || { name: id || '-', icon: '', desc: '' };
           var img = def.icon
             ? '<img src="' + escapeHtml(def.icon) + '" alt="' + escapeHtml(def.name || id) + '" style="width:42px;height:auto;border-radius:8px;border:1px solid var(--line)" />'
             : '';
-          return '<div class="row" style="gap:10px;align-items:center">' + img + '<div><b>' + escapeHtml(def.name || id) + '</b></div></div>';
+          var btn = '';
+          var isTurn = String(turn && turn.playerId ? turn.playerId : '') === String(pid);
+          var canAct = isTurn && phase === 'playing' && (!pending || !pending.type) && (isHost || (viewerId && String(viewerId) === String(pid)));
+          if (canAct) {
+            btn =
+              '<button class="ghost hnPlay" data-pid="' +
+              escapeHtml(String(pid)) +
+              '" data-idx="' +
+              escapeHtml(String(idx)) +
+              '">プレイ</button>';
+          }
+
+          var infoBtn = '';
+          if (pending && pending.type === 'info') {
+            var canChoose = (isHost || (viewerId && String(viewerId) === String(pid))) && pending.choices && pending.choices[String(pid)] === undefined;
+            if (canChoose) {
+              infoBtn =
+                '<button class="ghost hnInfoChoose" data-pid="' +
+                escapeHtml(String(pid)) +
+                '" data-idx="' +
+                escapeHtml(String(idx)) +
+                '">渡す</button>';
+            } else if ((isHost || (viewerId && String(viewerId) === String(pid))) && pending.choices && pending.choices[String(pid)] !== undefined) {
+              infoBtn = '<span class="badge">選択済</span>';
+            }
+          }
+
+          return (
+            '<div class="row" style="gap:10px;align-items:center;justify-content:space-between">' +
+            '<div class="row" style="gap:10px;align-items:center">' +
+            img +
+            '<div><b>' +
+            escapeHtml(def.name || id) +
+            '</b></div>' +
+            '</div>' +
+            '<div class="row" style="gap:8px">' + infoBtn + btn + '</div>' +
+            '</div>'
+          );
         }
   
         var playersHtml = '';
@@ -11893,24 +12493,23 @@
           if (!nm) nm = '（無名）';
           var h = hands && Array.isArray(hands[pid]) ? hands[pid] : [];
           var handHtml = '';
-          if (!isHost) {
-            handHtml = '<div class="muted">（手札は非表示）</div>';
-          } else {
-            if (!h.length) handHtml = '<div class="muted">（手札なし）</div>';
-            else {
-              for (var k = 0; k < h.length; k++) {
-                handHtml += '<div class="card" style="padding:10px">' + cardHtml(h[k]) + '</div>';
-              }
+          var canSeeHand = isHost || (viewerId && String(viewerId) === String(pid));
+          if (!canSeeHand) handHtml = '<div class="muted">（手札は非表示）</div>';
+          else if (!h.length) handHtml = '<div class="muted">（手札なし）</div>';
+          else {
+            for (var k = 0; k < h.length; k++) {
+              handHtml += '<div class="card" style="padding:10px">' + cardHtml(h[k], pid, k) + '</div>';
             }
           }
   
+          var isTurn = String(turn && turn.playerId ? turn.playerId : '') === String(pid);
           playersHtml +=
-            '<div class="card" style="padding:12px">' +
+            '<div class="card" style="padding:12px;' + (isTurn ? 'border-color:var(--text);' : '') + '">' +
             '<div class="row" style="justify-content:space-between">' +
             '<b>' +
             escapeHtml(nm) +
             '</b>' +
-            (p && p.isHost ? '<span class="badge">HOST</span>' : '') +
+            (isTurn ? '<span class="badge">TURN</span>' : p && p.isHost ? '<span class="badge">HOST</span>' : '') +
             '</div>' +
             '<div class="stack" style="margin-top:8px">' +
             handHtml +
@@ -11934,13 +12533,37 @@
             '<div class="kv"><span class="muted">ルームID</span><b>' +
             escapeHtml(roomId) +
             '</b></div>' +
-            (result && result.winner ? '<div class="card"><b>勝者: ' + escapeHtml(String(result.winner)) + '</b><div class="muted">' + escapeHtml(String(result.reason || '')) + '</div></div>' : '') +
+            '<div class="kv"><span class="muted">状態</span><b>' +
+            escapeHtml(phase || '-') +
+            '</b></div>' +
+            '<div class="kv"><span class="muted">進行</span><b>' +
+            (started ? '進行中' : '開始前（第一発見者を捨てる）') +
+            '</b></div>' +
+            (pending && pending.type === 'info'
+              ? '<div class="card"><b>情報操作</b><div class="muted">左隣へ渡すカードを全員選択してください。</div></div>'
+              : '') +
+            (result && result.decidedAt
+              ? (function () {
+                  var w = Array.isArray(result.winners) ? result.winners : [];
+                  var names = [];
+                  for (var iW = 0; iW < w.length; iW++) names.push(hnPlayerName(room, String(w[iW] || '')));
+                  return (
+                    '<div class="card"><b>' +
+                    escapeHtml(result.side === 'culprit' ? '犯人側の勝利' : result.side === 'citizen' ? '一般人側の勝利' : '結果') +
+                    '</b>' +
+                    (names.length ? '<div class="muted">勝者: ' + escapeHtml(names.join(' / ')) + '</div>' : '') +
+                    '<div class="muted">' +
+                    escapeHtml(String(result.reason || '')) +
+                    '</div></div>'
+                  );
+                })()
+              : '') +
             (isHost
               ? '<div class="row">' +
-                '<button id="hnDeal" class="ghost">（仮）配布/開始</button>' +
+                '<button id="hnDeal" class="ghost">配布/開始</button>' +
                 (lobbyId ? '<button id="hnAbortToLobby" class="danger">中断してロビーへ</button>' : '') +
                 '</div>'
-              : '<div class="muted">※ この画面は閲覧用です（操作はホスト端末のみ）</div>') +
+              : '') +
             '<div class="stack"><div class="muted">プレイヤー</div>' +
             playersHtml +
             '</div>' +
@@ -11972,6 +12595,24 @@
           route();
         }
   
+        var playerId = '';
+        try {
+          var q1 = parseQuery();
+          playerId = q1 && q1.player ? String(q1.player) : '';
+        } catch (eP) {
+          playerId = '';
+        }
+
+        var playerId = '';
+        try {
+          var q1 = parseQuery();
+          playerId = q1 && q1.player ? String(q1.player) : '';
+        } catch (eP) {
+          playerId = '';
+        }
+
+        var lastRoom = null;
+
         firebaseReady()
           .then(function () {
             return subscribeHanninRoom(roomId, function (room) {
@@ -11979,9 +12620,10 @@
                 renderError(viewEl, '部屋が見つかりません');
                 return;
               }
-              renderHanninTable(viewEl, { roomId: roomId, room: room, isHost: isHost, lobbyId: lobbyId });
+              lastRoom = room;
+              renderHanninTable(viewEl, { roomId: roomId, room: room, isHost: isHost, lobbyId: lobbyId, playerId: playerId });
   
-              if (!isHost) return;
+              // Bind buttons (host and players)
   
               var abortBtn = document.getElementById('hnAbortToLobby');
               if (abortBtn && !abortBtn.__hn_bound) {
@@ -12010,7 +12652,152 @@
               if (dealBtn && !dealBtn.__hn_bound) {
                 dealBtn.__hn_bound = true;
                 dealBtn.addEventListener('click', function () {
-                  alert('配布/開始ロジックは次ステップで実装します（仕様どおりに入れます）。');
+                  dealBtn.disabled = true;
+                  dealHanninGame(roomId)
+                    .catch(function (e) {
+                      alert((e && e.message) || '失敗');
+                    })
+                    .finally(function () {
+                      dealBtn.disabled = false;
+                    });
+                });
+              }
+
+              function chooseTargetPid(room, actorPid, allowSelf) {
+                var players = (room && room.players) || {};
+                var order = (room && room.state && Array.isArray(room.state.order)) ? room.state.order : Object.keys(players || {});
+                var opts = [];
+                for (var i = 0; i < order.length; i++) {
+                  var pid = String(order[i] || '');
+                  if (!pid) continue;
+                  if (!allowSelf && String(pid) === String(actorPid)) continue;
+                  opts.push(pid);
+                }
+                if (!opts.length) return '';
+                var msg = '対象を選んでください:\n' + opts.map(function (p, idx) {
+                  return String(idx + 1) + '. ' + hnPlayerName(room, p);
+                }).join('\n');
+                var s = prompt(msg, '1');
+                var n = parseIntSafe(s, 0);
+                if (n < 1 || n > opts.length) return '';
+                return String(opts[n - 1] || '');
+              }
+
+              function chooseOwnCardIndexByName(room, pid) {
+                var h = room && room.state && room.state.hands && Array.isArray(room.state.hands[pid]) ? room.state.hands[pid] : [];
+                if (!h.length) return -1;
+                var msg = '渡すカードを選んでください:\n' + h.map(function (id, idx) {
+                  var def = HANNIN_CARD_DEFS[String(id || '')] || { name: String(id || '-') };
+                  return String(idx + 1) + '. ' + String(def.name || id);
+                }).join('\n');
+                var s = prompt(msg, '1');
+                var n = parseIntSafe(s, 0);
+                if (n < 1 || n > h.length) return -1;
+                return n - 1;
+              }
+
+              function chooseHiddenCardIndex(room, pid) {
+                var h = room && room.state && room.state.hands && Array.isArray(room.state.hands[pid]) ? room.state.hands[pid] : [];
+                if (!h.length) return -1;
+                var msg = '相手の手札から選んでください（番号）: 1〜' + String(h.length);
+                var s = prompt(msg, '1');
+                var n = parseIntSafe(s, 0);
+                if (n < 1 || n > h.length) return -1;
+                return n - 1;
+              }
+
+              var playBtns = document.querySelectorAll('.hnPlay');
+              for (var iB = 0; iB < playBtns.length; iB++) {
+                var b = playBtns[iB];
+                if (!b || b.__hn_bound) continue;
+                b.__hn_bound = true;
+                b.addEventListener('click', function (ev) {
+                  var el = ev && ev.currentTarget ? ev.currentTarget : null;
+                  if (!el) return;
+                  var pid = String(el.getAttribute('data-pid') || '');
+                  var idx = parseIntSafe(el.getAttribute('data-idx'), -1);
+                  if (!pid || idx < 0) return;
+
+                  var room = lastRoom;
+                  var cardId = '';
+                  try {
+                    cardId = room && room.state && room.state.hands && Array.isArray(room.state.hands[pid]) ? String(room.state.hands[pid][idx] || '') : '';
+                  } catch (e0) {
+                    cardId = '';
+                  }
+
+                  var action = {};
+                  if (cardId === 'detective') {
+                    var t = chooseTargetPid(room, pid, false);
+                    if (!t) return;
+                    action = { targetPid: t };
+                  } else if (cardId === 'dog') {
+                    var t2 = chooseTargetPid(room, pid, false);
+                    if (!t2) return;
+                    var pick = chooseHiddenCardIndex(room, t2);
+                    if (pick < 0) return;
+                    action = { targetPid: t2, targetIndex: pick };
+                  } else if (cardId === 'deal') {
+                    var t3 = chooseTargetPid(room, pid, false);
+                    if (!t3) return;
+                    // After discarding "deal" itself, choose one from remaining hand.
+                    // We approximate by asking from current hand excluding the played index.
+                    var h0 = room && room.state && room.state.hands && Array.isArray(room.state.hands[pid]) ? room.state.hands[pid].slice() : [];
+                    if (idx >= 0 && idx < h0.length) h0.splice(idx, 1);
+                    var tmpRoom = assign({}, room, { state: assign({}, room.state || {}, { hands: assign({}, room.state && room.state.hands ? room.state.hands : {}, (function(){ var o={}; o[pid]=h0; return o; })()) }) });
+                    var give = chooseOwnCardIndexByName(tmpRoom, pid);
+                    if (give < 0) return;
+                    var take = chooseHiddenCardIndex(room, t3);
+                    if (take < 0) return;
+                    action = { targetPid: t3, giveIndex: give, takeIndex: take };
+                  } else if (cardId === 'witness') {
+                    var t4 = chooseTargetPid(room, pid, false);
+                    if (!t4) return;
+                    // Show after play succeeds.
+                    action = { targetPid: t4 };
+                  } else if (cardId === 'boy') {
+                    action = {};
+                  }
+
+                  playHanninCard(roomId, pid, idx, action)
+                    .then(function () {
+                      // Post-play private reveals
+                      if (!lastRoom || !lastRoom.state) return;
+                      if (cardId === 'witness') {
+                        var tp = action && action.targetPid ? String(action.targetPid) : '';
+                        if (!tp) return;
+                        var th = lastRoom.state.hands && Array.isArray(lastRoom.state.hands[tp]) ? lastRoom.state.hands[tp] : [];
+                        var names = th.map(function (id) {
+                          var def = HANNIN_CARD_DEFS[String(id || '')] || { name: String(id || '-') };
+                          return String(def.name || id);
+                        });
+                        alert('目撃者：' + hnPlayerName(lastRoom, tp) + ' の手札\n' + names.join(' / '));
+                      } else if (cardId === 'boy') {
+                        var order = lastRoom.state.order || [];
+                        var cpid = hnFindCulpritHolder(order, lastRoom.state.hands);
+                        if (cpid) alert('少年：犯人は ' + hnPlayerName(lastRoom, cpid));
+                      }
+                    })
+                    .catch(function (e) {
+                      alert((e && e.message) || '失敗');
+                    });
+                });
+              }
+
+              var infoBtns = document.querySelectorAll('.hnInfoChoose');
+              for (var iI = 0; iI < infoBtns.length; iI++) {
+                var bi = infoBtns[iI];
+                if (!bi || bi.__hn_bound) continue;
+                bi.__hn_bound = true;
+                bi.addEventListener('click', function (ev) {
+                  var el = ev && ev.currentTarget ? ev.currentTarget : null;
+                  if (!el) return;
+                  var pid = String(el.getAttribute('data-pid') || '');
+                  var idx = parseIntSafe(el.getAttribute('data-idx'), -1);
+                  if (!pid || idx < 0) return;
+                  submitHanninInfoChoice(roomId, pid, idx).catch(function (e) {
+                    alert((e && e.message) || '失敗');
+                  });
                 });
               }
             });
