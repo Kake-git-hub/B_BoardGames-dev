@@ -3505,6 +3505,23 @@
     '8:megane': { rank: 8, name: '姫（眼鏡）', desc: '捨てたら脱落。', icon: './assets/loveletter/Himemegane.png' }
   };
 
+  // -------------------- hannin (犯人は踊る) --------------------
+  // NOTE: This is UI metadata (labels/icons). Game rules/effects are implemented separately.
+  var HANNIN_CARD_DEFS = {
+    culprit: { name: '犯人', desc: '', icon: './assets/hannin/犯人.png' },
+    detective: { name: '探偵', desc: '', icon: './assets/hannin/探偵.png' },
+    dog: { name: 'いぬ', desc: '', icon: './assets/hannin/いぬ.png' },
+    boy: { name: '少年', desc: '', icon: './assets/hannin/少年.png' },
+    witness: { name: '目撃者', desc: '', icon: './assets/hannin/目撃者.png' },
+    alibi: { name: 'アリバイ', desc: '', icon: './assets/hannin/アリバイ.png' },
+    info: { name: '情報操作', desc: '', icon: './assets/hannin/情報操作.png' },
+    deal: { name: '取引', desc: '', icon: './assets/hannin/取引.png' },
+    first: { name: '第一発見者', desc: '', icon: './assets/hannin/第一発見者.png' },
+    rumor: { name: 'うわさ', desc: '', icon: './assets/hannin/うわさ.png' },
+    plot: { name: 'たくらみ', desc: '', icon: './assets/hannin/たくらみ.png' },
+    citizen: { name: '一般人', desc: '', icon: './assets/hannin/一般人.png' }
+  };
+
   function llCardRankStr(cardId) {
     var s = String(cardId || '');
     // Card IDs may include variants like "7:countess". Base rank is the leading number.
