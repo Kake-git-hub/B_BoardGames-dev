@@ -8380,6 +8380,8 @@
           if (!hostName) hostName = loadPersistedName() || 'GM';
 
           var roomId = makeRoomId();
+          // Used for hannin redirect after room creation (needs to survive promise chain).
+          var hostPidH = '';
           firebaseReady()
             .then(function () {
               if (kind === 'codenames') {
@@ -8472,7 +8474,7 @@
               if (kind === 'hannin') {
                 var orderH = normalizeOrder(lobby);
                 var membersH = (lobby && lobby.members) || {};
-                var hostPidH = isTableGm ? (orderH && orderH.length ? String(orderH[0] || '') : '') : String(mid || '');
+                hostPidH = isTableGm ? (orderH && orderH.length ? String(orderH[0] || '') : '') : String(mid || '');
                 if (orderH.indexOf(hostPidH) === -1) hostPidH = orderH && orderH.length ? String(orderH[0] || '') : hostPidH;
                 return createHanninRoom(roomId, { order: orderH })
                   .then(function () {
@@ -10690,44 +10692,88 @@
       } else if (rv.type === 'knight' || rv.type === 'general_swap') {
         var by = String(rv.by || '');
         var tg = String(rv.target || '');
-        // Knight compare should be visible to everyone (even when tied).
-        // General swap stays private to the two involved players.
-        if (rv.type === 'knight' || String(playerId) === by || String(playerId) === tg) {
-          var byName = ps[by] ? formatPlayerDisplayName(ps[by]) : by;
-          var tgName = ps[tg] ? formatPlayerDisplayName(ps[tg]) : tg;
-          var title = rv.type === 'general_swap' ? '将軍：手札交換' : '騎士：比較結果';
-          modalHtml =
-            '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
-            '<div class="ll-overlay-backdrop"></div>' +
-            '<div class="ll-overlay-panel">' +
-            '<div class="big">' + escapeHtml(title) + '</div>' +
-            '<div class="ll-compare-row">' +
-            '<div class="ll-compare-col">' +
-            '<div class="ll-modal-name">' +
-            escapeHtml(byName) +
-            '</div>' +
-            '<div class="ll-compare-card">' +
-            llCardImgHtml(String(rv.byCard || '')) +
-            '</div>' +
-            '</div>' +
-            '<div class="ll-compare-col">' +
-            '<div class="ll-modal-name">' +
-            escapeHtml(tgName) +
-            '</div>' +
-            '<div class="ll-compare-card">' +
-            llCardImgHtml(String(rv.targetCard || '')) +
-            '</div>' +
-            '</div>' +
-            '</div>' +
-            '<div class="row" style="justify-content:flex-end">' +
-            (String(playerId) === by ? '<button id="llAck" class="primary">次へ</button>' : '') +
-            '</div>' +
-            '</div>' +
-            '</div>';
+        var byName = ps[by] ? formatPlayerDisplayName(ps[by]) : by;
+        var tgName = ps[tg] ? formatPlayerDisplayName(ps[tg]) : tg;
+
+        if (rv.type === 'knight') {
+          // Only the two involved players see the compared cards; others see a minimal "in progress" message.
+          if (String(playerId) === by || String(playerId) === tg) {
+            modalHtml =
+              '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
+              '<div class="ll-overlay-backdrop"></div>' +
+              '<div class="ll-overlay-panel">' +
+              '<div class="big">騎士：比較結果</div>' +
+              '<div class="ll-compare-row">' +
+              '<div class="ll-compare-col">' +
+              '<div class="ll-modal-name">' +
+              escapeHtml(byName) +
+              '</div>' +
+              '<div class="ll-compare-card">' +
+              llCardImgHtml(String(rv.byCard || '')) +
+              '</div>' +
+              '</div>' +
+              '<div class="ll-compare-col">' +
+              '<div class="ll-modal-name">' +
+              escapeHtml(tgName) +
+              '</div>' +
+              '<div class="ll-compare-card">' +
+              llCardImgHtml(String(rv.targetCard || '')) +
+              '</div>' +
+              '</div>' +
+              '</div>' +
+              '<div class="row" style="justify-content:flex-end">' +
+              (String(playerId) === by ? '<button id="llAck" class="primary">次へ</button>' : '') +
+              '</div>' +
+              '</div>' +
+              '</div>';
+          } else {
+            modalHtml =
+              '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
+              '<div class="ll-overlay-backdrop"></div>' +
+              '<div class="ll-overlay-panel">' +
+              '<div class="big">騎士：勝負中</div>' +
+              '<div class="muted">' + escapeHtml(byName + ' が ' + tgName + ' と勝負中') + '</div>' +
+              '<div class="muted center" style="margin-top:10px">（処理が終わるまでお待ちください）</div>' +
+              '</div>' +
+              '</div>';
+          }
+        } else {
+          // General swap stays private to the two involved players.
+          if (String(playerId) === by || String(playerId) === tg) {
+            modalHtml =
+              '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
+              '<div class="ll-overlay-backdrop"></div>' +
+              '<div class="ll-overlay-panel">' +
+              '<div class="big">将軍：手札交換</div>' +
+              '<div class="ll-compare-row">' +
+              '<div class="ll-compare-col">' +
+              '<div class="ll-modal-name">' +
+              escapeHtml(byName) +
+              '</div>' +
+              '<div class="ll-compare-card">' +
+              llCardImgHtml(String(rv.byCard || '')) +
+              '</div>' +
+              '</div>' +
+              '<div class="ll-compare-col">' +
+              '<div class="ll-modal-name">' +
+              escapeHtml(tgName) +
+              '</div>' +
+              '<div class="ll-compare-card">' +
+              llCardImgHtml(String(rv.targetCard || '')) +
+              '</div>' +
+              '</div>' +
+              '</div>' +
+              '<div class="row" style="justify-content:flex-end">' +
+              (String(playerId) === by ? '<button id="llAck" class="primary">次へ</button>' : '') +
+              '</div>' +
+              '</div>' +
+              '</div>';
+          }
         }
       } else if (rv.type === 'minister_overload') {
         var by2 = String(rv.by || '');
         if (String(playerId) === by2) {
+          var drew2 = String(rv.drew || '');
           modalHtml =
             '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
             '<div class="ll-overlay-backdrop"></div>' +
@@ -10740,7 +10786,7 @@
             '</div>' +
             '<div class="ll-compare-col">' +
             '<div class="ll-modal-name">引いたカード</div>' +
-            '<div class="ll-compare-card">' + llCardBackImgHtml() + '</div>' +
+            '<div class="ll-compare-card">' + (drew2 ? llCardImgHtml(drew2) : llCardBackImgHtml()) + '</div>' +
             '</div>' +
             '</div>' +
             '<div class="row" style="justify-content:flex-end">' +
@@ -11759,6 +11805,15 @@
           abortBtn.disabled = true;
           firebaseReady()
             .then(function () {
+              var extras = [];
+              try {
+                extras = lastRoom && lastRoom.settings ? lastRoom.settings.extraCards : [];
+              } catch (e0) {
+                extras = [];
+              }
+              return setLobbyLoveLetterExtraCards(lobbyId, extras);
+            })
+            .then(function () {
               return setLobbyCurrentGame(lobbyId, null);
             })
             .then(function () {
@@ -12200,6 +12255,7 @@
 
     // Effect arrow is drawn from real DOM positions after rendering to avoid layout-dependent drift.
     var arrowHtml = '<svg class="ll-table-arrow" data-ll-arrow="1" preserveAspectRatio="none" aria-hidden="true"></svg>';
+    var arrowIconHtml = '<div class="ll-table-arrow-icon" data-ll-arrow-icon="1" aria-hidden="true"></div>';
 
     var resultHtml = '';
     if (phase === 'finished' && room && room.result && Array.isArray(room.result.winners)) {
@@ -12233,6 +12289,7 @@
         (phase === 'finished' ? resultHtml + '<hr />' : '') +
         '<div class="ll-table">' +
         arrowHtml +
+        arrowIconHtml +
         seatsHtml +
         (facedownHtml || '') +
         '<div class="ll-table-inner">' +
@@ -12250,6 +12307,27 @@
       if (!tableEl) return;
       var svg = tableEl.querySelector ? tableEl.querySelector('svg.ll-table-arrow[data-ll-arrow="1"]') : null;
       if (!svg) return;
+      var iconEl = tableEl.querySelector ? tableEl.querySelector('div.ll-table-arrow-icon[data-ll-arrow-icon="1"]') : null;
+
+      function hideIcon() {
+        try {
+          if (!iconEl) return;
+          iconEl.style.display = 'none';
+          iconEl.innerHTML = '';
+        } catch (e0) {
+          // ignore
+        }
+      }
+
+      function revealCardRank(rev) {
+        var t = rev && rev.type ? String(rev.type) : '';
+        if (t === 'guard') return '1';
+        if (t === 'knight') return '3';
+        if (t === 'wizard_discard') return '5';
+        if (t === 'general_swap') return '6';
+        if (t === 'minister_overload') return '7';
+        return '';
+      }
 
       var r = room && room.round ? room.round : null;
       var rev = r && r.reveal ? r.reveal : null;
@@ -12258,6 +12336,7 @@
       var isBidirectional = !!(rev && String(rev.type || '') === 'general_swap');
       if (!byId || !toId || String(byId) === String(toId)) {
         svg.innerHTML = '';
+        hideIcon();
         return;
       }
 
@@ -12279,6 +12358,7 @@
       }
       if (!byEl || !toEl) {
         svg.innerHTML = '';
+        hideIcon();
         return;
       }
 
@@ -12287,6 +12367,7 @@
       var h = tableRect && tableRect.height ? tableRect.height : 0;
       if (!(w > 0 && h > 0)) {
         svg.innerHTML = '';
+        hideIcon();
         return;
       }
 
@@ -12315,6 +12396,7 @@
       var len = Math.sqrt(dx * dx + dy * dy);
       if (!(len > 0.0001)) {
         svg.innerHTML = '';
+        hideIcon();
         return;
       }
 
@@ -12334,6 +12416,7 @@
       var slen = Math.sqrt(sdx * sdx + sdy * sdy);
       if (!(slen > headLen * (isBidirectional ? 2.4 : 1.6))) {
         svg.innerHTML = '';
+        hideIcon();
         return;
       }
 
@@ -12353,6 +12436,27 @@
 
       var lineStart = isBidirectional ? base1 : sp1;
       var lineEnd = base2;
+
+      // Effect card icon at the middle of the arrow.
+      try {
+        if (iconEl) {
+          var rank = revealCardRank(rev);
+          var d = rank ? llCardDef(rank) : null;
+          var icon = d && d.icon ? String(d.icon) : '';
+          if (rank && icon) {
+            var midX = (lineStart.x + lineEnd.x) / 2;
+            var midY = (lineStart.y + lineEnd.y) / 2;
+            iconEl.style.left = String(midX.toFixed(1)) + 'px';
+            iconEl.style.top = String(midY.toFixed(1)) + 'px';
+            iconEl.style.display = 'block';
+            iconEl.innerHTML = '<img class="ll-table-effect-icon" alt="" src="' + escapeHtml(icon) + '" />';
+          } else {
+            hideIcon();
+          }
+        }
+      } catch (eIcon) {
+        hideIcon();
+      }
 
       svg.setAttribute('viewBox', '0 0 ' + String(w) + ' ' + String(h));
       svg.setAttribute('preserveAspectRatio', 'none');
@@ -12410,6 +12514,11 @@
         var tableEl2 = rootEl && rootEl.querySelector ? rootEl.querySelector('.ll-table') : null;
         var svg2 = tableEl2 && tableEl2.querySelector ? tableEl2.querySelector('svg.ll-table-arrow[data-ll-arrow="1"]') : null;
         if (svg2) svg2.innerHTML = '';
+        var icon2 = tableEl2 && tableEl2.querySelector ? tableEl2.querySelector('div.ll-table-arrow-icon[data-ll-arrow-icon="1"]') : null;
+        if (icon2) {
+          icon2.style.display = 'none';
+          icon2.innerHTML = '';
+        }
       } catch (e1) {
         // ignore
       }
@@ -14300,7 +14409,7 @@
     viewEl = qs('#view');
     setupRulesButton();
     // --- Version string with alphabetic suffix ---
-    var versionSuffix = 'f'; // ← Change this letter for each push (a, b, c, ...)
+    var versionSuffix = 'g'; // ← Change this letter for each push (a, b, c, ...)
     var versionDate = '20260101'; // YYYYMMDD
     var versionString = 'v' + versionDate + versionSuffix;
     var versionEl = document.getElementById('versionString');
