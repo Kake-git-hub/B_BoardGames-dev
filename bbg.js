@@ -7743,7 +7743,7 @@
         var canvas = document.getElementById('qr');
         var errEl = document.getElementById('qrError');
         var wrapEl = document.getElementById('qrWrap');
-        if (errEl) errEl.textContent = '';
+        if (errEl) errEl.textContent = 'QR生成中...';
 
         function showAsRemoteImage() {
           if (!wrapEl) return resolve();
@@ -7787,12 +7787,12 @@
         function showAsImage() {
           if (!qr.toDataURL || !wrapEl) return showAsRemoteImage();
           try {
-            qr.toDataURL(joinUrl, { margin: 1, width: w }, function (err, url) {
+            qr.toDataURL(joinUrl, { margin: 1, width: w, color: { dark: '#000000', light: '#ffffff' } }, function (err, url) {
               if (err || !url) {
                 return showAsRemoteImage();
               }
               wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />';
-              if (errEl) errEl.textContent = '（QRは画像で表示しています）';
+              if (errEl) errEl.textContent = 'QR: 画像（dataURL）';
               return resolve();
             });
           } catch (e) {
@@ -7822,28 +7822,8 @@
           }
         }
 
-        try {
-          qr.toCanvas(
-            canvas,
-            joinUrl,
-            { margin: 1, width: w, color: { dark: '#000000', light: '#ffffff' } },
-            function (err) {
-            if (err) {
-              if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-              showAsRemoteImage();
-              return;
-            }
-            if (looksBlank(canvas)) {
-              showAsRemoteImage();
-              return;
-            }
-            resolve();
-            }
-          );
-        } catch (e) {
-          if (errEl) errEl.textContent = 'QRの生成に失敗しました。';
-          showAsRemoteImage();
-        }
+        // Prefer <img> rendering first (some environments show blank canvas).
+        return showAsImage();
       });
     }
 
