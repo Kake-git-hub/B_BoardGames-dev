@@ -7743,60 +7743,94 @@
         var canvas = document.getElementById('qr');
         var errEl = document.getElementById('qrError');
         var wrapEl = document.getElementById('qrWrap');
-        if (errEl) errEl.textContent = 'QR生成中...';
+        if (errEl) errEl.textContent = '';
 
-        function showAsRemoteImage() {
+        function setWrap(html) {
+          if (!wrapEl) return;
+          wrapEl.innerHTML = html;
+        }
+
+        function showInlineStatus(text) {
+          if (!wrapEl) return;
+          var s = wrapEl.querySelector('#qrInlineStatus');
+          if (!s) {
+            s = document.createElement('div');
+            s.id = 'qrInlineStatus';
+            s.className = 'muted';
+            s.style.marginTop = '6px';
+            s.style.textAlign = 'center';
+            wrapEl.appendChild(s);
+          }
+          s.textContent = String(text || '');
+        }
+
+        function showFatal(msg) {
+          setWrap(
+            '<div class="card" style="padding:10px">' +
+              '<div class="form-error">' +
+              escapeHtml(String(msg || 'QRの生成に失敗しました。')) +
+              '</div>' +
+              '<div class="muted" style="margin-top:6px">URLコピーで参加してください。</div>' +
+            '</div>'
+          );
+          resolve();
+        }
+
+        function showRemoteProviders() {
           if (!wrapEl) return resolve();
-          var src =
-            'https://api.qrserver.com/v1/create-qr-code/?size=' +
-            encodeURIComponent(String(w) + 'x' + String(w)) +
-            '&data=' +
-            encodeURIComponent(String(joinUrl || ''));
-          try {
-            wrapEl.innerHTML = '';
-            var img = document.createElement('img');
-            img.id = 'qrImg';
-            img.alt = 'QR';
-            img.referrerPolicy = 'no-referrer';
+          var data = String(joinUrl || '');
+          var sizeStr = String(w) + 'x' + String(w);
+          var srcs = [
+            'https://quickchart.io/qr?size=' + encodeURIComponent(sizeStr) + '&text=' + encodeURIComponent(data),
+            'https://api.qrserver.com/v1/create-qr-code/?size=' + encodeURIComponent(sizeStr) + '&data=' + encodeURIComponent(data)
+          ];
+
+          setWrap('<img id="qrImg" alt="QR" />');
+          var img = wrapEl.querySelector('#qrImg');
+          if (!img) return showFatal('QR表示領域が見つかりません。');
+          img.referrerPolicy = 'no-referrer';
+
+          var i = 0;
+          function tryNext() {
+            if (i >= srcs.length) {
+              return showFatal('QR画像の読み込みに失敗しました（ネットワーク/フィルタの可能性）。');
+            }
+            var src = srcs[i++];
+            showInlineStatus('QR: 外部画像読み込み中...');
             img.onload = function () {
-              if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
+              showInlineStatus('QR: 外部画像');
               resolve();
             };
             img.onerror = function () {
-              if (errEl) errEl.textContent = 'QR画像の読み込みに失敗しました（ネットワーク/フィルタの可能性）。URLコピーで参加してください。';
-              resolve();
+              tryNext();
             };
             img.src = src;
-            wrapEl.appendChild(img);
-          } catch (e) {
-            wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(src) + '" />';
-            if (errEl) errEl.textContent = '（外部サービスでQRを生成しています）';
-            resolve();
           }
+          tryNext();
         }
 
         if (!canvas) {
-          if (errEl) errEl.textContent = 'QR表示領域が見つかりません。';
-          return resolve();
+          showFatal('QR表示領域が見つかりません。');
+          return;
         }
         var qr = window.QRCode || window.qrcode || window.QR;
         if (!qr || !qr.toCanvas) {
-          return showAsRemoteImage();
+          return showRemoteProviders();
         }
 
         function showAsImage() {
-          if (!qr.toDataURL || !wrapEl) return showAsRemoteImage();
+          if (!qr.toDataURL || !wrapEl) return showRemoteProviders();
           try {
             qr.toDataURL(joinUrl, { margin: 1, width: w, color: { dark: '#000000', light: '#ffffff' } }, function (err, url) {
               if (err || !url) {
-                return showAsRemoteImage();
+                return showRemoteProviders();
               }
-              wrapEl.innerHTML = '<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />';
-              if (errEl) errEl.textContent = 'QR: 画像（dataURL）';
-              return resolve();
+              setWrap('<img id="qrImg" alt="QR" src="' + escapeHtml(url) + '" />');
+              showInlineStatus('QR: 画像（dataURL）');
+              resolve();
             });
           } catch (e) {
-            return showAsRemoteImage();
+            return showRemoteProviders();
           }
         }
 
