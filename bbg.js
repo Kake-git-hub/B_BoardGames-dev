@@ -11189,6 +11189,11 @@
         }
         arrowHtml =
           '<svg class="ll-table-arrow" viewBox="0 0 100 100" preserveAspectRatio="none">' +
+          '<defs>' +
+          '<marker id="llArrowHead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto" markerUnits="strokeWidth">' +
+          '<path class="ll-table-arrow-head" d="M 0 0 L 10 5 L 0 10 z" />' +
+          '</marker>' +
+          '</defs>' +
           '<line class="ll-table-arrow-line" x1="' +
           escapeHtml(String(p1.x.toFixed(3))) +
           '" y1="' +
@@ -11197,17 +11202,7 @@
           escapeHtml(String(p2.x.toFixed(3))) +
           '" y2="' +
           escapeHtml(String(p2.y.toFixed(3))) +
-          '" />' +
-          '<circle class="ll-table-arrow-dot" cx="' +
-          escapeHtml(String(p1.x.toFixed(3))) +
-          '" cy="' +
-          escapeHtml(String(p1.y.toFixed(3))) +
-          '" r="2.2" />' +
-          '<circle class="ll-table-arrow-target" cx="' +
-          escapeHtml(String(p2.x.toFixed(3))) +
-          '" cy="' +
-          escapeHtml(String(p2.y.toFixed(3))) +
-          '" r="5.2" />' +
+          '" marker-end="url(#llArrowHead)" />' +
           '</svg>';
       }
     } catch (eA0) {
