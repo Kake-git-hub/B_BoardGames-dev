@@ -6721,12 +6721,23 @@
       }
       var deck = [];
       // Use known ranks so images render.
-      for (var j = 0; j < 18; j++) {
+      for (var j = 0; j < 40; j++) {
         deck.push(String(1 + randomInt(8)));
       }
-      var grave = [String(1 + randomInt(8))];
+
+      function draw1() {
+        if (deck && deck.length) return String(deck.pop());
+        return String(1 + randomInt(8));
+      }
+
+      var grave = [draw1()];
       var eliminated = {};
       for (var k = 0; k < ids.length; k++) eliminated[ids[k]] = false;
+
+      var hands = {};
+      for (var h = 0; h < ids.length; h++) {
+        hands[ids[h]] = [draw1(), draw1()];
+      }
       sim = {
         room: {
           createdAt: serverNowMs(),
@@ -6741,6 +6752,7 @@
             currentPlayerId: ids[0],
             deck: deck,
             grave: grave,
+            hands: hands,
             eliminated: eliminated,
             reveal: null
           },
@@ -6767,6 +6779,7 @@
       var r = room.round;
       var order = Array.isArray(r.order) ? r.order : [];
       var eliminated = r.eliminated || {};
+      var hands = r.hands || {};
 
       var alive = listAlive(order, eliminated);
       if (alive.length <= 1 || !(r.deck && r.deck.length)) {
@@ -6783,12 +6796,33 @@
       for (var i2 = 0; i2 < alive.length; i2++) {
         if (alive[i2] !== actor) candidates.push(alive[i2]);
       }
-      var target = candidates.length ? candidates[randomInt(candidates.length)] : '';
+      var target = candidates.length ? candidates[randomInt(candidates.length)] : actor;
+      // Sometimes target self (to verify the solo highlight).
+      if (randomInt(5) === 0) target = actor;
 
-      if (r.deck && r.deck.length) {
-        var drawn = String(r.deck.pop());
-        if (!Array.isArray(r.grave)) r.grave = [];
-        r.grave.push(drawn);
+      function draw1() {
+        if (r.deck && r.deck.length) return String(r.deck.pop());
+        return String(1 + randomInt(8));
+      }
+
+      // Rough hand simulation: actor draws 1, discards 1 at random.
+      try {
+        var h0 = hands && Array.isArray(hands[actor]) ? hands[actor].slice() : [];
+        h0.push(draw1());
+        if (h0.length > 1) {
+          var di = randomInt(h0.length);
+          var disc = String(h0.splice(di, 1)[0] || '');
+          if (disc) {
+            if (!Array.isArray(r.grave)) r.grave = [];
+            r.grave.push(disc);
+          }
+        }
+        // Keep at most 2 cards for readability.
+        while (h0.length > 2) h0.shift();
+        hands[actor] = h0;
+        r.hands = hands;
+      } catch (eH0) {
+        // ignore
       }
 
       // Occasionally eliminate to test the hatch styling.
@@ -6822,12 +6856,55 @@
       if (!sim) initSim();
       render(
         viewEl,
-        '\n    <div class="stack">\n      <div class="big">ラブレター（デバッグ）テーブルシミュレーション</div>\n      <div class="row" style="justify-content:center">\n        <button id="llSimStep" class="primary">1ターン進める</button>\n        <button id="llSimReset" class="ghost">リセット</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n      <section id="llSimView"></section>\n    </div>\n  '
+        '\n    <div class="stack">\n      <div class="big">ラブレター（デバッグ）テーブルシミュレーション</div>\n      <div class="row" style="justify-content:center">\n        <button id="llSimStep" class="primary">1ターン進める</button>\n        <button id="llSimReset" class="ghost">リセット</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n      <section id="llSimView"></section>\n      <div class="big" style="margin-top:10px">各プレイヤー手札（確認用）</div>\n      <section id="llSimHands"></section>\n    </div>\n  '
       );
 
       var inner = document.getElementById('llSimView');
       if (inner) {
         renderLoveLetterTable(inner, { roomId: 'SIM', room: sim.room, isHost: true, lobbyId: '' });
+      }
+
+      var handsEl = document.getElementById('llSimHands');
+      if (handsEl) {
+        var room = sim.room;
+        var r = room && room.round ? room.round : {};
+        var ps = (room && room.players) || {};
+        var order = Array.isArray(r.order) ? r.order : [];
+        var hands = r.hands || {};
+        var eliminated = r.eliminated || {};
+        var html = '<div class="row" style="flex-wrap:wrap;gap:10px;justify-content:center">';
+        for (var i = 0; i < order.length; i++) {
+          var pid = String(order[i] || '');
+          if (!pid) continue;
+          var nm = ps[pid] ? formatPlayerDisplayName(ps[pid]) : pid;
+          var h = hands && Array.isArray(hands[pid]) ? hands[pid] : [];
+          var cards = '';
+          for (var j = 0; j < h.length; j++) {
+            var rank = String(h[j] || '');
+            var d = llCardDef(rank);
+            var icon = d && d.icon ? String(d.icon) : '';
+            if (icon) {
+              cards += '<img alt="' + escapeHtml(d.name || '') + '" src="' + escapeHtml(icon) + '" style="width:54px;height:72px;object-fit:contain;border-radius:10px;border:1px solid var(--line);background:#0f1520" />';
+            } else {
+              cards += '<div style="width:54px;height:72px;border-radius:10px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center">' + escapeHtml(rank || '-') + '</div>';
+            }
+          }
+          if (!cards) cards = '<div class="muted">（なし）</div>';
+          html +=
+            '<div class="card" style="padding:10px;min-width:170px">' +
+            '<div class="row" style="justify-content:space-between;align-items:center">' +
+            '<b>' +
+            escapeHtml(nm) +
+            '</b>' +
+            (eliminated && eliminated[pid] ? '<span class="badge">脱落</span>' : '') +
+            '</div>' +
+            '<div class="row" style="gap:8px;justify-content:center;margin-top:8px">' +
+            cards +
+            '</div>' +
+            '</div>';
+        }
+        html += '</div>';
+        handsEl.innerHTML = html;
       }
 
       var stepBtn = document.getElementById('llSimStep');
@@ -11135,6 +11212,24 @@
         '</div>';
     }
 
+    var rev = null;
+    var byId = '';
+    var toId = '';
+    var effectSoloId = '';
+    try {
+      rev = r && r.reveal ? r.reveal : null;
+      byId = rev && rev.by ? String(rev.by) : '';
+      toId = rev && rev.target ? String(rev.target) : '';
+      if (byId && (!toId || String(byId) === String(toId))) {
+        effectSoloId = String(byId);
+      }
+    } catch (eRv0) {
+      rev = null;
+      byId = '';
+      toId = '';
+      effectSoloId = '';
+    }
+
     var seatsHtml = '';
     var n = order.length || 0;
     var radius = 42;
@@ -11151,10 +11246,12 @@
       seatPos[String(pid)] = { x: x, y: y };
       var isTurnSeat = !!(turnPid && String(pid) === String(turnPid));
       var isElimSeat = !!(r && r.eliminated && r.eliminated[String(pid)]);
+      var isSoloEffectSeat = !!(effectSoloId && String(pid) === String(effectSoloId));
       seatsHtml +=
         '<div class="ll-seat' +
         (isTurnSeat ? ' ll-seat--turn' : '') +
         (isElimSeat ? ' ll-seat--eliminated' : '') +
+        (isSoloEffectSeat ? ' ll-seat--effect' : '') +
         '" style="left:' +
         escapeHtml(String(x.toFixed(3))) +
         '%;top:' +
@@ -11168,9 +11265,6 @@
 
     var arrowHtml = '';
     try {
-      var rev = r && r.reveal ? r.reveal : null;
-      var byId = rev && rev.by ? String(rev.by) : '';
-      var toId = rev && rev.target ? String(rev.target) : '';
       if (byId && toId && String(byId) !== String(toId) && seatPos[byId] && seatPos[toId]) {
         var p1 = seatPos[byId];
         var p2 = seatPos[toId];
@@ -11186,24 +11280,42 @@
           var uy = dy / len;
           p1 = { x: p1.x + ux * pad, y: p1.y + uy * pad };
           p2 = { x: p2.x - ux * pad, y: p2.y - uy * pad };
+
+          // Simple thin arrow head geometry.
+          var headLen = 4.6;
+          var headW = 2.8;
+          var base = { x: p2.x - ux * headLen, y: p2.y - uy * headLen };
+          var px = -uy;
+          var py = ux;
+          var left = { x: base.x + px * headW, y: base.y + py * headW };
+          var right = { x: base.x - px * headW, y: base.y - py * headW };
+
+          arrowHtml =
+            '<svg class="ll-table-arrow" viewBox="0 0 100 100" preserveAspectRatio="none">' +
+            '<line class="ll-table-arrow-line" x1="' +
+            escapeHtml(String(p1.x.toFixed(3))) +
+            '" y1="' +
+            escapeHtml(String(p1.y.toFixed(3))) +
+            '" x2="' +
+            escapeHtml(String(base.x.toFixed(3))) +
+            '" y2="' +
+            escapeHtml(String(base.y.toFixed(3))) +
+            '" />' +
+            '<path class="ll-table-arrow-head" d="M ' +
+            escapeHtml(String(p2.x.toFixed(3))) +
+            ' ' +
+            escapeHtml(String(p2.y.toFixed(3))) +
+            ' L ' +
+            escapeHtml(String(left.x.toFixed(3))) +
+            ' ' +
+            escapeHtml(String(left.y.toFixed(3))) +
+            ' L ' +
+            escapeHtml(String(right.x.toFixed(3))) +
+            ' ' +
+            escapeHtml(String(right.y.toFixed(3))) +
+            ' Z" />' +
+            '</svg>';
         }
-        arrowHtml =
-          '<svg class="ll-table-arrow" viewBox="0 0 100 100" preserveAspectRatio="none">' +
-          '<defs>' +
-          '<marker id="llArrowHead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto" markerUnits="strokeWidth">' +
-          '<path class="ll-table-arrow-head" d="M 0 0 L 10 5 L 0 10 z" />' +
-          '</marker>' +
-          '</defs>' +
-          '<line class="ll-table-arrow-line" x1="' +
-          escapeHtml(String(p1.x.toFixed(3))) +
-          '" y1="' +
-          escapeHtml(String(p1.y.toFixed(3))) +
-          '" x2="' +
-          escapeHtml(String(p2.x.toFixed(3))) +
-          '" y2="' +
-          escapeHtml(String(p2.y.toFixed(3))) +
-          '" marker-end="url(#llArrowHead)" />' +
-          '</svg>';
       }
     } catch (eA0) {
       arrowHtml = '';
