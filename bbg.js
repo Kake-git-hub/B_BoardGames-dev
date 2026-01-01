@@ -12744,8 +12744,14 @@
                     // We approximate by asking from current hand excluding the played index.
                     var h0 = room && room.state && room.state.hands && Array.isArray(room.state.hands[pid]) ? room.state.hands[pid].slice() : [];
                     if (idx >= 0 && idx < h0.length) h0.splice(idx, 1);
-                    var tmpRoom = assign({}, room, { state: assign({}, room.state || {}, { hands: assign({}, room.state && room.state.hands ? room.state.hands : {}, (function(){ var o={}; o[pid]=h0; return o; })()) }) });
-                    var give = chooseOwnCardIndexByName(tmpRoom, pid);
+                    if (!h0.length) return;
+                    var msg0 = '渡すカードを選んでください:\n' + h0.map(function (id, ix) {
+                      var def = HANNIN_CARD_DEFS[String(id || '')] || { name: String(id || '-') };
+                      return String(ix + 1) + '. ' + String(def.name || id);
+                    }).join('\n');
+                    var s0 = prompt(msg0, '1');
+                    var n0 = parseIntSafe(s0, 0);
+                    var give = n0 >= 1 && n0 <= h0.length ? (n0 - 1) : -1;
                     if (give < 0) return;
                     var take = chooseHiddenCardIndex(room, t3);
                     if (take < 0) return;
