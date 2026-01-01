@@ -158,6 +158,27 @@
     return Math.max(a, Math.min(b, x));
   }
 
+  function parseIntSafe(v, fallback) {
+    var n = 0;
+    try {
+      n = parseInt(String(v), 10);
+    } catch (e) {
+      n = NaN;
+    }
+    if (isNaN(n)) {
+      var fb = fallback;
+      if (fb == null) fb = 0;
+      try {
+        fb = parseInt(String(fb), 10);
+      } catch (e2) {
+        // ignore
+      }
+      if (isNaN(fb)) fb = 0;
+      return fb;
+    }
+    return n;
+  }
+
   function formatMMSS(totalSeconds) {
     var s = Math.max(0, Math.floor(Math.abs(totalSeconds || 0)));
     var mm = Math.floor(s / 60);
@@ -14315,7 +14336,7 @@
     viewEl = qs('#view');
     setupRulesButton();
     // --- Version string with alphabetic suffix ---
-    var versionSuffix = 'd'; // ← Change this letter for each push (a, b, c, ...)
+    var versionSuffix = 'e'; // ← Change this letter for each push (a, b, c, ...)
     var versionDate = '20260101'; // YYYYMMDD
     var versionString = 'v' + versionDate + versionSuffix;
     var versionEl = document.getElementById('versionString');
