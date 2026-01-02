@@ -4362,14 +4362,16 @@
             var cid = String(myHand[gi] || '');
             var gsel = parseIntSafe(selectedGiveIdx, -1) === gi;
             out3 +=
-              '<button class="ghost hnPickGive" data-give="' +
+              '<div class="hn-rumor-card hnPickGive' +
+              (gsel ? ' hn-card--selected' : '') +
+              '" data-give="' +
               escapeHtml(String(gi)) +
-              '" style="width:100%;padding:0">' +
-              (gsel ? '<div class="hn-card--selected" style="border-radius:10px">' + hnCardImgHtml(cid) + '</div>' : hnCardImgHtml(cid)) +
-              '</button>';
+              '">' +
+              hnCardImgHtml(cid) +
+              '</div>';
           }
-          if (!out3) out3 = '<div class="muted">渡せるカードがありません。</div>';
-          return out3;
+          if (!out3) return '<div class="muted">渡せるカードがありません。</div>';
+          return '<div class="hn-rumor-row">' + out3 + '</div>';
         }
 
         var body = '';
@@ -4412,13 +4414,9 @@
           '<div class="big ll-modal-title">' +
           escapeHtml(title) +
           '</div>' +
-          '<div class="ll-action-card">' +
-          hnCardImgHtml(cardId) +
+          '<div class="muted center">' +
+          escapeHtml('使用したカード：' + String(def.name || cardId || '')) +
           '</div>' +
-          '<div class="ll-modal-name">' +
-          escapeHtml(String(def.name || '')) +
-          '</div>' +
-          (def.desc ? '<div class="muted">' + escapeHtml(String(def.desc || '')) + '</div>' : '') +
           (body || '') +
           '<div id="hnPlayError" class="form-error" role="alert"></div>' +
           '<div class="row ll-modal-actions" style="justify-content:space-between">' +
@@ -4621,9 +4619,62 @@
       if (viewEl && viewEl.classList) {
         viewEl.classList.toggle('ll-turn-actor', !!isMyTurn);
         viewEl.classList.toggle('ll-turn-waiting', !isMyTurn);
+
+        // Result background (win=red, lose=blue)
+        var res = (st && st.result) || {};
+        var win = false;
+        try {
+          var winners = Array.isArray(res && res.winners) ? res.winners : [];
+          win = !!(res && res.decidedAt && playerId && winners.indexOf(String(playerId)) >= 0);
+        } catch (eRw) {
+          win = false;
+        }
+        viewEl.classList.toggle('result-win', !!(res && res.decidedAt && win));
+        viewEl.classList.toggle('result-lose', !!(res && res.decidedAt && !win));
       }
     } catch (eC2) {
       // ignore
+    }
+
+    // Result info for all players
+    var resultHtml = '';
+    try {
+      var r = (st && st.result) || {};
+      if (r && r.decidedAt) {
+        var sideLabel = r.side === 'culprit' ? '犯人側の勝利' : r.side === 'citizen' ? '一般人側の勝利' : '結果';
+        var culpritName = r.culpritId ? hnPlayerName(room, String(r.culpritId || '')) : '';
+        var winners2 = Array.isArray(r.winners) ? r.winners : [];
+        var winnerNames = [];
+        for (var wi = 0; wi < winners2.length; wi++) winnerNames.push(hnPlayerName(room, String(winners2[wi] || '')));
+
+        var allies = st && st.allies && typeof st.allies === 'object' ? st.allies : {};
+        var order2 = Array.isArray(st && st.order) ? st.order : [];
+        var plotNames = [];
+        for (var pi = 0; pi < order2.length; pi++) {
+          var ppid = String(order2[pi] || '');
+          if (!ppid) continue;
+          if (allies && allies[ppid]) plotNames.push(hnPlayerName(room, ppid));
+        }
+
+        resultHtml =
+          '<div class="card" style="padding:12px">' +
+          '<div><b>' +
+          escapeHtml(sideLabel) +
+          '</b></div>' +
+          '<div class="muted" style="margin-top:6px">' +
+          escapeHtml('犯人：' + (culpritName || '-')) +
+          '</div>' +
+          '<div class="muted">' +
+          escapeHtml('たくらみ：' + (plotNames.length ? plotNames.join(' / ') : 'なし')) +
+          '</div>' +
+          '<div class="muted">' +
+          escapeHtml('勝者：' + (winnerNames.length ? winnerNames.join(' / ') : '-')) +
+          '</div>' +
+          (r.reason ? '<div class="muted">' + escapeHtml(String(r.reason || '')) + '</div>' : '') +
+          '</div>';
+      }
+    } catch (eResHtml) {
+      resultHtml = '';
     }
 
     render(
@@ -4635,6 +4686,7 @@
         escapeHtml('手番: ' + (turnPid ? hnPlayerName(room, turnPid) : '-')) +
         '</div>' +
         '</div>' +
+        (resultHtml || '') +
         (privateHtml || '') +
         (revealHtml || '') +
         (confirmHtml || '') +
@@ -14702,6 +14754,7 @@
         (isHost
           ? '<div class="row">' +
             (lobbyId ? '<button id="hnAbortToLobby" class="danger">中断してロビーへ</button>' : '') +
+            (lobbyId && result && result.decidedAt ? '<button id="hnNextToLobby" class="primary">次へでロビーに戻る</button>' : '') +
             '</div>'
           : '') +
         (debugIframeHtml || '') +
@@ -14813,6 +14866,28 @@
                 })
                 .finally(function () {
                   abortBtn.disabled = false;
+                });
+            });
+          }
+
+          var nextBtn = document.getElementById('hnNextToLobby');
+          if (nextBtn && !nextBtn.__hn_bound) {
+            nextBtn.__hn_bound = true;
+            nextBtn.addEventListener('click', function () {
+              if (!lobbyId) return;
+              nextBtn.disabled = true;
+              firebaseReady()
+                .then(function () {
+                  return setLobbyCurrentGame(lobbyId, null);
+                })
+                .then(function () {
+                  redirectToLobbyHost();
+                })
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  nextBtn.disabled = false;
                 });
             });
           }
