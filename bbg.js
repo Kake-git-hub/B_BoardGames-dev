@@ -4076,6 +4076,7 @@
       st.started = false;
       st.turnCount = 0;
       st.pending = null;
+      st.waitFor = null;
       st.allies = {};
       st.lastPlay = { at: 0, playerId: '', cardId: '' };
       st.result = { side: '', winners: [], culpritId: '', decidedAt: 0, reason: '' };
@@ -4169,12 +4170,12 @@
 
     var contentHtml = '';
 
-    // "墓地" (used cards) - show your played cards in the top-right like LoveLetter.
+    // "墓地" - show the latest globally discarded card icon (one icon only).
     var pilesHtml = '';
     try {
-      var usedMine = st && st.used && playerId && Array.isArray(st.used[String(playerId)]) ? st.used[String(playerId)] : [];
-      var icons = '';
-      for (var ui0 = 0; ui0 < usedMine.length; ui0++) icons += hnGraveIconHtml(String(usedMine[ui0] || ''));
+      var grave = st && Array.isArray(st.graveyard) ? st.graveyard : [];
+      var latest = grave && grave.length ? String(grave[grave.length - 1] || '') : '';
+      var icons = latest ? hnGraveIconHtml(latest) : '';
       pilesHtml =
         '<div class="ll-piles-box">' +
         '<div class="ll-piles-text">墓地</div>' +
@@ -4295,6 +4296,7 @@
           '</div>' +
           '</div>';
       } else if (pmsg && String(pmsg.type || '') === 'detective_alibi') {
+        // Back-compat: legacy message (now handled as notice).
         privateHtml =
           '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
           '<div class="ll-overlay-backdrop" id="hnPrivateBg"></div>' +
@@ -4303,7 +4305,7 @@
           '<div class="big ll-modal-title">探偵</div>' +
           '<div class="muted center">アリバイにより探偵の効果は無効です。</div>' +
           '<div class="row ll-modal-actions" style="justify-content:center">' +
-          '<button class="primary" id="hnPrivateOk">犯人ではない</button>' +
+          '<button class="primary" id="hnPrivateOk">OK</button>' +
           '</div>' +
           '</div>' +
           '</div>' +
@@ -4330,21 +4332,23 @@
           '</div>' +
           '</div>' +
           '</div>';
-      } else if (pmsg && String(pmsg.type || '') === 'not_culprit') {
-        var np = String(pmsg.targetPid || '');
-        var nname = np ? hnPlayerName(room, np) : '';
-        var by = String(pmsg.byCard || '');
-        var title2 = by === 'detective' ? '探偵' : by === 'dog' ? 'いぬ' : '結果';
+      } else if (pmsg && String(pmsg.type || '') === 'notice') {
+        var title2 = String(pmsg.title || '注意');
+        var msg2 = String(pmsg.message || '');
+        var actorPid2 = String(pmsg.actorPid || '');
+        var isActorNotice = !!(playerId && actorPid2 && String(playerId) === String(actorPid2));
         privateHtml =
           '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
-          '<div class="ll-overlay-backdrop" id="hnPrivateBg"></div>' +
+          '<div class="ll-overlay-backdrop" ' + (isActorNotice ? 'id="hnPrivateBg"' : '') + '></div>' +
           '<div class="ll-overlay-panel">' +
           '<div class="stack">' +
           '<div class="big ll-modal-title">' + escapeHtml(title2) + '</div>' +
-          '<div class="muted center">' + escapeHtml((nname || '対象') + 'は犯人ではありません') + '</div>' +
-          '<div class="row ll-modal-actions" style="justify-content:center">' +
-          '<button class="primary" id="hnPrivateOk">OK</button>' +
-          '</div>' +
+          '<div class="muted center">' + escapeHtml(msg2) + '</div>' +
+          (isActorNotice
+            ? '<div class="row ll-modal-actions" style="justify-content:center">' +
+              '<button class="primary" id="hnPrivateOk">OK</button>' +
+              '</div>'
+            : '') +
           '</div>' +
           '</div>' +
           '</div>';
@@ -4638,13 +4642,13 @@
         if (frontIdx < 0 || frontIdx >= myHand.length) frontIdx = 0;
 
         // Compute an approximate pixel step as cardHeight/6.
-        // Reduce overlap by 20% (increase offset).
+        // Reduce overlap by 20% (decrease offset).
         var stepPx = 72;
         try {
           var vw = (typeof window !== 'undefined' && window && window.innerWidth) ? window.innerWidth : 420;
           var cardW = Math.min(340, Math.floor(vw * 0.9));
           var cardH = cardW * (4 / 3);
-          stepPx = Math.max(12, Math.round((cardH / 6) * 1.2));
+          stepPx = Math.max(10, Math.round((cardH / 6) * 0.8));
         } catch (eStep) {
           stepPx = 72;
         }
@@ -5209,7 +5213,7 @@
 
           if (t === 'play') {
             // Simple play (no extra choices)
-            if (st.pending && st.pending.type) {
+            if ((st.pending && st.pending.type) || (st.waitFor && st.waitFor.type)) {
               ui.inFlight = false;
               return;
             }
@@ -5379,7 +5383,7 @@
 
           var st = lastRoom.state;
           if (String((lastRoom && lastRoom.phase) || '') !== 'playing') return;
-          if (st.pending && st.pending.type) return;
+          if ((st.pending && st.pending.type) || (st.waitFor && st.waitFor.type)) return;
 
           var turnPid = st.turn && st.turn.playerId ? String(st.turn.playerId) : '';
           if (!turnPid || String(turnPid) !== String(playerId)) return;
@@ -5598,7 +5602,7 @@
       if (phase !== 'playing') return;
 
       // Block play during group pending actions.
-      if (st.pending && st.pending.type) return;
+      if ((st.pending && st.pending.type) || (st.waitFor && st.waitFor.type)) return;
 
       var turnPid = st.turn && st.turn.playerId ? String(st.turn.playerId) : '';
       if (!turnPid || String(turnPid) !== String(playerId)) return;
@@ -5664,6 +5668,34 @@
         if (!pid) return room;
         if (!st.private || typeof st.private !== 'object') return room;
         if (!st.private[pid]) return room;
+        var wf = st.waitFor && st.waitFor.type ? st.waitFor : null;
+        if (wf && String(wf.by || '') === String(pid)) {
+          var nextPrivateAll = {};
+          var keys = Object.keys(st.private || {});
+          for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            var m = st.private[k];
+            if (!m) continue;
+            if (wf.createdAt && m.createdAt && String(m.createdAt) === String(wf.createdAt)) continue;
+            nextPrivateAll[k] = m;
+          }
+          st.private = nextPrivateAll;
+          st.waitFor = null;
+
+          try {
+            var turnPid = String(st.turn && st.turn.playerId ? st.turn.playerId : '');
+            if (turnPid && String(turnPid) === String(pid)) {
+              var order = Array.isArray(st.order) ? st.order.slice() : [];
+              var hands = st.hands || {};
+              st.turn = hnNextTurnSkipEmpty(order, pid, hands);
+            }
+          } catch (eAdv) {
+            // ignore
+          }
+
+          return assign({}, room, { state: st });
+        }
+
         var nextPrivate = assign({}, st.private);
         delete nextPrivate[pid];
         st.private = nextPrivate;
@@ -5860,6 +5892,9 @@
       var st = assign({}, room.state || {});
       if (st.result && st.result.decidedAt) return room;
 
+      // Block plays while waiting for an acknowledgement (e.g., notice/boy).
+      if (st.waitFor && st.waitFor.type) return room;
+
       var order = Array.isArray(st.order) ? st.order.slice() : [];
       var hands = assign({}, st.hands || {});
       var grave = Array.isArray(st.graveyard) ? st.graveyard.slice() : [];
@@ -5976,16 +6011,19 @@
           try {
             if (!st.private || typeof st.private !== 'object') st.private = {};
             var at0 = serverNowMs();
+            var tnm0 = hnPlayerName(room, tPid);
+            var msg0 = (tnm0 ? (tnm0 + ' はアリバイを持っていました。') : '') + 'アリバイにより探偵の効果は無効です。';
             for (var da0 = 0; da0 < order.length; da0++) {
               var pda0 = String(order[da0] || '');
               if (!pda0) continue;
-              st.private[pda0] = { type: 'detective_alibi', createdAt: at0, targetPid: String(tPid || '') };
+              st.private[pda0] = { type: 'notice', title: '探偵', message: msg0, actorPid: pid, createdAt: at0, targetPid: String(tPid || '') };
             }
+            st.waitFor = { type: 'notice_ack', by: pid, createdAt: at0, cardId: 'detective' };
           } catch (eDA) {
             // ignore
           }
           st.log = st.log.concat(['アリバイにより探偵の効果は無効']);
-          advanceTurn();
+          // Wait for the actor to acknowledge.
           return assign({}, room, { state: st });
         }
 
@@ -5995,18 +6033,21 @@
           return assign({}, room, { state: st });
         }
 
-        // Not culprit: broadcast to all players.
+        // Not culprit: broadcast to all players and wait for actor OK.
         try {
           if (!st.private || typeof st.private !== 'object') st.private = {};
+          var at1 = serverNowMs();
+          var tnm1 = hnPlayerName(room, tPid);
+          var msg1 = '探偵が選んだ' + (tnm1 || '対象') + 'は犯人ではありませんでした';
           for (var bi = 0; bi < order.length; bi++) {
             var pbi = String(order[bi] || '');
             if (!pbi) continue;
-            st.private[pbi] = { type: 'not_culprit', byCard: 'detective', createdAt: serverNowMs(), targetPid: String(tPid || '') };
+            st.private[pbi] = { type: 'notice', title: '探偵', message: msg1, actorPid: pid, createdAt: at1, targetPid: String(tPid || '') };
           }
+          st.waitFor = { type: 'notice_ack', by: pid, createdAt: at1, cardId: 'detective' };
         } catch (eNC0) {
           // ignore
         }
-        advanceTurn();
         return assign({}, room, { state: st });
       }
 
@@ -6028,18 +6069,21 @@
           return assign({}, room, { state: st });
         }
 
-        // Not culprit: broadcast to all players.
+        // Not culprit: broadcast to all players and wait for actor OK.
         try {
           if (!st.private || typeof st.private !== 'object') st.private = {};
+          var at2 = serverNowMs();
+          var tnm2 = hnPlayerName(room, tPid2);
+          var msg2 = '犬が選んだ' + (tnm2 || '対象') + 'のカードは犯人ではありませんでした';
           for (var bj = 0; bj < order.length; bj++) {
             var pbj = String(order[bj] || '');
             if (!pbj) continue;
-            st.private[pbj] = { type: 'not_culprit', byCard: 'dog', createdAt: serverNowMs(), targetPid: String(tPid2 || '') };
+            st.private[pbj] = { type: 'notice', title: 'いぬ', message: msg2, actorPid: pid, createdAt: at2, targetPid: String(tPid2 || '') };
           }
+          st.waitFor = { type: 'notice_ack', by: pid, createdAt: at2, cardId: 'dog' };
         } catch (eDogN2) {
           // ignore
         }
-        advanceTurn();
         return assign({}, room, { state: st });
       }
 
@@ -6065,11 +6109,13 @@
         try {
           var cpid = hnFindCulpritHolder(order, hands);
           if (!st.private || typeof st.private !== 'object') st.private = {};
-          st.private[pid] = { type: 'boy', createdAt: serverNowMs(), culpritPid: String(cpid || '') };
+          var at3 = serverNowMs();
+          st.private[pid] = { type: 'boy', createdAt: at3, culpritPid: String(cpid || '') };
+          st.waitFor = { type: 'private_ack', by: pid, createdAt: at3, cardId: 'boy' };
         } catch (eBoy) {
           // ignore
         }
-        advanceTurn();
+        // Wait for actor OK before advancing the turn.
         return assign({}, room, { state: st });
       }
 
@@ -6456,6 +6502,17 @@
       var bv0 = llCardRank(b0);
       var total0 = (av0 || 0) + (bv0 || 0);
       if ((a0 === '7' || b0 === '7') && total0 >= 12) {
+        var ps0 = room && room.players ? room.players : {};
+        function _pname0(pid) {
+          try {
+            return pid && ps0[pid] ? formatPlayerDisplayName(ps0[pid]) : String(pid || '-');
+          } catch (e) {
+            return String(pid || '-');
+          }
+        }
+        var drewDef0 = llCardDef(String(b0 || ''));
+        var drewLabel0 = String((drewDef0 && drewDef0.name) || '-') + '(' + String((drewDef0 && drewDef0.rank) || llCardRankStr(String(b0 || '')) || '-') + ')';
+        var lpText0 = _pname0(startId) + ' が大臣(7)を持っていて ' + drewLabel0 + ' を引いたため脱落した。';
         // Keep turn on startId until ack; apply elimination after the modal is advanced.
         return {
           no: parseIntSafe(room && room.round && room.round.no, 0) + 1,
@@ -6474,6 +6531,7 @@
           eliminated: eliminated,
           protected: protectedMap,
           peek: null,
+          lastPlay: { by: startId, to: '', card: String(b0 || ''), at: serverNowMs(), text: lpText0 },
           reveal: { type: 'minister_overload', by: startId, had: '7', drew: b0 },
           waitFor: { type: 'minister_overload_ack', by: startId, pending: { type: 'eliminate', pid: startId, reason: 'minister_overload' } },
           winners: []
@@ -6682,14 +6740,15 @@
       var cardDef = llCardDef(card);
       var cardRankStr = llCardRankStr(card);
 
+      function formatLastPlayText(byId, toId, playedCard) {
+        var dlp = llCardDef(String(playedCard || ''));
+        var cardLabel = String((dlp && dlp.name) || '-') + '(' + String((dlp && dlp.rank) || llCardRankStr(String(playedCard || '')) || '-') + ')';
+        return toId ? pname(byId) + ' が ' + pname(toId) + ' へ ' + cardLabel + ' のカードを使用した。' : pname(byId) + ' が ' + cardLabel + ' のカードを使用した。';
+      }
+
       var logText = actorName + ' が ' + cardDef.name + '(' + cardDef.rank + ') を使用';
 
-      // Persist the latest play so the table can show it until the next play.
-      try {
-        round.lastPlay = { by: String(actorId || ''), card: String(card || ''), at: serverNowMs() };
-      } catch (eLP0) {
-        // ignore
-      }
+      var lastPlayTo = '';
 
       // Apply effects
       if (cardRankStr === '1') {
@@ -6701,6 +6760,7 @@
         var g = parseIntSafe(guess, 0);
         if (!(g >= 2 && g <= 8)) return room;
         if (t) {
+          lastPlayTo = String(t || '');
           var th = getSingleHand(t);
           logText += ' → 対象 ' + pname(t) + ' / 推測 ' + llCardDef(String(g)).name + '(' + g + ')';
           var protectedHit = false;
@@ -6728,6 +6788,7 @@
         var eligible2 = eligibleTargetIds(false);
         if (eligible2.length && (!t2 || eligible2.indexOf(t2) < 0)) return room;
         if (t2) {
+          lastPlayTo = String(t2 || '');
           if (isProtected(t2)) {
             logText += ' → ' + pname(t2) + '（僧侶により保護中：無効）';
           } else {
@@ -6748,6 +6809,7 @@
         var eligible3 = eligibleTargetIds(false);
         if (eligible3.length && (!t3 || eligible3.indexOf(t3) < 0)) return room;
         if (t3) {
+          lastPlayTo = String(t3 || '');
           if (isProtected(t3)) {
             logText += ' → ' + pname(t3) + '（僧侶により保護中：無効）';
           } else {
@@ -6787,6 +6849,7 @@
         var eligible5 = eligibleTargetIds(true);
         if (eligible5.length && (!t5 || eligible5.indexOf(t5) < 0)) return room;
         if (t5) {
+          lastPlayTo = String(t5 || '');
           if (isProtected(t5)) {
             logText += ' → ' + pname(t5) + '（僧侶により保護中：無効）';
           } else {
@@ -6832,6 +6895,7 @@
         var eligible6 = eligibleTargetIds(false);
         if (eligible6.length && (!t6 || eligible6.indexOf(t6) < 0)) return room;
         if (t6) {
+          lastPlayTo = String(t6 || '');
           if (isProtected(t6)) {
             logText += ' → ' + pname(t6) + '（僧侶により保護中：無効）';
           } else {
@@ -6859,6 +6923,19 @@
         } else {
           return room;
         }
+      }
+
+      // Persist the latest play so the table can show it until the next play.
+      try {
+        round.lastPlay = {
+          by: String(actorId || ''),
+          to: String(lastPlayTo || ''),
+          card: String(card || ''),
+          at: serverNowMs(),
+          text: formatLastPlayText(String(actorId || ''), String(lastPlayTo || ''), String(card || ''))
+        };
+      } catch (eLP0) {
+        // ignore
       }
 
       // Write back updated round parts.
@@ -6930,6 +7007,19 @@
               round.discards = discards;
               round.eliminated = eliminated;
               round.protected = protectedMap;
+              try {
+                var drewDef = llCardDef(String(drawn2 || ''));
+                var drewLabel = String((drewDef && drewDef.name) || '-') + '(' + String((drewDef && drewDef.rank) || llCardRankStr(String(drawn2 || '')) || '-') + ')';
+                round.lastPlay = {
+                  by: String(next.id || ''),
+                  to: '',
+                  card: String(drawn2 || ''),
+                  at: serverNowMs(),
+                  text: pname(next.id) + ' が大臣(7)を持っていて ' + drewLabel + ' を引いたため脱落した。'
+                };
+              } catch (eLPmo) {
+                // ignore
+              }
               round.reveal = { type: 'minister_overload', by: next.id, had: '7', drew: String(drawn2) };
               round.waitFor = { type: 'minister_overload_ack', by: next.id, pending: { type: 'eliminate', pid: next.id, reason: 'minister_overload' } };
               nextRoom.round = round;
@@ -7039,6 +7129,26 @@
               round.discards = discards;
               round.eliminated = eliminated;
               round.protected = protectedMap;
+              try {
+                var drewDef2 = llCardDef(String(drawn2 || ''));
+                var drewLabel2 = String((drewDef2 && drewDef2.name) || '-') + '(' + String((drewDef2 && drewDef2.rank) || llCardRankStr(String(drawn2 || '')) || '-') + ')';
+                round.lastPlay = {
+                  by: String(next.id || ''),
+                  to: '',
+                  card: String(drawn2 || ''),
+                  at: serverNowMs(),
+                  text: (function () {
+                    try {
+                      var ps2 = room && room.players ? room.players : {};
+                      return (next && next.id && ps2[next.id] ? formatPlayerDisplayName(ps2[next.id]) : String(next.id || '-')) + ' が大臣(7)を持っていて ' + drewLabel2 + ' を引いたため脱落した。';
+                    } catch (e) {
+                      return String(next.id || '-') + ' が大臣(7)を持っていて ' + drewLabel2 + ' を引いたため脱落した。';
+                    }
+                  })()
+                };
+              } catch (eLPmo2) {
+                // ignore
+              }
               round.reveal = { type: 'minister_overload', by: next.id, had: '7', drew: String(drawn2) };
               round.waitFor = { type: 'minister_overload_ack', by: next.id };
               nextRoom.round = round;
@@ -9303,12 +9413,14 @@
     var btnJoin = document.getElementById('homeCreateJoin');
     var btnGm = document.getElementById('homeCreateGm');
     var btnSim = document.getElementById('homeLoveLetterSim');
+    var btnHnSim = document.getElementById('homeHanninSim');
 
     function disableHomeButtons(disabled) {
       try {
         if (btnJoin) btnJoin.disabled = !!disabled;
         if (btnGm) btnGm.disabled = !!disabled;
         if (btnSim) btnSim.disabled = !!disabled;
+        if (btnHnSim) btnHnSim.disabled = !!disabled;
       } catch (e) {
         // ignore
       }
@@ -9373,6 +9485,18 @@
         var v = getCacheBusterParam();
         if (v) q.v = v;
         q.screen = 'loveletter_sim_table';
+        setQuery(q);
+        route();
+      });
+    }
+
+    if (btnHnSim && !btnHnSim.__home_bound) {
+      btnHnSim.__home_bound = true;
+      btnHnSim.addEventListener('click', function () {
+        var q = {};
+        var v = getCacheBusterParam();
+        if (v) q.v = v;
+        q.screen = 'hannin_sim_table';
         setQuery(q);
         route();
       });
@@ -9603,6 +9727,266 @@
         resetBtn.__ll_bound = true;
         resetBtn.addEventListener('click', function () {
           window.__ll_sim_state = null;
+          sim = null;
+          renderSim();
+        });
+      }
+    }
+
+    renderSim();
+  }
+
+  // Hannin: debug table simulation (no Firebase)
+  function routeHanninSimTable() {
+    try {
+      if (document && document.body && document.body.classList) {
+        document.body.classList.add('ll-table-screen');
+      }
+    } catch (e0) {
+      // ignore
+    }
+
+    var sim = window.__hn_sim_state || null;
+
+    function initSim() {
+      var ids = ['p1', 'p2', 'p3', 'p4', 'p5'];
+      var players = {};
+      for (var i = 0; i < ids.length; i++) {
+        players[ids[i]] = { name: 'P' + String(i + 1), joinedAt: serverNowMs(), lastSeenAt: serverNowMs() };
+      }
+
+      var deck = hnBuildDeck(ids.length);
+      deck = hnShuffle(deck);
+
+      var hands = {};
+      var idx = 0;
+      for (var h = 0; h < ids.length; h++) {
+        hands[ids[h]] = [String(deck[idx++]), String(deck[idx++]), String(deck[idx++]), String(deck[idx++])];
+      }
+
+      sim = {
+        room: {
+          createdAt: serverNowMs(),
+          phase: 'playing',
+          settings: {},
+          players: players,
+          state: {
+            order: ids.slice(),
+            hands: hands,
+            graveyard: [],
+            used: {},
+            turn: { index: 0, playerId: ids[0] },
+            started: true,
+            turnCount: 0,
+            pending: null,
+            waitFor: null,
+            lastPlay: { at: 0, playerId: '', cardId: '' },
+            result: { side: '', winners: [], culpritId: '', decidedAt: 0, reason: '' }
+          },
+          result: null
+        }
+      };
+      window.__hn_sim_state = sim;
+    }
+
+    function advanceOne() {
+      if (!sim) initSim();
+      var room = sim.room;
+      var st = room && room.state ? room.state : {};
+      if (String(room.phase || '') === 'finished') return;
+
+      var order = Array.isArray(st.order) ? st.order : [];
+      var hands = st.hands || {};
+      if (!order.length) return;
+
+      function handCount(pid) {
+        var h = hands && Array.isArray(hands[pid]) ? hands[pid] : [];
+        return h.length || 0;
+      }
+
+      // Find current actor (or next with cards).
+      var actor = st.turn && st.turn.playerId ? String(st.turn.playerId || '') : '';
+      if (!actor) actor = String(order[0] || '');
+      if (!actor || handCount(actor) <= 0) {
+        for (var i = 0; i < order.length; i++) {
+          var pid = String(order[i] || '');
+          if (pid && handCount(pid) > 0) {
+            actor = pid;
+            st.turn = { index: i, playerId: pid };
+            break;
+          }
+        }
+      }
+
+      if (!actor || handCount(actor) <= 0) {
+        room.phase = 'finished';
+        room.result = { winners: [] };
+        return;
+      }
+
+      // Auto play: discard a random card to grave and advance turn.
+      var h0 = hands && Array.isArray(hands[actor]) ? hands[actor].slice() : [];
+      var pick = '';
+      if (h0.length) {
+        var pi = randomInt(h0.length);
+        pick = String(h0.splice(pi, 1)[0] || '');
+      }
+      hands[actor] = h0;
+      st.hands = hands;
+      if (!Array.isArray(st.graveyard)) st.graveyard = [];
+      if (pick) st.graveyard.push(pick);
+      st.lastPlay = { at: serverNowMs(), playerId: actor, cardId: String(pick || '') };
+      st.turnCount = parseIntSafe(st.turnCount, 0) + 1;
+
+      // Advance to next player in order.
+      var curIdx = -1;
+      for (var j = 0; j < order.length; j++) {
+        if (String(order[j] || '') === String(actor)) {
+          curIdx = j;
+          break;
+        }
+      }
+      if (curIdx < 0) curIdx = 0;
+      var nextIdx = (curIdx + 1) % order.length;
+      st.turn = { index: nextIdx, playerId: String(order[nextIdx] || '') };
+      room.state = st;
+    }
+
+    function renderHanninSimTableView(rootEl, room) {
+      var players = (room && room.players) || {};
+      var st = (room && room.state) || {};
+      var order = Array.isArray(st.order) ? st.order : [];
+      var hands = (st && st.hands) || {};
+      var grave = Array.isArray(st.graveyard) ? st.graveyard : [];
+      var turnPid = '';
+      try {
+        turnPid = st && st.turn && st.turn.playerId ? String(st.turn.playerId || '') : '';
+      } catch (eT0) {
+        turnPid = '';
+      }
+
+      function pname(pid) {
+        var p = pid && players ? players[pid] : null;
+        return p ? formatPlayerDisplayName(p) : String(pid || '-');
+      }
+
+      function handCount(pid) {
+        var h = hands && Array.isArray(hands[pid]) ? hands[pid] : [];
+        return h.length || 0;
+      }
+
+      function handBacksHtml(pid) {
+        var cnt = handCount(pid);
+        var n = Math.min(4, Math.max(0, cnt));
+        var out = '';
+        for (var i = 0; i < n; i++) {
+          out += '<div class="hn-sim-handback">' + hnCardBackImgHtml() + '</div>';
+        }
+        return out;
+      }
+
+      var graveHtml = '';
+      if (!grave.length) {
+        graveHtml = '<div class="muted">（なし）</div>';
+      } else {
+        var graveCount = grave.length;
+        var top = String(grave[graveCount - 1] || '');
+        var layerCount = Math.min(4, graveCount);
+        for (var gi = layerCount - 1; gi >= 1; gi--) {
+          graveHtml +=
+            '<div class="ll-table-grave-stack-card ll-table-grave-stack-card--under" style="left:' +
+            String(gi * 7) +
+            'px;top:' +
+            String(gi * -3) +
+            'px"></div>';
+        }
+        graveHtml += '<div class="ll-table-grave-stack-card" style="left:0px;top:0px">' + hnCardImgHtml(top) + '</div>';
+      }
+
+      var centerHtml =
+        '<div class="ll-table-center">' +
+        '<div class="ll-table-pile">' +
+        '<div class="muted">墓地</div>' +
+        '<div class="ll-table-pile-count"><b>' +
+        escapeHtml(String(grave.length || 0)) +
+        '</b></div>' +
+        '<div class="ll-table-grave-stack">' +
+        graveHtml +
+        '</div>' +
+        '</div>' +
+        '</div>';
+
+      var seatsHtml = '';
+      var nSeats = order.length || 0;
+      var radius = 42;
+      for (var si = 0; si < nSeats; si++) {
+        var pid = String(order[si] || '');
+        if (!pid) continue;
+        var angle = -90 + (360 * si) / nSeats;
+        var rad = (Math.PI / 180) * angle;
+        var x = 50 + radius * Math.cos(rad);
+        var y = 50 + radius * Math.sin(rad);
+        var isTurnSeat = !!(turnPid && String(pid) === String(turnPid));
+        var cnt = handCount(pid);
+        seatsHtml +=
+          '<div class="ll-seat' +
+          (isTurnSeat ? ' ll-seat--turn' : '') +
+          '" data-hn-pid="' +
+          escapeHtml(String(pid)) +
+          '" style="left:' +
+          escapeHtml(String(x.toFixed(3))) +
+          '%;top:' +
+          escapeHtml(String(y.toFixed(3))) +
+          '%">' +
+          '<div class="ll-seat-card hn-sim-seat-card">' +
+          '<div class="ll-seat-name">' +
+          escapeHtml(pname(pid)) +
+          '</div>' +
+          '<div class="hn-sim-handcount muted">手札: ' +
+          escapeHtml(String(cnt)) +
+          '</div>' +
+          '<div class="hn-sim-handbacks">' +
+          handBacksHtml(pid) +
+          '</div>' +
+          '</div>' +
+          '</div>';
+      }
+
+      render(
+        rootEl,
+        '<div class="ll-table">' +
+          seatsHtml +
+          '<div class="ll-table-inner">' +
+          centerHtml +
+          '</div>' +
+          '</div>'
+      );
+    }
+
+    function renderSim() {
+      if (!sim) initSim();
+      render(
+        viewEl,
+        '\n    <div class="stack">\n      <div class="big">犯人は踊る（デバッグ）テーブルシミュレーション</div>\n      <div class="row" style="justify-content:center">\n        <button id="hnSimStep" class="primary">1ターン進める</button>\n        <button id="hnSimReset" class="ghost">リセット</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n      <section id="hnSimView"></section>\n    </div>\n  '
+      );
+
+      var inner = document.getElementById('hnSimView');
+      if (inner) renderHanninSimTableView(inner, sim.room);
+
+      var stepBtn = document.getElementById('hnSimStep');
+      if (stepBtn && !stepBtn.__hn_bound) {
+        stepBtn.__hn_bound = true;
+        stepBtn.addEventListener('click', function () {
+          advanceOne();
+          renderSim();
+        });
+      }
+
+      var resetBtn = document.getElementById('hnSimReset');
+      if (resetBtn && !resetBtn.__hn_bound) {
+        resetBtn.__hn_bound = true;
+        resetBtn.addEventListener('click', function () {
+          window.__hn_sim_state = null;
           sim = null;
           renderSim();
         });
@@ -14149,13 +14533,16 @@
     try {
       var lp = r && r.lastPlay ? r.lastPlay : null;
       var lpBy = lp && lp.by ? String(lp.by) : '';
+      var lpTo = lp && lp.to ? String(lp.to) : '';
       var lpCard = lp && lp.card ? String(lp.card) : '';
+      var lpText = lp && lp.text ? String(lp.text) : '';
       if (phase !== 'lobby' && lpBy && lpCard) {
-        var dlp = llCardDef(lpCard);
-        lastPlayHtml =
-          '<div class="ll-table-lastplay muted" aria-live="polite">' +
-          escapeHtml(pname(lpBy) + '：' + String((dlp && dlp.name) || '-') + '(' + String((dlp && dlp.rank) || llCardRankStr(lpCard) || '-') + ')') +
-          '</div>';
+        if (!lpText) {
+          var dlp = llCardDef(lpCard);
+          var cardLabel = String((dlp && dlp.name) || '-') + '(' + String((dlp && dlp.rank) || llCardRankStr(lpCard) || '-') + ')';
+          lpText = lpTo ? pname(lpBy) + ' が ' + pname(lpTo) + ' へ ' + cardLabel + ' のカードを使用した。' : pname(lpBy) + ' が ' + cardLabel + ' のカードを使用した。';
+        }
+        lastPlayHtml = '<div class="ll-table-lastplay ll-table-lastplay-banner" aria-live="polite">' + escapeHtml(lpText) + '</div>';
       }
     } catch (eLP) {
       lastPlayHtml = '';
@@ -14206,6 +14593,7 @@
 
       centerHtml =
         '<div class="ll-table-center">' +
+        (lastPlayHtml || '') +
         '<div class="ll-table-pile">' +
         '<div class="muted">山札</div>' +
         '<div class="ll-table-pile-count"><b>' +
@@ -14214,7 +14602,6 @@
         '<div class="ll-table-pile-stack">' +
         deckStack +
         '</div>' +
-        (lastPlayHtml || '') +
         '</div>' +
         '<div class="ll-table-pile">' +
         '<div class="muted">墓地</div>' +
@@ -14476,7 +14863,7 @@
             // Place the icon closer to the acting player.
             var tx = lineEnd.x - lineStart.x;
             var ty = lineEnd.y - lineStart.y;
-            var tpos = 0.35;
+            var tpos = 0.22;
             var midX = lineStart.x + tx * tpos;
             var midY = lineStart.y + ty * tpos;
             iconEl.style.left = String(midX.toFixed(1)) + 'px';
@@ -15683,6 +16070,10 @@
       return routeLoveLetterSimTable();
     }
 
+    if (screen === 'hannin_sim_table') {
+      return routeHanninSimTable();
+    }
+
     if (screen === 'codenames_rejoin') {
       if (!roomId) return routeHome();
       return routeCodenamesRejoin(roomId);
@@ -16695,7 +17086,7 @@
       var v2 = document.getElementById('view');
       if (v2) {
         v2.innerHTML =
-          '<div class="stack"><div class="badge">エラー</div><div class="big">起動できません</div><div class="muted">詳細: ' +
+        '\n      <div class="row">\n        <button id="homeLoveLetterSim" class="ghost">ラブレター（デバッグ）テーブルシミュレーション</button>\n      </div>\n      <div class="row">\n        <button id="homeHanninSim" class="ghost">犯人は踊る（デバッグ）テーブルシミュレーション</button>\n      </div>\n    </div>\n  '
           escapeHtml((e3 && e3.message) || String(e3)) +
           '</div></div>';
       }
