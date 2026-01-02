@@ -4295,6 +4295,28 @@
           '</div>' +
           '</div>' +
           '</div>';
+      } else if (pmsg && String(pmsg.type || '') === 'witness') {
+        var wpid = String(pmsg.targetPid || '');
+        var wname = wpid ? hnPlayerName(room, wpid) : '';
+        var wcards = Array.isArray(pmsg.cards) ? pmsg.cards.slice() : [];
+        var wrow = '';
+        for (var wi = 0; wi < wcards.length; wi++) {
+          wrow += '<div class="hn-rumor-card">' + hnCardImgHtml(String(wcards[wi] || '')) + '</div>';
+        }
+        privateHtml =
+          '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
+          '<div class="ll-overlay-backdrop" id="hnPrivateBg"></div>' +
+          '<div class="ll-overlay-panel">' +
+          '<div class="stack">' +
+          '<div class="big ll-modal-title">目撃者</div>' +
+          '<div class="muted center">' + escapeHtml(wname ? (wname + ' の手札') : '手札') + '</div>' +
+          '<div class="hn-rumor-row">' + wrow + '</div>' +
+          '<div class="row ll-modal-actions" style="justify-content:center">' +
+          '<button class="primary" id="hnPrivateOk">OK</button>' +
+          '</div>' +
+          '</div>' +
+          '</div>' +
+          '</div>';
       }
     } catch (ePriv) {
       privateHtml = '';
@@ -5245,20 +5267,6 @@
           renderNow(lastRoom);
 
           playHanninCard(roomId, playerId, idx, action)
-            .then(function () {
-              // For witness: show target hand immediately in a modal (client-side reveal).
-              try {
-                if (cardId === 'witness' && action && action.targetPid) {
-                  var tp = String(action.targetPid || '');
-                  var st2 = lastRoom && lastRoom.state ? lastRoom.state : null;
-                  var th = st2 && st2.hands && Array.isArray(st2.hands[tp]) ? st2.hands[tp] : [];
-                  ui.hnReveal = { type: 'witness', targetPid: tp, cards: th.slice() };
-                  renderNow(lastRoom);
-                }
-              } catch (eW) {
-                // ignore
-              }
-            })
             .catch(function (e) {
               setInlineError('hnPlayError', (e && e.message) || '失敗');
             })
@@ -5839,7 +5847,18 @@
       }
 
       if (cardId === 'witness') {
-        // Viewing is handled client-side; state change is only discard.
+        var tPid4 = String(a.targetPid || '');
+        if (!tPid4 || tPid4 === pid) {
+          advanceTurn();
+          return assign({}, room, { state: st });
+        }
+        var th4 = hands && Array.isArray(hands[tPid4]) ? hands[tPid4] : [];
+        try {
+          if (!st.private || typeof st.private !== 'object') st.private = {};
+          st.private[pid] = { type: 'witness', createdAt: serverNowMs(), targetPid: String(tPid4 || ''), cards: th4.slice() };
+        } catch (eWit) {
+          // ignore
+        }
         advanceTurn();
         return assign({}, room, { state: st });
       }
@@ -14803,6 +14822,12 @@
       if (v) q.v = v;
       q.lobby = lobbyId;
       q.screen = 'lobby_host';
+      try {
+        var qx = parseQuery();
+        if (qx && String(qx.gmdev || '') === '1') q.gmdev = '1';
+      } catch (e) {
+        // ignore
+      }
       setQuery(q);
       route();
     }
