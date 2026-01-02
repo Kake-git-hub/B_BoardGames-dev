@@ -8747,6 +8747,51 @@
     var endAt = room && room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
     var remain = phase === 'discussion' ? Math.max(0, Math.floor((endAt - serverNowMs()) / 1000)) : 0;
 
+    // For the top-right header: role/turn/time on separate lines.
+    var roleLine = '';
+    if (role === 'majority') roleLine = '多人数側';
+    else if (role === 'minority') roleLine = '少人数側';
+
+    var gmDisplayName = '';
+    try {
+      if (room && room.settings && room.settings.gmName) gmDisplayName = String(room.settings.gmName || '').trim();
+    } catch (eGm0) {
+      gmDisplayName = '';
+    }
+    if (!gmDisplayName) {
+      try {
+        var pidsGm = Object.keys(players || {});
+        for (var gi0 = 0; gi0 < pidsGm.length; gi0++) {
+          var pidGm = pidsGm[gi0];
+          var pgm = players && players[pidGm];
+          if (pgm && pgm.isHost) {
+            gmDisplayName = formatPlayerDisplayName(pgm) || '';
+            break;
+          }
+        }
+      } catch (eGm1) {
+        gmDisplayName = '';
+      }
+    }
+    if (!gmDisplayName) gmDisplayName = 'ゲームマスター';
+
+    var turnLine = '';
+    if (phase === 'reveal' || phase === 'judge' || phase === 'finished') {
+      turnLine = gmDisplayName + 'のターン';
+    }
+
+    var headerRightLines = [];
+    if (statusShort) headerRightLines.push(String(statusShort));
+    if (roleLine) headerRightLines.push(String(roleLine));
+    if (turnLine) headerRightLines.push(String(turnLine));
+    if (phase === 'discussion') headerRightLines.push('残り ' + formatMMSS(remain));
+
+    var headerRightHtml = '<div class="muted" style="text-align:right;line-height:1.25">';
+    for (var hri = 0; hri < headerRightLines.length; hri++) {
+      headerRightHtml += '<div>' + escapeHtml(headerRightLines[hri]) + '</div>';
+    }
+    headerRightHtml += '</div>';
+
     var statusText = '';
     if (phase === 'lobby') statusText = '待機中：ゲームマスターがスタートするまでお待ちください。';
     else if (phase === 'discussion') statusText = 'トーク中：少数側を探しましょう。';
@@ -9088,9 +9133,7 @@
         '<div class="big">' +
         escapeHtml(selfName) +
         '</div>' +
-        '<div class="muted" style="text-align:right">' +
-        escapeHtml(statusShort || '') +
-        '</div>' +
+        headerRightHtml +
         '</div>\n\n      <div class="card" style="padding:12px">\n        <div class="muted">あなたのワード</div>\n        ' +
         wordHtml +
         '\n      </div>\n\n      ' +
@@ -9320,8 +9363,9 @@
     var timerCardHtml = '';
     if (phase === 'discussion') {
       timerCardHtml =
-        '<div class="card center" style="padding:16px">' +
-        '<div class="timer" id="wwTableTimer" style="font-size:72px">' +
+        '<div class="card center" style="padding:12px">' +
+        '<div class="muted" style="margin-bottom:6px">残り時間</div>' +
+        '<div class="timer" id="wwTableTimer" style="font-size:96px;line-height:1">' +
         escapeHtml(formatMMSS(remain)) +
         '</div>' +
         '</div>';
@@ -12095,7 +12139,7 @@
     var unsub = null;
     var timerHandle = null;
     var autoVoteRequested = false;
-    var ui = { showContinueForm: false, lobbyReturnWatching: false, lobbyUnsub: null };
+    var ui = { showContinueForm: false, lobbyReturnWatching: false, lobbyUnsub: null, cancelled: false };
 
     var lobbyId = '';
     try {
@@ -12107,6 +12151,26 @@
 
     function redirectToLobby() {
       if (!lobbyId) return;
+      ui.cancelled = true;
+      try {
+        if (unsub) unsub();
+      } catch (eU0) {
+        // ignore
+      }
+      unsub = null;
+      try {
+        if (timerHandle) clearInterval(timerHandle);
+      } catch (eT0) {
+        // ignore
+      }
+      timerHandle = null;
+      try {
+        if (ui.lobbyUnsub) ui.lobbyUnsub();
+      } catch (eL0) {
+        // ignore
+      }
+      ui.lobbyUnsub = null;
+
       var q = {};
       var v = getCacheBusterParam();
       if (v) q.v = v;
@@ -12126,13 +12190,7 @@
             var cg = (lobby && lobby.currentGame) || null;
             var kind = cg && cg.kind ? String(cg.kind) : '';
             var rid = cg && cg.roomId ? String(cg.roomId) : '';
-            if (!cg || kind !== 'loveletter' || rid !== String(roomId || '')) {
-              try {
-                if (ui.lobbyUnsub) ui.lobbyUnsub();
-              } catch (e) {
-                // ignore
-              }
-              ui.lobbyUnsub = null;
+            if (!cg || kind !== 'wordwolf' || rid !== String(roomId || '')) {
               redirectToLobby();
             }
           });
@@ -12157,6 +12215,7 @@
     firebaseReady()
       .then(function () {
         return subscribeRoom(roomId, function (room) {
+          if (ui.cancelled) return;
           if (!room) {
             renderError(viewEl, '部屋が見つかりません');
             return;
@@ -12173,6 +12232,7 @@
 
           if (timerHandle) clearInterval(timerHandle);
           timerHandle = setInterval(function () {
+            if (ui.cancelled) return;
             rerenderTimer(room);
             if (!autoVoteRequested && room && room.phase === 'discussion') {
               var endAt = room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
@@ -12361,6 +12421,25 @@
                   var q = {};
                   var v = getCacheBusterParam();
                   if (v) q.v = v;
+                  ui.cancelled = true;
+                  try {
+                    if (unsub) unsub();
+                  } catch (eU1) {
+                    // ignore
+                  }
+                  unsub = null;
+                  try {
+                    if (timerHandle) clearInterval(timerHandle);
+                  } catch (eT1) {
+                    // ignore
+                  }
+                  timerHandle = null;
+                  try {
+                    if (ui.lobbyUnsub) ui.lobbyUnsub();
+                  } catch (eL1) {
+                    // ignore
+                  }
+                  ui.lobbyUnsub = null;
                   setQuery(q);
                   route();
                 })
@@ -12391,6 +12470,7 @@
     var unsub = null;
     var timerHandle = null;
     var autoVoteRequested = false;
+    var cancelled = false;
 
     var lobbyId = '';
     try {
@@ -12402,6 +12482,20 @@
 
     function redirectToLobby() {
       if (!lobbyId) return;
+      cancelled = true;
+      try {
+        if (unsub) unsub();
+      } catch (eU0) {
+        // ignore
+      }
+      unsub = null;
+      try {
+        if (timerHandle) clearInterval(timerHandle);
+      } catch (eT0) {
+        // ignore
+      }
+      timerHandle = null;
+
       var q = {};
       var v = getCacheBusterParam();
       if (v) q.v = v;
@@ -12424,6 +12518,7 @@
     firebaseReady()
       .then(function () {
         return subscribeRoom(roomId, function (room) {
+          if (cancelled) return;
           if (!room) {
             renderError(viewEl, '部屋が見つかりません');
             return;
@@ -12434,6 +12529,7 @@
           if ((room && room.phase) !== 'discussion') autoVoteRequested = false;
           if (timerHandle) clearInterval(timerHandle);
           timerHandle = setInterval(function () {
+            if (cancelled) return;
             rerenderTimer(room);
             if (!autoVoteRequested && room && room.phase === 'discussion') {
               var endAt = room.discussion && room.discussion.endsAt ? room.discussion.endsAt : 0;
