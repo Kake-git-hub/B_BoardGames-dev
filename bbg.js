@@ -4103,6 +4103,7 @@
     var playerId = opts.playerId ? String(opts.playerId) : '';
     var lobbyId = opts.lobbyId ? String(opts.lobbyId) : '';
     var ui = opts.ui || {};
+    var isTableGmDevice = !!opts.isTableGmDevice;
 
     var players = (room && room.players) || {};
     var st = (room && room.state) || {};
@@ -4112,6 +4113,14 @@
     var isMyTurn = !!(turnPid && playerId && String(turnPid) === String(playerId));
     var pending = (st && st.pending) || null;
     var myHand = playerId && hands && Array.isArray(hands[playerId]) ? hands[playerId] : [];
+
+    // Table device should not operate real players.
+    var canOperate = true;
+    try {
+      canOperate = !(isTableGmDevice && !hnIsTestPlayerId(playerId));
+    } catch (eOp) {
+      canOperate = true;
+    }
 
     var alreadyChosenInfo = false;
     try {
@@ -4140,6 +4149,151 @@
     }
 
     var contentHtml = '';
+
+    // Action modal (target/index selection like LoveLetter)
+    var modalHtml = '';
+    try {
+      if (canOperate && ui && ui.hnAction && ui.hnAction.type === 'play') {
+        var act = ui.hnAction;
+        var cardIndex = parseIntSafe(act.cardIndex, -1);
+        var cardId = String(act.cardId || '');
+        var def = HANNIN_CARD_DEFS[String(cardId || '')] || { name: String(cardId || '-'), desc: '' };
+        var step = String(act.step || '');
+
+        // Eligible targets
+        var playersMap = (room && room.players) || {};
+        var order0 = Array.isArray(st && st.order) ? st.order.slice() : Object.keys(playersMap || {});
+        var eligible = [];
+        for (var ti = 0; ti < order0.length; ti++) {
+          var pid2 = String(order0[ti] || '');
+          if (!pid2) continue;
+          if (pid2 === playerId) continue;
+          eligible.push(pid2);
+        }
+
+        function targetButtons(selectedPid) {
+          if (!eligible.length) return '<div class="muted">対象にできる相手がいません。</div>';
+          var out = '';
+          for (var i = 0; i < eligible.length; i++) {
+            var tid = eligible[i];
+            var nm = hnPlayerName(room, tid);
+            var sel = String(selectedPid || '') === String(tid);
+            out +=
+              '<button class="ghost hnPickTarget" data-target="' +
+              escapeHtml(String(tid)) +
+              '" style="width:100%">' +
+              (sel ? '✓ ' : '') +
+              escapeHtml(nm) +
+              '</button>';
+          }
+          return out;
+        }
+
+        function facedownPickGrid(count, selectedIdx, cls, attr) {
+          var out2 = '<div class="hn-rumor-row">';
+          for (var k = 0; k < count; k++) {
+            out2 +=
+              '<div class="hn-rumor-card ' +
+              escapeHtml(cls) +
+              (parseIntSafe(selectedIdx, -1) === k ? ' hn-card--selected' : '') +
+              '" ' +
+              escapeHtml(attr) +
+              '="' +
+              escapeHtml(String(k)) +
+              '">' +
+              hnCardBackImgHtml() +
+              '</div>';
+          }
+          out2 += '</div>';
+          return out2;
+        }
+
+        function giveButtons(excludeIndex, selectedGiveIdx) {
+          var out3 = '';
+          for (var gi = 0; gi < myHand.length; gi++) {
+            if (gi === excludeIndex) continue;
+            var cid = String(myHand[gi] || '');
+            var gsel = parseIntSafe(selectedGiveIdx, -1) === gi;
+            out3 +=
+              '<button class="ghost hnPickGive" data-give="' +
+              escapeHtml(String(gi)) +
+              '" style="width:100%;padding:0">' +
+              (gsel ? '<div class="hn-card--selected" style="border-radius:10px">' + hnCardImgHtml(cid) + '</div>' : hnCardImgHtml(cid)) +
+              '</button>';
+          }
+          if (!out3) out3 = '<div class="muted">渡せるカードがありません。</div>';
+          return out3;
+        }
+
+        var body = '';
+        var canConfirm = false;
+        var title = String(def.name || '') + ' を使用';
+
+        if (cardId === 'detective' || cardId === 'witness') {
+          if (step !== 'target') step = 'target';
+          body = '<div class="muted">対象</div><div class="stack">' + targetButtons(act.targetPid) + '</div>';
+          canConfirm = !!(act.targetPid);
+        } else if (cardId === 'dog') {
+          if (step !== 'target' && step !== 'pick') step = 'target';
+          if (step === 'target') {
+            body = '<div class="muted">対象</div><div class="stack">' + targetButtons(act.targetPid) + '</div>';
+            canConfirm = false;
+          } else {
+            var tp = String(act.targetPid || '');
+            var th = tp && hands && Array.isArray(hands[tp]) ? hands[tp] : [];
+            body =
+              '<div class="muted">相手の手札から1枚選択</div>' +
+              facedownPickGrid(th.length || 0, act.targetIndex, 'hnPickHidden', 'data-hidden');
+            canConfirm = parseIntSafe(act.targetIndex, -1) >= 0;
+          }
+        } else if (cardId === 'deal') {
+          if (step !== 'target' && step !== 'give' && step !== 'take') step = 'target';
+          if (step === 'target') {
+            body = '<div class="muted">交換する相手</div><div class="stack">' + targetButtons(act.targetPid) + '</div>';
+            canConfirm = false;
+          } else if (step === 'give') {
+            body = '<div class="muted">渡すカード（自分の手札）</div><div class="stack">' + giveButtons(cardIndex, act.giveIndex) + '</div>';
+            canConfirm = parseIntSafe(act.giveIndex, -1) >= 0;
+          } else {
+            var tp2 = String(act.targetPid || '');
+            var th2 = tp2 && hands && Array.isArray(hands[tp2]) ? hands[tp2] : [];
+            body =
+              '<div class="muted">相手の手札から1枚選択</div>' +
+              facedownPickGrid(th2.length || 0, act.takeIndex, 'hnPickHidden', 'data-hidden');
+            canConfirm = parseIntSafe(act.takeIndex, -1) >= 0;
+          }
+        }
+
+        modalHtml =
+          '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
+          '<div class="ll-overlay-backdrop" id="hnModalBg"></div>' +
+          '<div class="ll-overlay-panel">' +
+          '<div class="stack">' +
+          '<div class="big ll-modal-title">' +
+          escapeHtml(title) +
+          '</div>' +
+          '<div class="ll-action-card">' +
+          hnCardImgHtml(cardId) +
+          '</div>' +
+          '<div class="ll-modal-name">' +
+          escapeHtml(String(def.name || '')) +
+          '</div>' +
+          (def.desc ? '<div class="muted">' + escapeHtml(String(def.desc || '')) + '</div>' : '') +
+          (body || '') +
+          '<div id="hnPlayError" class="form-error" role="alert"></div>' +
+          '<div class="row ll-modal-actions" style="justify-content:space-between">' +
+          '<button class="ghost" id="hnModalCancel">キャンセル</button>' +
+          '<button class="primary" id="hnModalOk" ' +
+          (canConfirm ? '' : 'disabled') +
+          '>使用</button>' +
+          '</div>' +
+          '</div>' +
+          '</div>' +
+          '</div>';
+      }
+    } catch (eMod) {
+      modalHtml = '';
+    }
 
     // Pending group actions: override main hand UI.
     if (pending && pending.type === 'info') {
@@ -4308,6 +4462,7 @@
         escapeHtml(isMyTurn ? 'TURN' : 'WAIT') +
         '</div>' +
         '</div>' +
+        (modalHtml || '') +
         (contentHtml || '') +
       '</div>'
     );
@@ -4324,6 +4479,13 @@
     }
 
     var playerId = '';
+        var isTableGmDevice = false;
+        try {
+          var qGm0 = parseQuery();
+          isTableGmDevice = !!(qGm0 && String(qGm0.gmdev || '') === '1');
+        } catch (eGm0) {
+          isTableGmDevice = false;
+        }
     try {
       var q1 = parseQuery();
       playerId = q1 && q1.player ? String(q1.player) : '';
@@ -4346,8 +4508,23 @@
       hnInfoSelectedIndex: -1,
       hnRumorSelectedIndex: -1,
       inFlight: false,
-      autoKeyDone: {}
+      autoKeyDone: {},
+      hnAction: null
     };
+
+    function canOperateThisDevice() {
+      // Table device only operates test players.
+      if (isTableGmDevice && !hnIsTestPlayerId(playerId)) return false;
+      return true;
+    }
+
+    function clearActionModal() {
+      try {
+        ui.hnAction = null;
+      } catch (e) {
+        // ignore
+      }
+    }
 
     function chooseTargetPid(room, actorPid, allowSelf) {
       var players = (room && room.players) || {};
@@ -4385,7 +4562,7 @@
 
     function renderNow(room) {
       lastRoom = room;
-      renderHanninPlayer(viewEl, { roomId: roomId, room: room, playerId: playerId, lobbyId: lobbyId, isHost: isHost, ui: ui });
+      renderHanninPlayer(viewEl, { roomId: roomId, room: room, playerId: playerId, lobbyId: lobbyId, isHost: isHost, ui: ui, isTableGmDevice: isTableGmDevice });
 
       // Bind handlers on the freshly rendered DOM (important: renderNow can be called from events).
       var cards = document.querySelectorAll('.hnPCard');
@@ -4504,6 +4681,143 @@
         }
       }
 
+      // Modal bindings
+      var bg = document.getElementById('hnModalBg');
+      if (bg && !bg.__hn_bound) {
+        bg.__hn_bound = true;
+        bg.addEventListener('click', function () {
+          clearActionModal();
+          renderNow(lastRoom);
+        });
+      }
+
+      var cancelBtn = document.getElementById('hnModalCancel');
+      if (cancelBtn && !cancelBtn.__hn_bound) {
+        cancelBtn.__hn_bound = true;
+        cancelBtn.addEventListener('click', function () {
+          clearActionModal();
+          renderNow(lastRoom);
+        });
+      }
+
+      var pickTargets = document.querySelectorAll('.hnPickTarget');
+      for (var pt = 0; pt < pickTargets.length; pt++) {
+        var b = pickTargets[pt];
+        if (!b || b.__hn_bound) continue;
+        b.__hn_bound = true;
+        b.addEventListener('click', function (ev) {
+          var el = ev && ev.currentTarget ? ev.currentTarget : null;
+          if (!el) return;
+          var tid = String(el.getAttribute('data-target') || '');
+          if (!ui.hnAction) return;
+          ui.hnAction.targetPid = tid;
+          // Advance step for multi-step actions.
+          if (ui.hnAction.cardId === 'dog') ui.hnAction.step = 'pick';
+          else if (ui.hnAction.cardId === 'deal') ui.hnAction.step = 'give';
+          renderNow(lastRoom);
+        });
+      }
+
+      var pickHidden = document.querySelectorAll('.hnPickHidden');
+      for (var ph = 0; ph < pickHidden.length; ph++) {
+        var h = pickHidden[ph];
+        if (!h || h.__hn_bound) continue;
+        h.__hn_bound = true;
+        h.addEventListener('click', function (ev) {
+          var el = ev && ev.currentTarget ? ev.currentTarget : null;
+          if (!el) return;
+          var idx = parseIntSafe(el.getAttribute('data-hidden'), -1);
+          if (!ui.hnAction) return;
+          if (ui.hnAction.cardId === 'dog') ui.hnAction.targetIndex = idx;
+          else if (ui.hnAction.cardId === 'deal') ui.hnAction.takeIndex = idx;
+          renderNow(lastRoom);
+        });
+      }
+
+      var pickGive = document.querySelectorAll('.hnPickGive');
+      for (var pg = 0; pg < pickGive.length; pg++) {
+        var g = pickGive[pg];
+        if (!g || g.__hn_bound) continue;
+        g.__hn_bound = true;
+        g.addEventListener('click', function (ev) {
+          var el = ev && ev.currentTarget ? ev.currentTarget : null;
+          if (!el) return;
+          var idx = parseIntSafe(el.getAttribute('data-give'), -1);
+          if (!ui.hnAction) return;
+          ui.hnAction.giveIndex = idx;
+          // Next step
+          ui.hnAction.step = 'take';
+          renderNow(lastRoom);
+        });
+      }
+
+      var okBtn = document.getElementById('hnModalOk');
+      if (okBtn && !okBtn.__hn_bound) {
+        okBtn.__hn_bound = true;
+        okBtn.addEventListener('click', function () {
+          if (!ui.hnAction || ui.inFlight) return;
+          if (!canOperateThisDevice()) return;
+          if (!lastRoom || !lastRoom.state) return;
+
+          var st = lastRoom.state;
+          if (String((lastRoom && lastRoom.phase) || '') !== 'playing') return;
+          if (st.pending && st.pending.type) return;
+
+          var turnPid = st.turn && st.turn.playerId ? String(st.turn.playerId) : '';
+          if (!turnPid || String(turnPid) !== String(playerId)) return;
+
+          var idx = parseIntSafe(ui.hnAction.cardIndex, -1);
+          var myHand = playerId && st.hands && Array.isArray(st.hands[playerId]) ? st.hands[playerId] : [];
+          if (idx < 0 || idx >= myHand.length) return;
+
+          var cardId = String(myHand[idx] || '');
+          var action = {};
+
+          if (cardId === 'detective') {
+            var t = String(ui.hnAction.targetPid || '');
+            if (!t) return;
+            action = { targetPid: t };
+          } else if (cardId === 'witness') {
+            var t4 = String(ui.hnAction.targetPid || '');
+            if (!t4) return;
+            action = { targetPid: t4 };
+          } else if (cardId === 'dog') {
+            var t2 = String(ui.hnAction.targetPid || '');
+            var pick = parseIntSafe(ui.hnAction.targetIndex, -1);
+            if (!t2 || pick < 0) return;
+            action = { targetPid: t2, targetIndex: pick };
+          } else if (cardId === 'deal') {
+            var t3 = String(ui.hnAction.targetPid || '');
+            var give = parseIntSafe(ui.hnAction.giveIndex, -1);
+            var take = parseIntSafe(ui.hnAction.takeIndex, -1);
+            if (!t3 || give < 0 || take < 0) return;
+
+            // Convert giveIndex (absolute index in current hand) to relative index after discarding deal card.
+            var relGive = give;
+            if (give > idx) relGive = give - 1;
+            action = { targetPid: t3, giveIndex: relGive, takeIndex: take };
+          }
+
+          ui.inFlight = true;
+          okBtn.disabled = true;
+          playHanninCard(roomId, playerId, idx, action)
+            .then(function () {
+              clearActionModal();
+            })
+            .catch(function (e) {
+              setInlineError('hnPlayError', (e && e.message) || '失敗');
+            })
+            .finally(function () {
+              ui.inFlight = false;
+              try {
+                okBtn.disabled = false;
+              } catch (e2) {
+                // ignore
+              }
+            });
+        });
+      }
+
       var rumorPicks = document.querySelectorAll('.hnRumorPick');
       for (var rP = 0; rP < rumorPicks.length; rP++) {
         var rpEl = rumorPicks[rP];
@@ -4592,6 +4906,7 @@
     function tryPlayCardByLongPress(cardIndex) {
       if (ui.inFlight) return;
       if (!lastRoom || !lastRoom.state) return;
+      if (!canOperateThisDevice()) return;
 
       var st = lastRoom.state;
       var phase = String((lastRoom && lastRoom.phase) || '');
@@ -4608,48 +4923,17 @@
       if (idx < 0 || idx >= myHand.length) return;
 
       var cardId = String(myHand[idx] || '');
+
+      // Cards with choices: open modal instead of prompt.
+      if (cardId === 'detective' || cardId === 'dog' || cardId === 'deal' || cardId === 'witness') {
+        ui.hnAction = { type: 'play', cardIndex: idx, cardId: cardId, step: 'target', targetPid: '', targetIndex: -1, giveIndex: -1, takeIndex: -1 };
+        renderNow(lastRoom);
+        return;
+      }
+
       var action = {};
 
-      if (cardId === 'detective') {
-        var t = chooseTargetPid(lastRoom, playerId, false);
-        if (!t) return;
-        action = { targetPid: t };
-      } else if (cardId === 'dog') {
-        var t2 = chooseTargetPid(lastRoom, playerId, false);
-        if (!t2) return;
-        var pick = chooseHiddenCardIndex(lastRoom, t2);
-        if (pick < 0) return;
-        action = { targetPid: t2, targetIndex: pick };
-      } else if (cardId === 'deal') {
-        var t3 = chooseTargetPid(lastRoom, playerId, false);
-        if (!t3) return;
-
-        // After discarding "deal" itself, choose one from remaining hand.
-        var h0 = myHand.slice();
-        if (idx >= 0 && idx < h0.length) h0.splice(idx, 1);
-        if (!h0.length) return;
-
-        var msg0 =
-          '渡すカードを選んでください:\n' +
-          h0
-            .map(function (id, ix) {
-              var def = HANNIN_CARD_DEFS[String(id || '')] || { name: String(id || '-') };
-              return String(ix + 1) + '. ' + String(def.name || id);
-            })
-            .join('\n');
-        var s0 = prompt(msg0, '1');
-        var n0 = parseIntSafe(s0, 0);
-        var give = n0 >= 1 && n0 <= h0.length ? n0 - 1 : -1;
-        if (give < 0) return;
-
-        var take = chooseHiddenCardIndex(lastRoom, t3);
-        if (take < 0) return;
-        action = { targetPid: t3, giveIndex: give, takeIndex: take };
-      } else if (cardId === 'witness') {
-        var t4 = chooseTargetPid(lastRoom, playerId, false);
-        if (!t4) return;
-        action = { targetPid: t4 };
-      }
+      // other cards have no extra choices
 
       ui.inFlight = true;
       playHanninCard(roomId, playerId, idx, action)
@@ -4664,6 +4948,7 @@
     function tryConfirmInfoByLongPress() {
       if (ui.inFlight) return;
       if (!lastRoom || !lastRoom.state) return;
+      if (!canOperateThisDevice()) return;
       var st = lastRoom.state;
       if (!st.pending || st.pending.type !== 'info') return;
       if (st.pending.choices && st.pending.choices[String(playerId)] !== undefined) return;
@@ -4683,6 +4968,7 @@
     function tryConfirmRumorByLongPress() {
       if (ui.inFlight) return;
       if (!lastRoom || !lastRoom.state) return;
+      if (!canOperateThisDevice()) return;
       var st = lastRoom.state;
       if (!st.pending || st.pending.type !== 'rumor') return;
       if (st.pending.choices && st.pending.choices[String(playerId)] !== undefined) return;
@@ -4710,8 +4996,8 @@
       var pending = st.pending || null;
       if (!pending || !pending.type) return;
 
-      // Only the real player client drives automation.
-      if (hnIsTestPlayerId(playerId)) return;
+      // Only the table device drives automation.
+      if (!isTableGmDevice) return;
 
       var type = String(pending.type || '');
       if (type !== 'info' && type !== 'rumor') return;
@@ -4748,7 +5034,7 @@
             }
 
             if (type === 'info') {
-              var h = hands && Array.isArray(hands[targetPid]) ? hands[targetPid] : [];
+              var h = lastRoom && lastRoom.state && lastRoom.state.hands && Array.isArray(lastRoom.state.hands[targetPid]) ? lastRoom.state.hands[targetPid] : [];
               if (!h || !h.length) return;
               var pick = randomInt(h.length);
               submitHanninInfoChoice(roomId, targetPid, pick).catch(function () {
@@ -4758,8 +5044,11 @@
             }
 
             if (type === 'rumor') {
-              var right = hnRightPid(order, targetPid);
-              var rh = right && hands && Array.isArray(hands[right]) ? hands[right] : [];
+              var st3 = lastRoom && lastRoom.state ? lastRoom.state : null;
+              var order3 = st3 && Array.isArray(st3.order) ? st3.order.slice() : order;
+              var hands3 = st3 && st3.hands ? st3.hands : hands;
+              var right = hnRightPid(order3, targetPid);
+              var rh = right && hands3 && Array.isArray(hands3[right]) ? hands3[right] : [];
               var count = rh && Array.isArray(rh) ? rh.length : 0;
               var pick2 = count > 0 ? randomInt(count) : -1;
               submitHanninRumorChoice(roomId, targetPid, pick2).catch(function () {
@@ -4771,6 +5060,90 @@
       }
     }
 
+    function maybeAutoPlayTurnForTestPlayer(room) {
+      try {
+        if (!isDevDebugSite || !isDevDebugSite()) return;
+      } catch (e0) {
+        return;
+      }
+      if (!isTableGmDevice) return;
+      if (!room || !room.state) return;
+      if (String(room.phase || '') !== 'playing') return;
+      var st = room.state;
+      if (st.pending && st.pending.type) return;
+      if (st.result && st.result.decidedAt) return;
+
+      var turnPid = st.turn && st.turn.playerId ? String(st.turn.playerId) : '';
+      if (!turnPid || !hnIsTestPlayerId(turnPid)) return;
+
+      var hand = st.hands && Array.isArray(st.hands[turnPid]) ? st.hands[turnPid].slice() : [];
+      if (!hand.length) return;
+
+      var order = Array.isArray(st.order) ? st.order.slice() : [];
+
+      function eligibleTargets() {
+        var out = [];
+        for (var i = 0; i < order.length; i++) {
+          var pid = String(order[i] || '');
+          if (!pid) continue;
+          if (pid === turnPid) continue;
+          out.push(pid);
+        }
+        return out;
+      }
+
+      // Choose a playable card index.
+      var indices = [];
+      for (var i = 0; i < hand.length; i++) indices.push(i);
+      indices = hnShuffle(indices);
+
+      var pickIdx = -1;
+      for (var k = 0; k < indices.length; k++) {
+        var ci = indices[k];
+        var id = String(hand[ci] || '');
+        if (!st.started && id !== 'first') continue;
+        if (id === 'culprit' && hand.length !== 1) continue;
+        pickIdx = ci;
+        break;
+      }
+      if (pickIdx < 0) return;
+
+      var cardId = String(hand[pickIdx] || '');
+      var action = {};
+      var targets = eligibleTargets();
+
+      if (cardId === 'detective' || cardId === 'witness') {
+        if (!targets.length) return;
+        action = { targetPid: targets[randomInt(targets.length)] };
+      } else if (cardId === 'dog') {
+        if (!targets.length) return;
+        var t2 = targets[randomInt(targets.length)];
+        var th = st.hands && Array.isArray(st.hands[t2]) ? st.hands[t2] : [];
+        if (!th.length) return;
+        action = { targetPid: t2, targetIndex: randomInt(th.length) };
+      } else if (cardId === 'deal') {
+        if (!targets.length) return;
+        var t3 = targets[randomInt(targets.length)];
+        var th3 = st.hands && Array.isArray(st.hands[t3]) ? st.hands[t3] : [];
+        if (!th3.length) return;
+        // giveIndex is after discarding deal itself: choose from remaining hand
+        var remainingCount = Math.max(0, hand.length - 1);
+        if (!remainingCount) return;
+        action = { targetPid: t3, giveIndex: randomInt(remainingCount), takeIndex: randomInt(th3.length) };
+      }
+
+      var key = 'turn|' + String(st.lastPlay && st.lastPlay.at ? st.lastPlay.at : 0) + '|' + turnPid;
+      if (ui.autoKeyDone && ui.autoKeyDone[key]) return;
+      if (!ui.autoKeyDone) ui.autoKeyDone = {};
+      ui.autoKeyDone[key] = true;
+
+      setTimeout(function () {
+        playHanninCard(roomId, turnPid, pickIdx, action).catch(function () {
+          // ignore
+        });
+      }, 200 + randomInt(500));
+    }
+
     firebaseReady()
       .then(function () {
         return subscribeHanninRoom(roomId, function (room) {
@@ -4780,6 +5153,7 @@
           }
           renderNow(room);
           maybeAutoAdvancePendingForTests(room);
+          maybeAutoPlayTurnForTestPlayer(room);
         });
       })
       .then(function (u) {
