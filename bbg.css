@@ -72,6 +72,9 @@ body.ll-player-screen .app{padding-top:10px}
 /* Allow overlays (used by codenames turn frame) */
 #view{position:relative}
 
+/* Hannin: emphasize when you are a forced target (e.g., deal choice) */
+#view.hn-attention{outline:3px solid var(--text);outline-offset:4px}
+
 /* QR should remain scannable on dark UI */
 #qr,#qrImg{background:var(--text);padding:8px;border-radius:12px;display:inline-block}
 #qrImg{max-width:240px;height:auto}

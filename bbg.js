@@ -4207,6 +4207,7 @@
           cTitle = String(c.title || '注意');
           cBody = '<div class="muted center">' + escapeHtml(String(c.message || '')) + '</div>';
           showOk = false;
+          cancelLabel = String(c.cancelLabel || 'OK');
         }
 
         confirmHtml =
@@ -4317,6 +4318,20 @@
           '</div>' +
           '</div>' +
           '</div>';
+      } else if (pmsg && String(pmsg.type || '') === 'dog_not_culprit') {
+        privateHtml =
+          '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
+          '<div class="ll-overlay-backdrop" id="hnPrivateBg"></div>' +
+          '<div class="ll-overlay-panel">' +
+          '<div class="stack">' +
+          '<div class="big ll-modal-title">いぬ</div>' +
+          '<div class="muted center">犯人ではありません</div>' +
+          '<div class="row ll-modal-actions" style="justify-content:center">' +
+          '<button class="primary" id="hnPrivateOk">OK</button>' +
+          '</div>' +
+          '</div>' +
+          '</div>' +
+          '</div>';
       }
     } catch (ePriv) {
       privateHtml = '';
@@ -4418,14 +4433,9 @@
             canConfirm = parseIntSafe(act.targetIndex, -1) >= 0;
           }
         } else if (cardId === 'deal') {
-          if (step !== 'target' && step !== 'give') step = 'target';
-          if (step === 'target') {
-            body = '<div class="muted">交換する相手</div><div class="stack">' + targetButtons(act.targetPid) + '</div>';
-            canConfirm = false;
-          } else if (step === 'give') {
-            body = '<div class="muted">渡すカード（自分の手札）</div><div class="stack">' + giveButtons(cardIndex, act.giveIndex) + '</div>';
-            canConfirm = !!(act.targetPid) && parseIntSafe(act.giveIndex, -1) >= 0;
-          }
+          if (step !== 'target') step = 'target';
+          body = '<div class="muted">交換する相手</div><div class="stack">' + targetButtons(act.targetPid) + '</div>';
+          canConfirm = !!(act.targetPid);
         }
 
         modalHtml =
@@ -4540,26 +4550,42 @@
         dealActor = '';
       }
 
-      if (playerId && String(playerId) === String(dealTarget)) {
-        if (!myHand.length) {
+      var isDealActor = !!(playerId && String(playerId) === String(dealActor));
+      var isDealTarget = !!(playerId && String(playerId) === String(dealTarget));
+      var alreadyChosenDeal = false;
+      try {
+        alreadyChosenDeal = !!(pending && pending.choices && pending.choices[String(playerId)] !== undefined);
+      } catch (eDC) {
+        alreadyChosenDeal = false;
+      }
+
+      if (isDealActor || isDealTarget) {
+        if (alreadyChosenDeal) {
+          contentHtml = '<div class="muted center">取引：決定済み（相手を待っています）</div>';
+        } else if (!myHand.length) {
           contentHtml = '<div class="muted center">取引：手札がありません</div>';
         } else {
-          var outDeal = '';
-          for (var di = 0; di < myHand.length; di++) {
-            outDeal +=
+          var outDeal2 = '';
+          for (var di2 = 0; di2 < myHand.length; di2++) {
+            outDeal2 +=
               '<div class="hn-rumor-card hnDealPick" data-hn-deal-idx="' +
-              escapeHtml(String(di)) +
+              escapeHtml(String(di2)) +
               '">' +
-              hnCardImgHtml(String(myHand[di] || '')) +
+              hnCardImgHtml(String(myHand[di2] || '')) +
               '</div>';
           }
           contentHtml =
             '<div class="stack" style="gap:12px">' +
             '<div class="muted center">取引：' +
             escapeHtml(hnPlayerName(room, dealActor)) +
-            ' と交換するカードを選ぶ</div>' +
+            ' ⇄ ' +
+            escapeHtml(hnPlayerName(room, dealTarget)) +
+            '</div>' +
+            '<div class="muted center">' +
+            escapeHtml(isDealActor ? '渡すカード（自分の手札）を選ぶ' : '交換に出すカード（自分の手札）を選ぶ') +
+            '</div>' +
             '<div class="hn-rumor-row">' +
-            outDeal +
+            outDeal2 +
             '</div>' +
             '<div class="muted center hn-hint">タップで選択（決定/キャンセル）</div>' +
             '</div>';
@@ -4567,6 +4593,8 @@
       } else {
         contentHtml =
           '<div class="muted center">取引：' +
+          escapeHtml(hnPlayerName(room, dealActor)) +
+          ' と ' +
           escapeHtml(hnPlayerName(room, dealTarget)) +
           ' が選択中です</div>';
       }
@@ -4641,6 +4669,20 @@
       if (viewEl && viewEl.classList) {
         viewEl.classList.toggle('ll-turn-actor', !!isMyTurn);
         viewEl.classList.toggle('ll-turn-waiting', !isMyTurn);
+
+        // Attention frame when you must respond (e.g., you are the deal target).
+        var needAttention = false;
+        try {
+          if (pending && pending.type === 'deal') {
+            var at = String(pending.targetPid || '');
+            var aa = String(pending.actorId || '');
+            var notDone = !(pending.choices && pending.choices[String(playerId)] !== undefined);
+            needAttention = !!(playerId && String(playerId) === at && String(aa) !== String(playerId) && notDone);
+          }
+        } catch (eAtt) {
+          needAttention = false;
+        }
+        viewEl.classList.toggle('hn-attention', !!needAttention);
 
         // Result background (win=red, lose=blue)
         var res = (st && st.result) || {};
@@ -4762,8 +4804,57 @@
       autoKeyDone: {},
       hnAction: null,
       hnReveal: null,
-      hnConfirm: null
+      hnConfirm: null,
+      hnDealNoticeKey: '',
+      lobbyReturnWatching: false,
+      lobbyUnsub: null
     };
+
+    function redirectToLobby() {
+      if (!lobbyId) return;
+      var q = {};
+      var v = getCacheBusterParam();
+      if (v) q.v = v;
+      q.lobby = lobbyId;
+      q.screen = isHost ? 'lobby_host' : 'lobby_player';
+      try {
+        var qx = parseQuery();
+        if (qx && String(qx.gmdev || '') === '1') q.gmdev = '1';
+      } catch (e) {
+        // ignore
+      }
+      setQuery(q);
+      route();
+    }
+
+    function ensureLobbyReturnWatcher() {
+      if (!lobbyId) return;
+      if (ui.lobbyReturnWatching) return;
+      ui.lobbyReturnWatching = true;
+      firebaseReady()
+        .then(function () {
+          return subscribeLobby(lobbyId, function (lobby) {
+            var cg = (lobby && lobby.currentGame) || null;
+            var kind = cg && cg.kind ? String(cg.kind) : '';
+            var rid = cg && cg.roomId ? String(cg.roomId) : '';
+            if (!cg || kind !== 'hannin' || rid !== String(roomId || '')) {
+              try {
+                if (ui.lobbyUnsub) ui.lobbyUnsub();
+              } catch (e) {
+                // ignore
+              }
+              ui.lobbyUnsub = null;
+              redirectToLobby();
+            }
+          });
+        })
+        .then(function (u2) {
+          ui.lobbyUnsub = u2;
+        })
+        .catch(function () {
+          // ignore
+        });
+    }
 
     function hnFindNewCardIndex(prevHand, curHand) {
       var prev = Array.isArray(prevHand) ? prevHand : [];
@@ -4869,6 +4960,13 @@
     function renderNow(room) {
       lastRoom = room;
 
+      // If we came from a lobby, keep a watcher so returning to lobby pulls players back too.
+      try {
+        if (lobbyId) ensureLobbyReturnWatcher();
+      } catch (eLW) {
+        // ignore
+      }
+
       // Bring newly received cards (rumor/info/deal results) to the front.
       try {
         var st0 = room && room.state ? room.state : null;
@@ -4879,6 +4977,32 @@
         }
         ui.hnPrevHand = Array.isArray(h0) ? h0.slice() : [];
       } catch (eFront) {
+        // ignore
+      }
+
+      // Target notice: when you are forced to act (deal), show a one-time modal.
+      try {
+        var stN = room && room.state ? room.state : null;
+        var pN = stN && stN.pending ? stN.pending : null;
+        if (pN && pN.type === 'deal') {
+          var at = String(pN.targetPid || '');
+          var aa = String(pN.actorId || '');
+          var notDone = !(pN.choices && pN.choices[String(playerId)] !== undefined);
+          var key = 'deal|' + String(pN.createdAt || 0) + '|' + String(at || '');
+          if (playerId && String(playerId) === at && String(aa) !== String(playerId) && notDone && ui.hnDealNoticeKey !== key) {
+            ui.hnDealNoticeKey = key;
+            // Only set if no other modal is open.
+            if (!ui.hnAction && !ui.hnConfirm && !(stN && stN.private && stN.private[String(playerId)])) {
+              ui.hnConfirm = {
+                type: 'notice',
+                title: '取引',
+                message: hnPlayerName(room, aa) + ' が取引を使用しました。交換に出すカードを選んでください。',
+                cancelLabel: 'OK'
+              };
+            }
+          }
+        }
+      } catch (eTN) {
         // ignore
       }
 
@@ -5179,7 +5303,6 @@
           ui.hnAction.targetPid = tid;
           // Advance step for multi-step actions.
           if (ui.hnAction.cardId === 'dog') ui.hnAction.step = 'pick';
-          else if (ui.hnAction.cardId === 'deal') ui.hnAction.step = 'give';
           renderNow(lastRoom);
         });
       }
@@ -5251,13 +5374,8 @@
             action = { targetPid: t2, targetIndex: pick };
           } else if (cardId === 'deal') {
             var t3 = String(ui.hnAction.targetPid || '');
-            var give = parseIntSafe(ui.hnAction.giveIndex, -1);
-            if (!t3 || give < 0) return;
-
-            // Convert giveIndex (absolute index in current hand) to relative index after discarding deal card.
-            var relGive = give;
-            if (give > idx) relGive = give - 1;
-            action = { targetPid: t3, giveIndex: relGive };
+            if (!t3) return;
+            action = { targetPid: t3 };
           }
 
           ui.inFlight = true;
@@ -5417,7 +5535,11 @@
           try {
             var st = lastRoom && lastRoom.state ? lastRoom.state : null;
             if (!st || !st.pending || st.pending.type !== 'deal') return;
-            if (String(st.pending.targetPid || '') !== String(playerId || '')) return;
+            var canChoose =
+              String(st.pending.targetPid || '') === String(playerId || '') ||
+              String(st.pending.actorId || '') === String(playerId || '');
+            if (!canChoose) return;
+            if (st.pending.choices && st.pending.choices[String(playerId)] !== undefined) return;
           } catch (eD) {
             return;
           }
@@ -5623,6 +5745,11 @@
 
     window.addEventListener('popstate', function () {
       if (unsub) unsub();
+      try {
+        if (ui && ui.lobbyUnsub) ui.lobbyUnsub();
+      } catch (e) {
+        // ignore
+      }
     });
   }
 
@@ -5842,6 +5969,14 @@
           st.log = st.log.concat(['一般人側の勝利']);
           return assign({}, room, { state: st });
         }
+
+        // Not culprit: show a private modal to the actor.
+        try {
+          if (!st.private || typeof st.private !== 'object') st.private = {};
+          st.private[pid] = { type: 'dog_not_culprit', createdAt: serverNowMs(), targetPid: String(tPid2 || '') };
+        } catch (eDogN) {
+          // ignore
+        }
         advanceTurn();
         return assign({}, room, { state: st });
       }
@@ -5878,28 +6013,21 @@
 
       if (cardId === 'deal') {
         var tPid3 = String(a.targetPid || '');
-        var giveIdx = parseIntSafe(a.giveIndex, -1);
         if (!tPid3 || tPid3 === pid) {
           advanceTurn();
           return assign({}, room, { state: st });
         }
-        var myHand = hands && Array.isArray(hands[pid]) ? hands[pid].slice() : [];
-        if (giveIdx < 0 || giveIdx >= myHand.length) {
-          advanceTurn();
-          return assign({}, room, { state: st });
-        }
 
-        // Pending: target chooses which of their own cards to exchange.
+        // Pending: actor and target choose simultaneously.
         st.pending = {
           type: 'deal',
           actorId: pid,
           targetPid: tPid3,
           createdAt: serverNowMs(),
-          giveIndex: giveIdx,
-          giveCardId: String(myHand[giveIdx] || ''),
+          choices: {},
           resumeFrom: pid
         };
-        st.log = st.log.concat([nm + ' は ' + hnPlayerName(room, tPid3) + ' と取引：相手が出すカードを選択中']);
+        st.log = st.log.concat([nm + ' は ' + hnPlayerName(room, tPid3) + ' と取引：双方が出すカードを選択中']);
         return assign({}, room, { state: st });
       }
 
@@ -6131,53 +6259,61 @@
       if (!st.pending || st.pending.type !== 'deal') return room;
       if (st.result && st.result.decidedAt) return room;
 
-      var targetPid = String(playerId || '');
+      var pid = String(playerId || '');
       var pending = st.pending || {};
-      if (!targetPid || String(pending.targetPid || '') !== String(targetPid)) return room;
-
       var actorPid = String(pending.actorId || '');
-      if (!actorPid) return room;
+      var targetPid = String(pending.targetPid || '');
+      if (!pid || (!actorPid && !targetPid)) return room;
+      var isActor = String(pid) === String(actorPid);
+      var isTarget = String(pid) === String(targetPid);
+      if (!isActor && !isTarget) return room;
+      if (!actorPid || !targetPid) return room;
 
       var hands = assign({}, st.hands || {});
       var aHand = hands && Array.isArray(hands[actorPid]) ? hands[actorPid].slice() : [];
       var tHand = hands && Array.isArray(hands[targetPid]) ? hands[targetPid].slice() : [];
 
-      var giveIdx = parseIntSafe(pending.giveIndex, -1);
-      if (giveIdx < 0 || giveIdx >= aHand.length) {
-        // Actor hand changed unexpectedly; cancel pending.
+      // If either side has no hand (unexpected), cancel with no exchange.
+      if (!aHand.length || !tHand.length) {
         st.pending = null;
-        var rf = '';
+        var rf0 = '';
         try {
-          rf = String(pending && (pending.resumeFrom || pending.actorId) ? (pending.resumeFrom || pending.actorId) : '');
-        } catch (eR3) {
-          rf = '';
+          rf0 = String(pending && (pending.resumeFrom || pending.actorId) ? (pending.resumeFrom || pending.actorId) : '');
+        } catch (eR0) {
+          rf0 = '';
         }
-        if (rf) st.turn = hnNextTurnSkipEmpty(Array.isArray(st.order) ? st.order.slice() : [], rf, hands);
-        return assign({}, room, { state: st });
-      }
-
-      var takeIdx = parseIntSafe(takeIndex, -1);
-      if (!tHand.length) {
-        // Nothing to take.
-        st.pending = null;
-        var rf2 = '';
-        try {
-          rf2 = String(pending && (pending.resumeFrom || pending.actorId) ? (pending.resumeFrom || pending.actorId) : '');
-        } catch (eR4) {
-          rf2 = '';
-        }
-        if (rf2) st.turn = hnNextTurnSkipEmpty(Array.isArray(st.order) ? st.order.slice() : [], rf2, hands);
+        if (rf0) st.turn = hnNextTurnSkipEmpty(Array.isArray(st.order) ? st.order.slice() : [], rf0, hands);
         if (!Array.isArray(st.log)) st.log = [];
-        st.log = st.log.concat(['取引：相手の手札がなく、交換なし']);
+        st.log = st.log.concat(['取引：手札がなく、交換なし']);
         return assign({}, room, { state: st });
       }
-      if (takeIdx < 0 || takeIdx >= tHand.length) return room;
 
-      var giveCard = String(aHand[giveIdx] || '');
-      var takeCard = String(tHand[takeIdx] || '');
+      var pickIdx = parseIntSafe(takeIndex, -1);
+      var myHand = isActor ? aHand : tHand;
+      if (pickIdx < 0 || pickIdx >= myHand.length) return room;
 
-      aHand.splice(giveIdx, 1);
-      tHand.splice(takeIdx, 1);
+      if (!pending.choices || typeof pending.choices !== 'object') pending.choices = {};
+      if (pending.choices[pid] !== undefined) return room;
+      pending.choices[pid] = pickIdx;
+      st.pending = pending;
+
+      var aChosen = pending.choices[String(actorPid)] !== undefined;
+      var tChosen = pending.choices[String(targetPid)] !== undefined;
+      if (!aChosen || !tChosen) {
+        return assign({}, room, { state: st });
+      }
+
+      // Resolve exchange.
+      var aIdx = parseIntSafe(pending.choices[String(actorPid)], -1);
+      var tIdx = parseIntSafe(pending.choices[String(targetPid)], -1);
+      if (aIdx < 0 || aIdx >= aHand.length) return room;
+      if (tIdx < 0 || tIdx >= tHand.length) return room;
+
+      var giveCard = String(aHand[aIdx] || '');
+      var takeCard = String(tHand[tIdx] || '');
+
+      aHand.splice(aIdx, 1);
+      tHand.splice(tIdx, 1);
       aHand.push(takeCard);
       tHand.push(giveCard);
 
@@ -6186,18 +6322,16 @@
       st.hands = hands;
 
       st.pending = null;
-      var rf3 = '';
+      var rf = '';
       try {
-        rf3 = String(pending && (pending.resumeFrom || pending.actorId) ? (pending.resumeFrom || pending.actorId) : '');
+        rf = String(pending && (pending.resumeFrom || pending.actorId) ? (pending.resumeFrom || pending.actorId) : '');
       } catch (eR5) {
-        rf3 = '';
+        rf = '';
       }
-      if (rf3) st.turn = hnNextTurnSkipEmpty(Array.isArray(st.order) ? st.order.slice() : [], rf3, hands);
+      if (rf) st.turn = hnNextTurnSkipEmpty(Array.isArray(st.order) ? st.order.slice() : [], rf, hands);
 
       if (!Array.isArray(st.log)) st.log = [];
-      st.log = st.log.concat([
-        hnPlayerName(room, actorPid) + ' は ' + hnPlayerName(room, targetPid) + ' と手札を1枚交換'
-      ]);
+      st.log = st.log.concat([hnPlayerName(room, actorPid) + ' は ' + hnPlayerName(room, targetPid) + ' と手札を1枚交換']);
       return assign({}, room, { state: st });
     });
   }
@@ -14649,15 +14783,16 @@
 
       var dealBtn = '';
       if (pending && pending.type === 'deal') {
-        var isTarget = false;
+        var canChooseDeal = false;
         try {
-          isTarget = String(pending.targetPid || '') === String(pid);
+          var isParty = String(pending.targetPid || '') === String(pid) || String(pending.actorId || '') === String(pid);
+          var notChosen = !(pending.choices && pending.choices[String(pid)] !== undefined);
+          canChooseDeal = !!(isParty && notChosen && (isHost || (viewerId && String(viewerId) === String(pid))));
         } catch (eDT) {
-          isTarget = false;
+          canChooseDeal = false;
         }
 
-        if (isTarget) {
-          var canChooseDeal = (isHost || (viewerId && String(viewerId) === String(pid)));
+        if (canChooseDeal) {
           // Table device: only operate test players.
           try {
             var qxD = parseQuery();
@@ -14752,7 +14887,9 @@
         (pending && pending.type === 'deal'
           ? '<div class="card"><b>取引</b><div class="muted">' +
             escapeHtml(hnPlayerName(room, String(pending.targetPid || ''))) +
-            ' が交換に出すカードを選択中です。</div></div>'
+            ' と ' +
+            escapeHtml(hnPlayerName(room, String(pending.actorId || ''))) +
+            ' が出すカードを選択中です。</div></div>'
           : '') +
         (result && result.decidedAt
           ? (function () {
@@ -14996,24 +15133,7 @@
               } else if (cardId === 'deal') {
                 var t3 = chooseTargetPid(room, pid, false);
                 if (!t3) return;
-                // After discarding "deal" itself, choose one from remaining hand.
-                // We approximate by asking from current hand excluding the played index.
-                var h0 = room && room.state && room.state.hands && Array.isArray(room.state.hands[pid]) ? room.state.hands[pid].slice() : [];
-                if (idx >= 0 && idx < h0.length) h0.splice(idx, 1);
-                if (!h0.length) return;
-                var msg0 =
-                  '渡すカードを選んでください:\n' +
-                  h0
-                    .map(function (id, ix) {
-                      var def = HANNIN_CARD_DEFS[String(id || '')] || { name: String(id || '-') };
-                      return String(ix + 1) + '. ' + String(def.name || id);
-                    })
-                    .join('\n');
-                var s0 = prompt(msg0, '1');
-                var n0 = parseIntSafe(s0, 0);
-                var give = n0 >= 1 && n0 <= h0.length ? n0 - 1 : -1;
-                if (give < 0) return;
-                action = { targetPid: t3, giveIndex: give };
+                action = { targetPid: t3 };
               } else if (cardId === 'witness') {
                 var t4 = chooseTargetPid(room, pid, false);
                 if (!t4) return;
