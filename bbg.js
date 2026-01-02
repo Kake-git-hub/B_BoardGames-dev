@@ -4282,7 +4282,7 @@
         var cname = cpid ? hnPlayerName(room, cpid) : '';
         privateHtml =
           '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
-          '<div class="ll-overlay-backdrop" id="hnPrivateBg"></div>' +
+          '<div class="ll-overlay-backdrop"></div>' +
           '<div class="ll-overlay-panel">' +
           '<div class="stack">' +
           '<div class="big ll-modal-title">少年</div>' +
@@ -4299,7 +4299,7 @@
         // Back-compat: legacy message (now handled as notice).
         privateHtml =
           '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
-          '<div class="ll-overlay-backdrop" id="hnPrivateBg"></div>' +
+          '<div class="ll-overlay-backdrop"></div>' +
           '<div class="ll-overlay-panel">' +
           '<div class="stack">' +
           '<div class="big ll-modal-title">探偵</div>' +
@@ -4320,7 +4320,7 @@
         }
         privateHtml =
           '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
-          '<div class="ll-overlay-backdrop" id="hnPrivateBg"></div>' +
+          '<div class="ll-overlay-backdrop"></div>' +
           '<div class="ll-overlay-panel">' +
           '<div class="stack">' +
           '<div class="big ll-modal-title">目撃者</div>' +
@@ -4339,7 +4339,7 @@
         var isActorNotice = !!(playerId && actorPid2 && String(playerId) === String(actorPid2));
         privateHtml =
           '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
-          '<div class="ll-overlay-backdrop" ' + (isActorNotice ? 'id="hnPrivateBg"' : '') + '></div>' +
+          '<div class="ll-overlay-backdrop"></div>' +
           '<div class="ll-overlay-panel">' +
           '<div class="stack">' +
           '<div class="big ll-modal-title">' + escapeHtml(title2) + '</div>' +
@@ -4356,7 +4356,7 @@
         // Back-compat for older rooms.
         privateHtml =
           '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
-          '<div class="ll-overlay-backdrop" id="hnPrivateBg"></div>' +
+          '<div class="ll-overlay-backdrop"></div>' +
           '<div class="ll-overlay-panel">' +
           '<div class="stack">' +
           '<div class="big ll-modal-title">いぬ</div>' +
@@ -5278,17 +5278,7 @@
         });
       }
 
-      // Private modal bindings (boy)
-      var pbg = document.getElementById('hnPrivateBg');
-      if (pbg && !pbg.__hn_bound) {
-        pbg.__hn_bound = true;
-        pbg.addEventListener('click', function () {
-          ackHanninPrivate(roomId, playerId).catch(function () {
-            // ignore
-          });
-        });
-      }
-
+      // Private modal bindings
       var pok = document.getElementById('hnPrivateOk');
       if (pok && !pok.__hn_bound) {
         pok.__hn_bound = true;
@@ -6038,7 +6028,7 @@
           if (!st.private || typeof st.private !== 'object') st.private = {};
           var at1 = serverNowMs();
           var tnm1 = hnPlayerName(room, tPid);
-          var msg1 = '探偵が選んだ' + (tnm1 || '対象') + 'は犯人ではありませんでした';
+          var msg1 = '探偵が選んだ' + (tnm1 || '対象') + 'のカードは犯人ではありませんでした';
           for (var bi = 0; bi < order.length; bi++) {
             var pbi = String(order[bi] || '');
             if (!pbi) continue;
@@ -9921,10 +9911,10 @@
 
       function handBacksHtml(pid) {
         var cnt = handCount(pid);
-        var n = Math.min(4, Math.max(0, cnt));
         var out = '';
-        for (var i = 0; i < n; i++) {
-          out += '<div class="hn-sim-handback">' + hnCardBackImgHtml() + '</div>';
+        for (var i = 0; i < 4; i++) {
+          var empty = i >= cnt;
+          out += '<div class="hn-sim-handback' + (empty ? ' hn-sim-handback--empty' : '') + '">' + hnCardBackImgHtml() + '</div>';
         }
         return out;
       }
@@ -14689,7 +14679,6 @@
 
       centerHtml =
         '<div class="ll-table-center">' +
-        (lastPlayHtml || '') +
         '<div class="ll-table-pile">' +
         '<div class="muted">山札</div>' +
         '<div class="ll-table-pile-count"><b>' +
@@ -14699,6 +14688,7 @@
         deckStack +
         '</div>' +
         '</div>' +
+        (lastPlayHtml || '') +
         '<div class="ll-table-pile">' +
         '<div class="muted">墓地</div>' +
         '<div class="ll-table-pile-count"><b>' +
@@ -14959,7 +14949,7 @@
             // Place the icon closer to the acting player.
             var tx = lineEnd.x - lineStart.x;
             var ty = lineEnd.y - lineStart.y;
-            var tpos = 0.22;
+            var tpos = 0.14;
             var midX = lineStart.x + tx * tpos;
             var midY = lineStart.y + ty * tpos;
             iconEl.style.left = String(midX.toFixed(1)) + 'px';
