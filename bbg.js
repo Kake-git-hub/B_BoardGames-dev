@@ -4314,43 +4314,54 @@
         var frontIdxInfo = parseIntSafe(ui.hnHandFrontIndex, 0);
         if (frontIdxInfo < 0 || frontIdxInfo >= myHand.length) frontIdxInfo = 0;
 
-        var dispOrderInfo = [];
-        dispOrderInfo.push(frontIdxInfo);
-        for (var ii0 = 0; ii0 < myHand.length; ii0++) {
-          if (ii0 === frontIdxInfo) continue;
-          dispOrderInfo.push(ii0);
+        // After confirming which card to give, hide it from the hand UI.
+        var visibleIdxsInfo = [];
+        for (var vi0 = 0; vi0 < myHand.length; vi0++) {
+          if (confirmedInfoIdx === vi0) continue;
+          visibleIdxsInfo.push(vi0);
         }
 
-        var cardsHtmlInfo = '';
-        for (var pos0 = 0; pos0 < dispOrderInfo.length; pos0++) {
-          var idx0 = dispOrderInfo[pos0];
-          var cid0 = String(myHand[idx0] || '');
-          var isConfirmed0 = confirmedInfoIdx === idx0;
-          // Back cards shift upward.
-          var y0 = -(pos0 * 12);
-          cardsHtmlInfo +=
-            '<div class="hn-card hnPCard' +
-            (isConfirmed0 ? ' hn-card--selected' : '') +
-            '" data-hn-idx="' +
-            escapeHtml(String(idx0)) +
-            '" style="z-index:' +
-            escapeHtml(String(100 - pos0)) +
-            ';transform:translate(0,' +
-            escapeHtml(String(y0)) +
-            'px) scale(.90)">' +
-            hnCardImgHtml(cid0) +
+        if (!visibleIdxsInfo.length) {
+          contentHtml = '<div class="muted center">情報操作：決定済み（他の人を待っています）</div>';
+        } else {
+          if (visibleIdxsInfo.indexOf(frontIdxInfo) < 0) frontIdxInfo = visibleIdxsInfo[0];
+
+          var dispOrderInfo = [];
+          dispOrderInfo.push(frontIdxInfo);
+          for (var ii0 = 0; ii0 < visibleIdxsInfo.length; ii0++) {
+            var vIdx = visibleIdxsInfo[ii0];
+            if (vIdx === frontIdxInfo) continue;
+            dispOrderInfo.push(vIdx);
+          }
+
+          var cardsHtmlInfo = '';
+          for (var pos0 = 0; pos0 < dispOrderInfo.length; pos0++) {
+            var idx0 = dispOrderInfo[pos0];
+            var cid0 = String(myHand[idx0] || '');
+            // Back cards shift upward.
+            var y0 = -(pos0 * 12);
+            cardsHtmlInfo +=
+              '<div class="hn-card hnPCard" data-hn-idx="' +
+              escapeHtml(String(idx0)) +
+              '" style="z-index:' +
+              escapeHtml(String(100 - pos0)) +
+              ';transform:translate(0,' +
+              escapeHtml(String(y0)) +
+              'px) scale(.90)">' +
+              hnCardImgHtml(cid0) +
+              '</div>';
+          }
+
+          contentHtml =
+            '<div class="hn-hand-wrap">' +
+            '<div class="hn-hand" id="hnHand">' +
+            cardsHtmlInfo +
+            '</div>' +
+            '<div class="muted center hn-hint">情報操作：タップで選択 / 長押しで決定' +
+            (alreadyChosenInfo ? '（決定済み：選んだカードは非表示）' : '') +
+            '</div>' +
             '</div>';
         }
-
-        contentHtml =
-          '<div class="hn-hand-wrap">' +
-          '<div class="hn-hand" id="hnHand">' +
-          cardsHtmlInfo +
-          '</div>' +
-          '<div class="muted center hn-hint">情報操作：タップで選択 / 長押しで決定' +
-          (alreadyChosenInfo ? '（決定済み）' : '') +
-          '</div>' +
-          '</div>';
       }
     } else if (pending && pending.type === 'rumor') {
       var selRumor = parseIntSafe(ui.hnRumorSelectedIndex, -1);
@@ -4581,11 +4592,26 @@
             try {
               var st = lastRoom && lastRoom.state ? lastRoom.state : null;
               var pending = st && st.pending ? st.pending : null;
+
+              if (ui.hnAction) {
+                return;
+              }
+
               if (pending && pending.type === 'info') {
-                // Tap only sets local pre-selection (no blue frame shown).
+                // Once confirmed, ignore further taps.
+                if (pending.choices && pending.choices[String(playerId)] !== undefined) return;
+                // Tap sets local pre-selection.
                 ui.hnInfoSelectedIndex = idx;
+              } else if (pending && pending.type === 'rumor') {
+                // rumor tap is handled on hnRumorPick elements
+                return;
               } else {
-                ui.hnHandFrontIndex = idx;
+                // Normal: tap cycles the front card.
+                var h = st && st.hands && Array.isArray(st.hands[playerId]) ? st.hands[playerId] : [];
+                if (!h || !h.length) return;
+                var cur = parseIntSafe(ui.hnHandFrontIndex, 0);
+                if (cur < 0) cur = 0;
+                ui.hnHandFrontIndex = (cur + 1) % h.length;
               }
             } catch (e) {
               // ignore
