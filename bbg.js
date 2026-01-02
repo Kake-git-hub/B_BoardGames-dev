@@ -4067,14 +4067,30 @@
       st.order = order;
       st.hands = hands;
       st.graveyard = [];
-      st.turn = { index: order.indexOf(firstPid), playerId: firstPid };
-      st.started = false;
+      // Auto-start: discard "first" immediately and start from next player.
+      try {
+        var fp = String(firstPid || '');
+        if (fp && hands[fp] && Array.isArray(hands[fp])) {
+          var hh = hands[fp].slice();
+          var fi = hh.indexOf('first');
+          if (fi >= 0) {
+            hh.splice(fi, 1);
+            hands[fp] = hh;
+            st.graveyard = ['first'];
+          }
+        }
+      } catch (eF) {
+        // ignore
+      }
+
+      st.turn = hnNextTurn(order, firstPid);
+      st.started = true;
       st.pending = null;
       st.allies = {};
       st.lastPlay = { at: 0, playerId: '', cardId: '' };
       st.result = { side: '', winners: [], culpritId: '', decidedAt: 0, reason: '' };
       st.deckInfo = { playerCount: n, usedCount: deck.length };
-      st.log = ['配布しました。第一発見者の人が「第一発見者」を捨てて開始します。'];
+      st.log = ['配布しました。ゲーム開始'];
 
       return assign({}, room, { phase: 'playing', state: st });
     });
@@ -5012,21 +5028,8 @@
     }
 
     function maybeAutoAdvancePendingForTests(room) {
-      try {
-        if (!isDevDebugSite || !isDevDebugSite()) return;
-      } catch (e0) {
-        return;
-      }
-      if (!room || !room.state) return;
-      var st = room.state;
-      var pending = st.pending || null;
-      if (!pending || !pending.type) return;
-
-      // Only the table device drives automation.
-      if (!isTableGmDevice) return;
-
-      var type = String(pending.type || '');
-      if (type !== 'info' && type !== 'rumor') return;
+      // Disabled: test players are progressed from the table screen by clicking.
+      return;
 
       var order = Array.isArray(st.order) ? st.order.slice() : [];
       if (!order.length) return;
@@ -5087,87 +5090,8 @@
     }
 
     function maybeAutoPlayTurnForTestPlayer(room) {
-      try {
-        if (!isDevDebugSite || !isDevDebugSite()) return;
-      } catch (e0) {
-        return;
-      }
-      if (!isTableGmDevice) return;
-      if (!room || !room.state) return;
-      if (String(room.phase || '') !== 'playing') return;
-      var st = room.state;
-      if (st.pending && st.pending.type) return;
-      if (st.result && st.result.decidedAt) return;
-
-      var turnPid = st.turn && st.turn.playerId ? String(st.turn.playerId) : '';
-      if (!turnPid || !hnIsTestPlayerId(turnPid)) return;
-
-      var hand = st.hands && Array.isArray(st.hands[turnPid]) ? st.hands[turnPid].slice() : [];
-      if (!hand.length) return;
-
-      var order = Array.isArray(st.order) ? st.order.slice() : [];
-
-      function eligibleTargets() {
-        var out = [];
-        for (var i = 0; i < order.length; i++) {
-          var pid = String(order[i] || '');
-          if (!pid) continue;
-          if (pid === turnPid) continue;
-          out.push(pid);
-        }
-        return out;
-      }
-
-      // Choose a playable card index.
-      var indices = [];
-      for (var i = 0; i < hand.length; i++) indices.push(i);
-      indices = hnShuffle(indices);
-
-      var pickIdx = -1;
-      for (var k = 0; k < indices.length; k++) {
-        var ci = indices[k];
-        var id = String(hand[ci] || '');
-        if (!st.started && id !== 'first') continue;
-        if (id === 'culprit' && hand.length !== 1) continue;
-        pickIdx = ci;
-        break;
-      }
-      if (pickIdx < 0) return;
-
-      var cardId = String(hand[pickIdx] || '');
-      var action = {};
-      var targets = eligibleTargets();
-
-      if (cardId === 'detective' || cardId === 'witness') {
-        if (!targets.length) return;
-        action = { targetPid: targets[randomInt(targets.length)] };
-      } else if (cardId === 'dog') {
-        if (!targets.length) return;
-        var t2 = targets[randomInt(targets.length)];
-        var th = st.hands && Array.isArray(st.hands[t2]) ? st.hands[t2] : [];
-        if (!th.length) return;
-        action = { targetPid: t2, targetIndex: randomInt(th.length) };
-      } else if (cardId === 'deal') {
-        if (!targets.length) return;
-        var t3 = targets[randomInt(targets.length)];
-        var th3 = st.hands && Array.isArray(st.hands[t3]) ? st.hands[t3] : [];
-        if (!th3.length) return;
-        // giveIndex is after discarding deal itself: choose from remaining hand
-        var remainingCount = Math.max(0, hand.length - 1);
-        if (!remainingCount) return;
-        action = { targetPid: t3, giveIndex: randomInt(remainingCount), takeIndex: randomInt(th3.length) };
-      }
-
-      var key = 'turn|' + String(st.lastPlay && st.lastPlay.at ? st.lastPlay.at : 0) + '|' + turnPid;
-      if (ui.autoKeyDone && ui.autoKeyDone[key]) return;
-      if (!ui.autoKeyDone) ui.autoKeyDone = {};
-      ui.autoKeyDone[key] = true;
-
-      setTimeout(function () {
-        playHanninCard(roomId, turnPid, pickIdx, action).catch(function () {
-          // ignore
-        });
-      }, 200 + randomInt(500));
+      // Disabled: test players are progressed from the table screen by clicking.
+      return;
     }
 
     firebaseReady()
@@ -5178,8 +5102,6 @@
             return;
           }
           renderNow(room);
-          maybeAutoAdvancePendingForTests(room);
-          maybeAutoPlayTurnForTestPlayer(room);
         });
       })
       .then(function (u) {
@@ -5670,16 +5592,7 @@
 
     var deck = llShuffle(llBuildDeck(room && room.settings));
     var grave = [];
-    // Before dealing, discard 1 card face-down to grave.
-    if (deck.length) grave.push(String(deck.pop()));
-
-    // 2-player rule: set aside 3 extra cards face-down (common variant).
-    if (playerCount === 2) {
-      for (var i = 0; i < 3; i++) {
-        if (!deck.length) break;
-        grave.push(String(deck.pop()));
-      }
-    }
+    // NOTE (house rule): do NOT discard any cards at the start of the round.
 
     var hands = {};
     var discards = {};
@@ -11679,7 +11592,7 @@
       var d = llCardDef(rank);
       var icon = d && d.icon ? String(d.icon) : '';
       if (icon) {
-        return '<img class="ll-card-img" alt="' + escapeHtml(d.name || '') + '" src="' + escapeHtml(icon) + '" />';
+        return '<img class="ll-card-img" draggable="false" alt="' + escapeHtml(d.name || '') + '" src="' + escapeHtml(icon) + '" />';
       }
       return '<div class="stack" style="height:100%;justify-content:center;align-items:center"><div class="big">' + escapeHtml(d.name || '-') + '</div></div>';
     }
@@ -11692,7 +11605,7 @@
       } catch (e0) {
         // ignore
       }
-      return '<img class="ll-card-img" alt="裏面" src="' + escapeHtml(backIcon) + '" />';
+      return '<img class="ll-card-img" draggable="false" alt="裏面" src="' + escapeHtml(backIcon) + '" />';
     }
 
     // Winners (single game)
@@ -12894,6 +12807,35 @@
       var player = room && room.players ? room.players[playerId] : null;
       renderLoveLetterPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui, lobbyId: lobbyId });
 
+      // Prevent long-press image search/callout and dragging on card images.
+      try {
+        var imgs = document.querySelectorAll('.ll-card-img');
+        for (var ii = 0; ii < imgs.length; ii++) {
+          var im = imgs[ii];
+          if (!im) continue;
+          try {
+            im.setAttribute('draggable', 'false');
+          } catch (e0) {
+            // ignore
+          }
+          if (!im.__ll_img_bound) {
+            im.__ll_img_bound = true;
+            im.addEventListener('contextmenu', function (ev) {
+              if (ev && ev.preventDefault) ev.preventDefault();
+              if (ev && ev.stopPropagation) ev.stopPropagation();
+              return false;
+            });
+            im.addEventListener('dragstart', function (ev) {
+              if (ev && ev.preventDefault) ev.preventDefault();
+              if (ev && ev.stopPropagation) ev.stopPropagation();
+              return false;
+            });
+          }
+        }
+      } catch (eImg) {
+        // ignore
+      }
+
       // Restore scroll position inside modal panel (prevents jumping to top on rerender).
       try {
         var panel = document.querySelector('.ll-overlay-panel');
@@ -13994,6 +13936,14 @@
       var btn = '';
       var isTurn = String(turn && turn.playerId ? turn.playerId : '') === String(pid);
       var canAct = isTurn && phase === 'playing' && (!pending || !pending.type) && (isHost || (viewerId && String(viewerId) === String(pid)));
+      // Table device: only operate test players.
+      try {
+        var qx2 = parseQuery();
+        var isTable2 = !!(qx2 && String(qx2.gmdev || '') === '1');
+        if (isTable2 && isHost && !hnIsTestPlayerId(pid)) canAct = false;
+      } catch (eC3) {
+        // ignore
+      }
       if (canAct) {
         btn =
           '<button class="ghost hnPlay" data-pid="' +
@@ -14006,6 +13956,14 @@
       var infoBtn = '';
       if (pending && pending.type === 'info') {
         var canChoose = (isHost || (viewerId && String(viewerId) === String(pid))) && pending.choices && pending.choices[String(pid)] === undefined;
+        // Table device: only operate test players.
+        try {
+          var qx3 = parseQuery();
+          var isTable3 = !!(qx3 && String(qx3.gmdev || '') === '1');
+          if (isTable3 && isHost && !hnIsTestPlayerId(pid)) canChoose = false;
+        } catch (eI3) {
+          // ignore
+        }
         if (canChoose) {
           infoBtn =
             '<button class="ghost hnInfoChoose" data-pid="' +
@@ -14018,6 +13976,40 @@
         }
       }
 
+      var rumorBtn = '';
+      if (pending && pending.type === 'rumor') {
+        var canChooseRumor = (isHost || (viewerId && String(viewerId) === String(pid))) && pending.choices && pending.choices[String(pid)] === undefined;
+        // Table device: only operate test players.
+        try {
+          var qx4 = parseQuery();
+          var isTable4 = !!(qx4 && String(qx4.gmdev || '') === '1');
+          if (isTable4 && isHost && !hnIsTestPlayerId(pid)) canChooseRumor = false;
+        } catch (eR3) {
+          // ignore
+        }
+        if (canChooseRumor) {
+          var rightPid = hnRightPid(order, pid);
+          var rightHand = rightPid && hands && Array.isArray(hands[rightPid]) ? hands[rightPid] : [];
+          var cnt = rightHand && Array.isArray(rightHand) ? rightHand.length : 0;
+          if (cnt > 0) {
+            var picks = '';
+            for (var rri = 0; rri < cnt; rri++) {
+              picks +=
+                '<button class="ghost hnRumorChoose" data-pid="' +
+                escapeHtml(String(pid)) +
+                '" data-idx="' +
+                escapeHtml(String(rri)) +
+                '">' +
+                escapeHtml(String(rri + 1)) +
+                '</button>';
+            }
+            rumorBtn = '<div class="row" style="gap:6px;flex-wrap:wrap">' + picks + '</div>';
+          }
+        } else if ((isHost || (viewerId && String(viewerId) === String(pid))) && pending.choices && pending.choices[String(pid)] !== undefined) {
+          rumorBtn = '<span class="badge">選択済</span>';
+        }
+      }
+
       return (
         '<div class="row" style="gap:10px;align-items:center;justify-content:space-between">' +
         '<div class="row" style="gap:10px;align-items:center">' +
@@ -14026,7 +14018,7 @@
         escapeHtml(def.name || id) +
         '</b></div>' +
         '</div>' +
-        '<div class="row" style="gap:8px">' + infoBtn + btn + '</div>' +
+        '<div class="row" style="gap:8px;align-items:center">' + infoBtn + rumorBtn + btn + '</div>' +
         '</div>'
       );
     }
@@ -14107,7 +14099,6 @@
           : '') +
         (isHost
           ? '<div class="row">' +
-            '<button id="hnDeal" class="ghost">配布/開始</button>' +
             (lobbyId ? '<button id="hnAbortToLobby" class="danger">中断してロビーへ</button>' : '') +
             '</div>'
           : '') +
@@ -14181,6 +14172,24 @@
           lastRoom = room;
           renderHanninTable(viewEl, { roomId: roomId, room: room, isHost: isHost, lobbyId: lobbyId, playerId: playerId });
 
+          // Auto-deal at game start: no distribution screen.
+          try {
+            var qx = parseQuery();
+            var isTable = !!(qx && String(qx.gmdev || '') === '1');
+            if (isHost && isTable && room && room.phase === 'lobby' && room.players) {
+              if (!routeHanninTable.__autoDealt) routeHanninTable.__autoDealt = {};
+              var key = String(roomId || '') + '|' + String(Object.keys(room.players || {}).length);
+              if (!routeHanninTable.__autoDealt[key]) {
+                routeHanninTable.__autoDealt[key] = true;
+                dealHanninGame(roomId).catch(function () {
+                  // ignore
+                });
+              }
+            }
+          } catch (eAD) {
+            // ignore
+          }
+
           // Bind buttons (host and players)
 
           var abortBtn = document.getElementById('hnAbortToLobby');
@@ -14206,20 +14215,7 @@
             });
           }
 
-          var dealBtn = document.getElementById('hnDeal');
-          if (dealBtn && !dealBtn.__hn_bound) {
-            dealBtn.__hn_bound = true;
-            dealBtn.addEventListener('click', function () {
-              dealBtn.disabled = true;
-              dealHanninGame(roomId)
-                .catch(function (e) {
-                  alert((e && e.message) || '失敗');
-                })
-                .finally(function () {
-                  dealBtn.disabled = false;
-                });
-            });
-          }
+          // (removed) Manual deal button: auto-deal is used.
 
           function chooseTargetPid(room, actorPid, allowSelf) {
             var players = (room && room.players) || {};
@@ -14266,6 +14262,15 @@
               var pid = String(el.getAttribute('data-pid') || '');
               var idx = parseIntSafe(el.getAttribute('data-idx'), -1);
               if (!pid || idx < 0) return;
+
+              // Table device: only operate test players.
+              try {
+                var qx = parseQuery();
+                var isTable = !!(qx && String(qx.gmdev || '') === '1');
+                if (isTable && !hnIsTestPlayerId(pid)) return;
+              } catch (eTOp) {
+                // ignore
+              }
 
               var room = lastRoom;
               var cardId = '';
@@ -14354,7 +14359,40 @@
               var pid = String(el.getAttribute('data-pid') || '');
               var idx = parseIntSafe(el.getAttribute('data-idx'), -1);
               if (!pid || idx < 0) return;
+              // Table device: only operate test players.
+              try {
+                var qx = parseQuery();
+                var isTable = !!(qx && String(qx.gmdev || '') === '1');
+                if (isTable && !hnIsTestPlayerId(pid)) return;
+              } catch (eTOp2) {
+                // ignore
+              }
               submitHanninInfoChoice(roomId, pid, idx).catch(function (e) {
+                alert((e && e.message) || '失敗');
+              });
+            });
+          }
+
+          var rumorBtns = document.querySelectorAll('.hnRumorChoose');
+          for (var iR = 0; iR < rumorBtns.length; iR++) {
+            var br = rumorBtns[iR];
+            if (!br || br.__hn_bound) continue;
+            br.__hn_bound = true;
+            br.addEventListener('click', function (ev) {
+              var el = ev && ev.currentTarget ? ev.currentTarget : null;
+              if (!el) return;
+              var pid = String(el.getAttribute('data-pid') || '');
+              var idx = parseIntSafe(el.getAttribute('data-idx'), -1);
+              if (!pid || idx < 0) return;
+              // Table device: only operate test players.
+              try {
+                var qx = parseQuery();
+                var isTable = !!(qx && String(qx.gmdev || '') === '1');
+                if (isTable && !hnIsTestPlayerId(pid)) return;
+              } catch (eTOp3) {
+                // ignore
+              }
+              submitHanninRumorChoice(roomId, pid, idx).catch(function (e) {
                 alert((e && e.message) || '失敗');
               });
             });
