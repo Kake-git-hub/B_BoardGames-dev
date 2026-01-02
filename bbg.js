@@ -6002,7 +6002,7 @@
             if (!st.private || typeof st.private !== 'object') st.private = {};
             var at0 = serverNowMs();
             var tnm0 = hnPlayerName(room, tPid);
-            var msg0 = (tnm0 ? (tnm0 + ' はアリバイを持っていました。') : '') + 'アリバイにより探偵の効果は無効です。';
+            var msg0 = '探偵が選んだ' + (tnm0 || '対象') + 'は犯人ではありません';
             for (var da0 = 0; da0 < order.length; da0++) {
               var pda0 = String(order[da0] || '');
               if (!pda0) continue;
@@ -6028,7 +6028,7 @@
           if (!st.private || typeof st.private !== 'object') st.private = {};
           var at1 = serverNowMs();
           var tnm1 = hnPlayerName(room, tPid);
-          var msg1 = '探偵が選んだ' + (tnm1 || '対象') + 'のカードは犯人ではありませんでした';
+          var msg1 = '探偵が選んだ' + (tnm1 || '対象') + 'は犯人ではありません';
           for (var bi = 0; bi < order.length; bi++) {
             var pbi = String(order[bi] || '');
             if (!pbi) continue;
@@ -6265,7 +6265,20 @@
 
       var hands = assign({}, st.hands || {});
 
-      var right = hnRightPid(order, pid);
+      function rightWithCards(snapshotHands, fromPid) {
+        var from = String(fromPid || '');
+        var startIdx = order.indexOf(from);
+        if (startIdx < 0) return '';
+        for (var step = 1; step < order.length; step++) {
+          var cand = String(order[(startIdx + step) % order.length] || '');
+          if (!cand) continue;
+          var h0 = snapshotHands && Array.isArray(snapshotHands[cand]) ? snapshotHands[cand] : [];
+          if (h0.length) return cand;
+        }
+        return '';
+      }
+
+      var right = rightWithCards(hands, pid);
       var rh = right && hands && Array.isArray(hands[right]) ? hands[right] : [];
       var idx = parseIntSafe(pickIndex, -1);
       if (rh.length) {
@@ -6296,14 +6309,15 @@
         snapshot[pS] = hands && Array.isArray(hands[pS]) ? hands[pS].slice() : [];
       }
 
-      var taken = {};
+      var requestsByTarget = {};
       for (var iT = 0; iT < order.length; iT++) {
         var pT = String(order[iT] || '');
-        var rPid = hnRightPid(order, pT);
-        var sh = snapshot[rPid] || [];
+        var rPid = rightWithCards(snapshot, pT);
+        var sh = rPid ? snapshot[rPid] || [] : [];
         var choose = parseIntSafe(st.pending.choices[pT], -1);
-        if (!sh.length || choose < 0 || choose >= sh.length) continue;
-        taken[pT] = String(sh[choose] || '');
+        if (!rPid || !sh.length || choose < 0 || choose >= sh.length) continue;
+        if (!requestsByTarget[rPid]) requestsByTarget[rPid] = [];
+        requestsByTarget[rPid].push({ actor: pT, idx: choose });
       }
 
       var nextHands = {};
@@ -6312,24 +6326,49 @@
         nextHands[pC] = snapshot[pC] ? snapshot[pC].slice() : [];
       }
 
-      // Remove selected cards from each right neighbor (each hand is affected at most once).
-      for (var iRm = 0; iRm < order.length; iRm++) {
-        var pRm = String(order[iRm] || '');
-        var rPid2 = hnRightPid(order, pRm);
-        var sh2 = snapshot[rPid2] || [];
-        var choose2 = parseIntSafe(st.pending.choices[pRm], -1);
-        if (!sh2.length || choose2 < 0 || choose2 >= sh2.length) continue;
-        var real = nextHands[rPid2] ? nextHands[rPid2].slice() : [];
-        if (choose2 >= 0 && choose2 < real.length) real.splice(choose2, 1);
-        nextHands[rPid2] = real;
+      var takenByActor = {};
+
+      // Remove selected cards from targets. If multiple players target the same hand, resolve deterministically:
+      // - duplicate index picks: first one wins
+      // - remove in descending index order to keep indices stable
+      for (var iK = 0; iK < order.length; iK++) {
+        var targetPid = String(order[iK] || '');
+        var reqs = requestsByTarget[targetPid] || [];
+        if (!reqs.length) continue;
+
+        var seenIdx = {};
+        var uniq = [];
+        for (var ui = 0; ui < reqs.length; ui++) {
+          var ri = reqs[ui];
+          var key = String(ri.idx);
+          if (seenIdx[key]) continue;
+          seenIdx[key] = true;
+          uniq.push(ri);
+        }
+
+        uniq.sort(function (a, b) {
+          return parseIntSafe(b.idx, 0) - parseIntSafe(a.idx, 0);
+        });
+
+        var real = nextHands[targetPid] ? nextHands[targetPid].slice() : [];
+        for (var ui2 = 0; ui2 < uniq.length; ui2++) {
+          var rr = uniq[ui2];
+          var ix = parseIntSafe(rr.idx, -1);
+          if (ix < 0 || ix >= real.length) continue;
+          var card = String(real[ix] || '');
+          real.splice(ix, 1);
+          if (card) takenByActor[String(rr.actor || '')] = card;
+        }
+        nextHands[targetPid] = real;
       }
 
       // Give taken cards to the choosing player.
       for (var iG = 0; iG < order.length; iG++) {
         var pG = String(order[iG] || '');
-        if (!taken[pG]) continue;
+        var tk = takenByActor[pG] ? String(takenByActor[pG] || '') : '';
+        if (!tk) continue;
         var hh = nextHands[pG] ? nextHands[pG].slice() : [];
-        hh.push(taken[pG]);
+        hh.push(tk);
         nextHands[pG] = hh;
       }
 
@@ -6500,18 +6539,71 @@
             return String(pid || '-');
           }
         }
-        var drewDef0 = llCardDef(String(b0 || ''));
-        var drewLabel0 = String((drewDef0 && drewDef0.name) || '-') + '(' + String((drewDef0 && drewDef0.rank) || llCardRankStr(String(b0 || '')) || '-') + ')';
-        var lpText0 = _pname0(startId) + ' が大臣(7)を持っていて ' + drewLabel0 + ' を引いたため脱落した。';
-        // Keep turn on startId until ack; apply elimination after the modal is advanced.
+
+        // Overload handling (house rule): discard Minister first, then the drawn card; draw 1 replacement and pass turn.
+        var other0 = a0 === '7' ? String(b0 || '') : String(a0 || '');
+
+        discards[startId] = (Array.isArray(discards[startId]) ? discards[startId].slice() : []).concat(['7', other0].filter(Boolean));
+        grave.push('7');
+        if (other0) grave.push(other0);
+        hands[startId] = [];
+
+        var repl0 = '';
+        var replFrom = '';
+        if (deck.length) {
+          repl0 = String(deck.pop());
+          replFrom = '山札';
+        } else {
+          var burnCard0 = grave && Array.isArray(grave) && grave.length ? String(grave[0] || '') : '';
+          if (burnCard0) {
+            grave.shift();
+            repl0 = burnCard0;
+            replFrom = '伏せ札';
+          }
+        }
+        if (repl0) hands[startId] = [repl0];
+
+        var otherDef0 = llCardDef(String(other0 || ''));
+        var otherLabel0 = String((otherDef0 && otherDef0.name) || '-') + '(' + String((otherDef0 && otherDef0.rank) || llCardRankStr(String(other0 || '')) || '-') + ')';
+        var lpText0 =
+          _pname0(startId) +
+          ' は大臣(7)を持っていて ' +
+          otherLabel0 +
+          ' を引いたため、まず大臣(7)を捨て、そのあと ' +
+          otherLabel0 +
+          ' を捨てた。' +
+          (replFrom ? (replFrom + 'からカードを1枚引いて次ターンへ進む。') : '次ターンへ進む。');
+
+        // Pass the first turn to the next player.
+        var nextIndex0 = (startIndex + 1) % ids.length;
+        var nextId0 = String(ids[nextIndex0] || '');
+        if (nextId0) protectedMap[nextId0] = false;
+        if (nextId0) {
+          var nh0 = Array.isArray(hands[nextId0]) ? hands[nextId0] : [];
+          if (nh0.length < 2) {
+            var d0 = '';
+            if (deck.length) {
+              d0 = String(deck.pop());
+            } else {
+              var burnCard1 = grave && Array.isArray(grave) && grave.length ? String(grave[0] || '') : '';
+              if (burnCard1) {
+                grave.shift();
+                d0 = burnCard1;
+              }
+            }
+            if (d0) nh0 = nh0.concat([d0]);
+            hands[nextId0] = nh0;
+          }
+        }
+
         return {
           no: parseIntSafe(room && room.round && room.round.no, 0) + 1,
           state: 'playing',
           startedAt: serverNowMs(),
           endedAt: 0,
           order: ids,
-          currentIndex: startIndex,
-          currentPlayerId: startId,
+          currentIndex: nextIndex0,
+          currentPlayerId: nextId0,
           deck: deck,
           grave: grave,
           burn: '',
@@ -6521,9 +6613,9 @@
           eliminated: eliminated,
           protected: protectedMap,
           peek: null,
-          lastPlay: { by: startId, to: '', card: String(b0 || ''), at: serverNowMs(), text: lpText0 },
-          reveal: { type: 'minister_overload', by: startId, had: '7', drew: b0 },
-          waitFor: { type: 'minister_overload_ack', by: startId, pending: { type: 'eliminate', pid: startId, reason: 'minister_overload' } },
+          lastPlay: { by: startId, to: '', card: String(other0 || ''), at: serverNowMs(), text: lpText0 },
+          reveal: { type: 'minister_overload', by: startId, had: '7', drew: String(other0 || '') },
+          waitFor: null,
           winners: []
         };
       }
@@ -6730,12 +6822,6 @@
       var cardDef = llCardDef(card);
       var cardRankStr = llCardRankStr(card);
 
-      function formatLastPlayText(byId, toId, playedCard) {
-        var dlp = llCardDef(String(playedCard || ''));
-        var cardLabel = String((dlp && dlp.name) || '-') + '(' + String((dlp && dlp.rank) || llCardRankStr(String(playedCard || '')) || '-') + ')';
-        return toId ? pname(byId) + ' が ' + pname(toId) + ' へ ' + cardLabel + ' のカードを使用した。' : pname(byId) + ' が ' + cardLabel + ' のカードを使用した。';
-      }
-
       var logText = actorName + ' が ' + cardDef.name + '(' + cardDef.rank + ') を使用';
 
       var lastPlayTo = '';
@@ -6917,12 +7003,14 @@
 
       // Persist the latest play so the table can show it until the next play.
       try {
+        var lastPlayText = String(logText || '');
+        if (lastPlayText && lastPlayText[lastPlayText.length - 1] !== '。') lastPlayText += '。';
         round.lastPlay = {
           by: String(actorId || ''),
           to: String(lastPlayTo || ''),
           card: String(card || ''),
           at: serverNowMs(),
-          text: formatLastPlayText(String(actorId || ''), String(lastPlayTo || ''), String(card || ''))
+          text: lastPlayText
         };
       } catch (eLP0) {
         // ignore
@@ -6988,32 +7076,86 @@
         if (drawn2) {
           var before = nextHand.length ? String(nextHand[0]) : '';
           nextHand.push(String(drawn2));
-          // Minister overload: if you have base '7' and your 2-card total >= 12, you immediately lose.
-            var total = (llCardRank(before) || 0) + (llCardRank(drawn2) || 0);
-            if ((before === '7' || String(drawn2) === '7') && total >= 12) {
-              // Pause and apply elimination after ack.
-              hands[next.id] = nextHand;
-              round.hands = hands;
-              round.discards = discards;
-              round.eliminated = eliminated;
-              round.protected = protectedMap;
-              try {
-                var drewDef = llCardDef(String(drawn2 || ''));
-                var drewLabel = String((drewDef && drewDef.name) || '-') + '(' + String((drewDef && drewDef.rank) || llCardRankStr(String(drawn2 || '')) || '-') + ')';
-                round.lastPlay = {
-                  by: String(next.id || ''),
-                  to: '',
-                  card: String(drawn2 || ''),
-                  at: serverNowMs(),
-                  text: pname(next.id) + ' が大臣(7)を持っていて ' + drewLabel + ' を引いたため脱落した。'
-                };
-              } catch (eLPmo) {
-                // ignore
+
+          // Minister overload (house rule): discard Minister first, then the drawn card; draw 1 replacement and pass turn.
+          var total = (llCardRank(before) || 0) + (llCardRank(drawn2) || 0);
+          if ((before === '7' || String(drawn2) === '7') && total >= 12) {
+            var overPid = String(next.id || '');
+            var other = before === '7' ? String(drawn2 || '') : String(before || '');
+            // Discard in order: 7 then other.
+            pushDiscard(overPid, '7');
+            if (other) pushDiscard(overPid, other);
+            hands[overPid] = [];
+
+            var repl = '';
+            var replFrom = '';
+            var dmo = llDrawFromRound(round);
+            if (dmo) {
+              repl = String(dmo);
+              replFrom = '山札';
+            } else {
+              var burnCard = grave && Array.isArray(grave) && grave.length ? String(grave[0] || '') : '';
+              if (burnCard) {
+                grave.shift();
+                repl = burnCard;
+                replFrom = '伏せ札';
               }
-              round.reveal = { type: 'minister_overload', by: next.id, had: '7', drew: String(drawn2) };
-              round.waitFor = { type: 'minister_overload_ack', by: next.id, pending: { type: 'eliminate', pid: next.id, reason: 'minister_overload' } };
-              nextRoom.round = round;
-              return nextRoom;
+            }
+            if (repl) hands[overPid] = [repl];
+
+            try {
+              var otherDef = llCardDef(String(other || ''));
+              var otherLabel = String((otherDef && otherDef.name) || '-') + '(' + String((otherDef && otherDef.rank) || llCardRankStr(String(other || '')) || '-') + ')';
+              round.lastPlay = {
+                by: overPid,
+                to: '',
+                card: String(other || ''),
+                at: serverNowMs(),
+                text:
+                  pname(overPid) +
+                  ' は大臣(7)を持っていて ' +
+                  otherLabel +
+                  ' を引いたため、まず大臣(7)を捨て、そのあと ' +
+                  otherLabel +
+                  ' を捨てた。' +
+                  (replFrom ? (replFrom + 'からカードを1枚引いて次ターンへ進む。') : '次ターンへ進む。')
+              };
+            } catch (eLPmo) {
+              // ignore
+            }
+
+            round.hands = hands;
+            round.discards = discards;
+            round.eliminated = eliminated;
+            round.protected = protectedMap;
+            round.grave = grave;
+            round.reveal = null;
+            round.waitFor = null;
+
+            // Pass turn to the next alive player (skipping the overloaded player's turn).
+            var next2 = llFindNextAlive(round, order, next.index);
+            if (next2 && next2.id) {
+              round.currentIndex = next2.index;
+              round.currentPlayerId = next2.id;
+              round.protected[next2.id] = false;
+              var nh2 = Array.isArray(round.hands[next2.id]) ? round.hands[next2.id].slice() : [];
+              if (nh2.length < 2) {
+                var d2 = llDrawFromRound(round);
+                if (!d2) {
+                  var burn2 = grave && Array.isArray(grave) && grave.length ? String(grave[0] || '') : '';
+                  if (burn2) {
+                    grave.shift();
+                    d2 = burn2;
+                  }
+                }
+                if (d2) nh2.push(String(d2));
+              }
+              round.hands[next2.id] = nh2;
+            }
+
+            nextRoom.round = round;
+            nextRoom.log = llAppendLog(nextRoom, pname(overPid) + '：大臣オーバーロード（2枚捨て→引き直し→次ターン）');
+            return nextRoom;
           }
         }
       }
@@ -7096,11 +7238,13 @@
       var discards = assign({}, round.discards || {});
       var eliminated = assign({}, round.eliminated || {});
       var protectedMap = assign({}, round.protected || {});
+      var grave = Array.isArray(round.grave) ? round.grave.slice() : [];
 
       function pushDiscard(pid, cardRank) {
         var d = Array.isArray(discards[pid]) ? discards[pid].slice() : [];
         if (cardRank) d.push(String(cardRank));
         discards[pid] = d;
+        if (cardRank) grave.push(String(cardRank));
       }
 
       var nextHand = Array.isArray(hands[next.id]) ? hands[next.id].slice() : [];
@@ -7109,40 +7253,97 @@
         if (drawn2) {
           var before = nextHand.length ? String(nextHand[0]) : '';
           nextHand.push(String(drawn2));
-            var total = (llCardRank(before) || 0) + (llCardRank(drawn2) || 0);
-            if ((before === '7' || String(drawn2) === '7') && total >= 12) {
-              eliminated[next.id] = true;
-              protectedMap[next.id] = false;
-              for (var mdi = 0; mdi < nextHand.length; mdi++) pushDiscard(next.id, nextHand[mdi]);
-              hands[next.id] = [];
-              round.hands = hands;
-              round.discards = discards;
-              round.eliminated = eliminated;
-              round.protected = protectedMap;
-              try {
-                var drewDef2 = llCardDef(String(drawn2 || ''));
-                var drewLabel2 = String((drewDef2 && drewDef2.name) || '-') + '(' + String((drewDef2 && drewDef2.rank) || llCardRankStr(String(drawn2 || '')) || '-') + ')';
-                round.lastPlay = {
-                  by: String(next.id || ''),
-                  to: '',
-                  card: String(drawn2 || ''),
-                  at: serverNowMs(),
-                  text: (function () {
+
+          var total = (llCardRank(before) || 0) + (llCardRank(drawn2) || 0);
+          if ((before === '7' || String(drawn2) === '7') && total >= 12) {
+            var overPid = String(next.id || '');
+            var other = before === '7' ? String(drawn2 || '') : String(before || '');
+            // Discard in order: 7 then other.
+            pushDiscard(overPid, '7');
+            if (other) pushDiscard(overPid, other);
+            hands[overPid] = [];
+
+            var repl = '';
+            var replFrom = '';
+            var dmo = llDrawFromRound(round);
+            if (dmo) {
+              repl = String(dmo);
+              replFrom = '山札';
+            } else {
+              var burnCard = grave && Array.isArray(grave) && grave.length ? String(grave[0] || '') : '';
+              if (burnCard) {
+                grave.shift();
+                repl = burnCard;
+                replFrom = '伏せ札';
+              }
+            }
+            if (repl) hands[overPid] = [repl];
+
+            try {
+              var otherDef = llCardDef(String(other || ''));
+              var otherLabel = String((otherDef && otherDef.name) || '-') + '(' + String((otherDef && otherDef.rank) || llCardRankStr(String(other || '')) || '-') + ')';
+              round.lastPlay = {
+                by: overPid,
+                to: '',
+                card: String(other || ''),
+                at: serverNowMs(),
+                text:
+                  (function () {
                     try {
                       var ps2 = room && room.players ? room.players : {};
-                      return (next && next.id && ps2[next.id] ? formatPlayerDisplayName(ps2[next.id]) : String(next.id || '-')) + ' が大臣(7)を持っていて ' + drewLabel2 + ' を引いたため脱落した。';
+                      var nm2 = overPid && ps2[overPid] ? formatPlayerDisplayName(ps2[overPid]) : String(overPid || '-');
+                      return (
+                        nm2 +
+                        ' は大臣(7)を持っていて ' +
+                        otherLabel +
+                        ' を引いたため、まず大臣(7)を捨て、そのあと ' +
+                        otherLabel +
+                        ' を捨てた。' +
+                        (replFrom ? replFrom + 'からカードを1枚引いて次ターンへ進む。' : '次ターンへ進む。')
+                      );
                     } catch (e) {
-                      return String(next.id || '-') + ' が大臣(7)を持っていて ' + drewLabel2 + ' を引いたため脱落した。';
+                      return String(overPid || '-') + ' は大臣(7)を持っていて ' + otherLabel + ' を引いたため、2枚捨てて次ターンへ進む。';
                     }
                   })()
-                };
-              } catch (eLPmo2) {
-                // ignore
+              };
+            } catch (eLPmo2) {
+              // ignore
+            }
+
+            round.hands = hands;
+            round.discards = discards;
+            round.eliminated = eliminated;
+            round.protected = protectedMap;
+            round.grave = grave;
+            round.reveal = null;
+            round.waitFor = null;
+
+            // Pass turn to the next alive player.
+            var order2 = Array.isArray(round.order) ? round.order : llListPlayerIdsByJoin(nextRoom);
+            var next2 = llFindNextAlive(round, order2, parseIntSafe(round.currentIndex, 0));
+            if (next2 && next2.id) {
+              round.order = order2;
+              round.currentIndex = next2.index;
+              round.currentPlayerId = next2.id;
+              round.protected[next2.id] = false;
+              var nh2 = Array.isArray(round.hands[next2.id]) ? round.hands[next2.id].slice() : [];
+              if (nh2.length < 2) {
+                var d2 = llDrawFromRound(round);
+                if (!d2) {
+                  var burn2 = grave && Array.isArray(grave) && grave.length ? String(grave[0] || '') : '';
+                  if (burn2) {
+                    grave.shift();
+                    d2 = burn2;
+                  }
+                }
+                if (d2) nh2.push(String(d2));
               }
-              round.reveal = { type: 'minister_overload', by: next.id, had: '7', drew: String(drawn2) };
-              round.waitFor = { type: 'minister_overload_ack', by: next.id };
-              nextRoom.round = round;
-              return nextRoom;
+              round.hands[next2.id] = nh2;
+            }
+
+            nextRoom.round = round;
+            nextRoom.log = llAppendLog(nextRoom, '大臣オーバーロード：2枚捨て→引き直し→次ターン');
+            return nextRoom;
           }
         }
       }
@@ -7151,6 +7352,8 @@
       round.discards = discards;
       round.eliminated = eliminated;
       round.protected = protectedMap;
+
+      round.grave = grave;
 
       nextRoom.round = round;
       return nextRoom;
@@ -7318,7 +7521,7 @@
       viewEl,
       '\n    <div class="stack">\n      <div class="big">ロビーを作成</div>\n      <div id="lobbyCreateError" class="form-error" role="alert"></div>\n\n      <div class="field">\n        <label>あなたの名前（表示用）</label>\n        <input id="lobbyHostName" placeholder="例: たろう" value="' +
         escapeHtml(persistedName || '') +
-        '" />\n      </div>\n\n      <div class="row">\n        <button id="lobbyCreateBtn" class="primary">作成</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+        '" />\n      </div>\n\n      <div class="row">\n        <button id="lobbyCreateBtn" class="primary">作成</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n      <div class="row">\n        <button id="lobbyHanninSim" class="ghost">犯人は踊る（デバッグ）テーブルシミュレーション</button>\n      </div>\n    </div>\n  '
     );
   }
 
@@ -10039,6 +10242,18 @@
   function routeLobbyCreate() {
     renderLobbyCreate(viewEl);
     clearInlineError('lobbyCreateError');
+
+    var hnSimBtn = document.getElementById('lobbyHanninSim');
+    if (hnSimBtn && !hnSimBtn.__bound) {
+      hnSimBtn.__bound = true;
+      hnSimBtn.addEventListener('click', function () {
+        var q = parseQuery() || {};
+        q.screen = 'hannin_sim_table';
+        setQuery(q);
+        route();
+      });
+    }
+
     var btn = document.getElementById('lobbyCreateBtn');
     if (!btn) return;
     btn.addEventListener('click', function () {
@@ -14678,7 +14893,8 @@
       }
 
       centerHtml =
-        '<div class="ll-table-center">' +
+        '<div class="ll-table-center ll-table-center--ll">' +
+        '<div class="ll-table-center-top">' +
         '<div class="ll-table-pile">' +
         '<div class="muted">山札</div>' +
         '<div class="ll-table-pile-count"><b>' +
@@ -14688,7 +14904,6 @@
         deckStack +
         '</div>' +
         '</div>' +
-        (lastPlayHtml || '') +
         '<div class="ll-table-pile">' +
         '<div class="muted">墓地</div>' +
         '<div class="ll-table-pile-count"><b>' +
@@ -14698,6 +14913,8 @@
         graveCards +
         '</div>' +
         '</div>' +
+        '</div>' +
+        (lastPlayHtml ? '<div class="ll-table-center-bottom">' + lastPlayHtml + '</div>' : '') +
         '</div>';
     }
 
