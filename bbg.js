@@ -7474,6 +7474,105 @@
     HEADER_LOBBY_ID = String(lobbyId || '').trim();
   }
 
+  var __headerLobbyBackBound = false;
+  function updateHeaderLobbyBackButton(screen, lobbyId) {
+    var btn = null;
+    try {
+      btn = document.getElementById('headerLobbyBack');
+    } catch (e0) {
+      btn = null;
+    }
+    if (!btn) return;
+
+    var q = null;
+    try {
+      q = parseQuery();
+    } catch (eQ0) {
+      q = null;
+    }
+    var isHost = !!(q && String(q.host || '') === '1');
+    var isGmDev = !!(q && String(q.gmdev || '') === '1');
+
+    var scr = String(screen || '');
+    var isLobbyScreen = scr === 'lobby_host' || scr === 'lobby_assign' || scr === 'lobby_login' || scr === 'lobby_create';
+    var isGmScreen = isHost || isGmDev || scr.indexOf('_table') >= 0 || isLobbyScreen;
+
+    // Only show when we have a lobby context, and not on the plain player waiting screen.
+    var show = !!(lobbyId && isGmScreen && scr !== 'lobby_player' && scr !== '');
+    try {
+      btn.style.display = show ? '' : 'none';
+      btn.disabled = !show;
+    } catch (e1) {
+      // ignore
+    }
+
+    if (__headerLobbyBackBound) return;
+    __headerLobbyBackBound = true;
+    btn.addEventListener('click', function () {
+      var q2 = null;
+      try {
+        q2 = parseQuery();
+      } catch (eQ1) {
+        q2 = null;
+      }
+      var lobby = q2 && q2.lobby ? String(q2.lobby) : '';
+      if (!lobby) return;
+
+      var scr2 = q2 && q2.screen ? String(q2.screen) : '';
+      var isLobby2 =
+        scr2 === 'lobby_host' ||
+        scr2 === 'lobby_assign' ||
+        scr2 === 'lobby_login' ||
+        scr2 === 'lobby_create' ||
+        scr2 === 'lobby_player';
+
+      function goLobbyHost() {
+        var qx = {};
+        var v = getCacheBusterParam();
+        if (v) qx.v = v;
+        qx.lobby = lobby;
+        qx.screen = 'lobby_host';
+        try {
+          if (q2 && String(q2.gmdev || '') === '1') qx.gmdev = '1';
+        } catch (eG) {
+          // ignore
+        }
+        setQuery(qx);
+        route();
+      }
+
+      if (isLobby2) {
+        goLobbyHost();
+        return;
+      }
+
+      // Returning from an active game: clear currentGame so everyone syncs back to waiting.
+      if (!confirm('ロビーへ戻ります。\n（進行中の場合はゲームを中断し、全員に反映されます）\nよろしいですか？')) return;
+      try {
+        btn.disabled = true;
+      } catch (eD) {
+        // ignore
+      }
+      firebaseReady()
+        .then(function () {
+          return setLobbyCurrentGame(lobby, null);
+        })
+        .then(function () {
+          goLobbyHost();
+        })
+        .catch(function (e) {
+          alert((e && e.message) || '失敗');
+        })
+        .finally(function () {
+          try {
+            btn.disabled = false;
+          } catch (eE) {
+            // ignore
+          }
+        });
+    });
+  }
+
   function headerHtml() {
     // Save vertical space: no persistent header.
     return '';
@@ -7539,7 +7638,7 @@
       viewEl,
       '\n    <div class="stack">\n      ' +
         (verHtml || '') +
-        '\n      <div class="row">\n        <button id="homeCreateJoin" class="primary">ロビー作成（この端末もゲームに参加）</button>\n      </div>\n      <div class="row">\n        <button id="homeCreateGm" class="ghost">ロビー作成（この端末をゲームマスターデバイス）</button>\n      </div>\n      <div class="row">\n        <button id="homeLoveLetterSim" class="ghost">ラブレター（デバッグ）テーブルシミュレーション</button>\n      </div>\n    </div>\n  '
+        '\n      <div class="row">\n        <button id="homeCreateJoin" class="primary">ロビー作成（この端末もゲームに参加）</button>\n      </div>\n      <div class="row">\n        <button id="homeCreateGm" class="ghost">ロビー作成（この端末をゲームマスターデバイス）</button>\n      </div>\n      <div class="row">\n        <button id="homeLoveLetterSim" class="ghost">ラブレター（デバッグ）テーブルシミュレーション</button>\n      </div>\n      <div class="row">\n        <button id="homeHanninSim" class="ghost">犯人は踊る（デバッグ）テーブルシミュレーション</button>\n      </div>\n    </div>\n  '
     );
   }
 
@@ -15822,6 +15921,37 @@
       route();
     }
 
+    var lobbyReturnWatching = false;
+    var lobbyUnsub = null;
+    function ensureLobbyReturnWatcher() {
+      if (!lobbyId) return;
+      if (lobbyReturnWatching) return;
+      lobbyReturnWatching = true;
+      firebaseReady()
+        .then(function () {
+          return subscribeLobby(lobbyId, function (lobby) {
+            var cg = (lobby && lobby.currentGame) || null;
+            var kind = cg && cg.kind ? String(cg.kind) : '';
+            var rid = cg && cg.roomId ? String(cg.roomId) : '';
+            if (!cg || kind !== 'hannin' || rid !== String(roomId || '')) {
+              try {
+                if (lobbyUnsub) lobbyUnsub();
+              } catch (e) {
+                // ignore
+              }
+              lobbyUnsub = null;
+              redirectToLobbyHost();
+            }
+          });
+        })
+        .then(function (u2) {
+          lobbyUnsub = u2;
+        })
+        .catch(function () {
+          // ignore
+        });
+    }
+
     var playerId = '';
     try {
       var q1 = parseQuery();
@@ -15834,6 +15964,7 @@
 
     firebaseReady()
       .then(function () {
+        if (lobbyId) ensureLobbyReturnWatcher();
         return subscribeHanninRoom(roomId, function (room) {
           if (!room) {
             renderError(viewEl, '部屋が見つかりません');
@@ -16106,6 +16237,11 @@
 
     window.addEventListener('popstate', function () {
       if (unsub) unsub();
+      try {
+        if (lobbyUnsub) lobbyUnsub();
+      } catch (e0) {
+        // ignore
+      }
     });
   }
 
@@ -16332,6 +16468,12 @@
 
     if (lobbyId) setHeaderLobbyId(lobbyId);
     else setHeaderLobbyId('');
+
+    try {
+      updateHeaderLobbyBackButton(screen, lobbyId);
+    } catch (eHB) {
+      // ignore
+    }
 
     // QR参加者（制限端末）は、待機＋ゲームプレイ以外へ遷移させない
     var activeLobbyId = '';
@@ -17438,14 +17580,18 @@
   try {
     viewEl = qs('#view');
     setupRulesButton();
-    // --- Version string with alphabetic suffix ---
-    var versionSuffix = 'h'; // ← Change this letter for each push (a, b, c, ...)
-    var versionDate = '20260101'; // YYYYMMDD
-    var versionString = 'v' + versionDate + versionSuffix;
+    // --- Version string (use bundled asset cache-buster) ---
+    var bundledV = '';
+    try {
+      bundledV = String(getBundledAssetVersion() || '');
+    } catch (eV0) {
+      bundledV = '';
+    }
+    var versionString = bundledV ? 'v' + bundledV : '';
     var versionEl = document.getElementById('versionString');
     if (versionEl) {
       versionEl.textContent = versionString;
-      versionEl.title = 'Build: ' + versionDate + ' Suffix: ' + versionSuffix;
+      versionEl.title = bundledV ? 'Assets: ' + bundledV : '';
     }
     var buildInfoEl = document.querySelector('#buildInfo');
     if (buildInfoEl) {
