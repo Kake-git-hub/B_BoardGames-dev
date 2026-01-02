@@ -4067,30 +4067,17 @@
       st.order = order;
       st.hands = hands;
       st.graveyard = [];
-      // Auto-start: discard "first" immediately and start from next player.
-      try {
-        var fp = String(firstPid || '');
-        if (fp && hands[fp] && Array.isArray(hands[fp])) {
-          var hh = hands[fp].slice();
-          var fi = hh.indexOf('first');
-          if (fi >= 0) {
-            hh.splice(fi, 1);
-            hands[fp] = hh;
-            st.graveyard = ['first'];
-          }
-        }
-      } catch (eF) {
-        // ignore
-      }
-
-      st.turn = hnNextTurn(order, firstPid);
-      st.started = true;
+      // Start rule: the player who holds "first" starts, and only "first" can be played until it is used.
+      var firstIdx = order.indexOf(String(firstPid || ''));
+      if (firstIdx < 0) firstIdx = 0;
+      st.turn = { index: firstIdx, playerId: String(order[firstIdx] || '') };
+      st.started = false;
       st.pending = null;
       st.allies = {};
       st.lastPlay = { at: 0, playerId: '', cardId: '' };
       st.result = { side: '', winners: [], culpritId: '', decidedAt: 0, reason: '' };
       st.deckInfo = { playerCount: n, usedCount: deck.length };
-      st.log = ['配布しました。ゲーム開始'];
+      st.log = ['配布しました。第一発見者の番です（第一発見者を使用して開始）'];
 
       return assign({}, room, { phase: 'playing', state: st });
     });
@@ -4263,6 +4250,33 @@
     } catch (eRev) {
       revealHtml = '';
     }
+
+    // Private modal (e.g., boy reveals culprit holder only to the actor)
+    var privateHtml = '';
+    try {
+      var pmsg = st && st.private && playerId && st.private[String(playerId)] ? st.private[String(playerId)] : null;
+      if (pmsg && String(pmsg.type || '') === 'boy') {
+        var cpid = String(pmsg.culpritPid || '');
+        var cname = cpid ? hnPlayerName(room, cpid) : '';
+        privateHtml =
+          '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
+          '<div class="ll-overlay-backdrop" id="hnPrivateBg"></div>' +
+          '<div class="ll-overlay-panel">' +
+          '<div class="stack">' +
+          '<div class="big ll-modal-title">少年</div>' +
+          '<div class="muted center">' +
+          escapeHtml(cname ? ('犯人を持っているのは「' + cname + '」です') : '犯人カードの所持者が見つかりません') +
+          '</div>' +
+          '<div class="row ll-modal-actions" style="justify-content:center">' +
+          '<button class="primary" id="hnPrivateOk">OK</button>' +
+          '</div>' +
+          '</div>' +
+          '</div>' +
+          '</div>';
+      }
+    } catch (ePriv) {
+      privateHtml = '';
+    }
     try {
       if (canOperate && ui && ui.hnAction && ui.hnAction.type === 'play') {
         var act = ui.hnAction;
@@ -4401,71 +4415,39 @@
 
     // Pending group actions: override main hand UI.
     if (pending && pending.type === 'info') {
-      var confirmedInfoIdx = -1;
+      var already = false;
       try {
-        if (pending && pending.choices && pending.choices[String(playerId)] !== undefined) {
-          confirmedInfoIdx = parseIntSafe(pending.choices[String(playerId)], -1);
-        }
+        already = !!(pending && pending.choices && pending.choices[String(playerId)] !== undefined);
       } catch (eCI) {
-        confirmedInfoIdx = -1;
+        already = false;
       }
 
-      if (!myHand.length) {
+      if (already) {
+        contentHtml = '<div class="muted center">情報操作：決定済み（他の人を待っています）</div>';
+      } else if (!myHand.length) {
         contentHtml = '<div class="muted center">情報操作：手札がありません</div>';
       } else {
-        // Stacked hand. Tap only sets local selection (no blue frame). Long-press submits,
-        // and only after it is recorded (pending.choices) the blue frame appears.
-        var frontIdxInfo = parseIntSafe(ui.hnHandFrontIndex, 0);
-        if (frontIdxInfo < 0 || frontIdxInfo >= myHand.length) frontIdxInfo = 0;
-
-        // After confirming which card to give, hide it from the hand UI.
-        var visibleIdxsInfo = [];
-        for (var vi0 = 0; vi0 < myHand.length; vi0++) {
-          if (confirmedInfoIdx === vi0) continue;
-          visibleIdxsInfo.push(vi0);
-        }
-
-        if (!visibleIdxsInfo.length) {
-          contentHtml = '<div class="muted center">情報操作：決定済み（他の人を待っています）</div>';
-        } else {
-          if (visibleIdxsInfo.indexOf(frontIdxInfo) < 0) frontIdxInfo = visibleIdxsInfo[0];
-
-          var dispOrderInfo = [];
-          dispOrderInfo.push(frontIdxInfo);
-          for (var ii0 = 0; ii0 < visibleIdxsInfo.length; ii0++) {
-            var vIdx = visibleIdxsInfo[ii0];
-            if (vIdx === frontIdxInfo) continue;
-            dispOrderInfo.push(vIdx);
-          }
-
-          var cardsHtmlInfo = '';
-          for (var pos0 = 0; pos0 < dispOrderInfo.length; pos0++) {
-            var idx0 = dispOrderInfo[pos0];
-            var cid0 = String(myHand[idx0] || '');
-            // Back cards shift upward.
-            var y0 = -(pos0 * 18);
-            cardsHtmlInfo +=
-              '<div class="hn-card hnPCard" data-hn-idx="' +
-              escapeHtml(String(idx0)) +
-              '" style="z-index:' +
-              escapeHtml(String(100 - pos0)) +
-              ';transform:translate(0,' +
-              escapeHtml(String(y0)) +
-              'px) scale(.90)">' +
-              hnCardImgHtml(cid0) +
-              '</div>';
-          }
-
-          contentHtml =
-            '<div class="hn-hand-wrap">' +
-            '<div class="hn-hand" id="hnHand">' +
-            cardsHtmlInfo +
-            '</div>' +
-            '<div class="muted center hn-hint">情報操作：タップで選択（決定/キャンセル）' +
-            (alreadyChosenInfo ? '（決定済み：選んだカードは非表示）' : '') +
-            '</div>' +
+        var selInfo = parseIntSafe(ui.hnInfoSelectedIndex, -1);
+        var outInfo = '';
+        for (var iiInfo = 0; iiInfo < myHand.length; iiInfo++) {
+          outInfo +=
+            '<div class="hn-rumor-card hnInfoPick' +
+            (selInfo === iiInfo ? ' hn-card--selected' : '') +
+            '" data-hn-info-idx="' +
+            escapeHtml(String(iiInfo)) +
+            '">' +
+            hnCardImgHtml(String(myHand[iiInfo] || '')) +
             '</div>';
         }
+
+        contentHtml =
+          '<div class="stack" style="gap:12px">' +
+          '<div class="muted center">情報操作：左隣に渡すカードを選ぶ</div>' +
+          '<div class="hn-rumor-row">' +
+          outInfo +
+          '</div>' +
+          '<div class="muted center hn-hint">タップで選択（決定/キャンセル）</div>' +
+          '</div>';
       }
     } else if (pending && pending.type === 'rumor') {
       var selRumor = parseIntSafe(ui.hnRumorSelectedIndex, -1);
@@ -4554,6 +4536,17 @@
         var frontIdx = parseIntSafe(ui.hnHandFrontIndex, 0);
         if (frontIdx < 0 || frontIdx >= myHand.length) frontIdx = 0;
 
+        // Compute an approximate pixel step as cardHeight/6.
+        var stepPx = 72;
+        try {
+          var vw = (typeof window !== 'undefined' && window && window.innerWidth) ? window.innerWidth : 420;
+          var cardW = Math.min(340, Math.floor(vw * 0.9));
+          var cardH = cardW * (4 / 3);
+          stepPx = Math.max(12, Math.round(cardH / 6));
+        } catch (eStep) {
+          stepPx = 72;
+        }
+
         var dispOrder = [];
         dispOrder.push(frontIdx);
         for (var ii = 0; ii < myHand.length; ii++) {
@@ -4565,8 +4558,8 @@
         for (var pos = 0; pos < dispOrder.length; pos++) {
           var idx = dispOrder[pos];
           var cid = String(myHand[idx] || '');
-          // Back cards shift upward.
-          var y = -(pos * 18);
+          // Back cards shift upward by ~cardHeight/6 each.
+          var y = -(pos * stepPx);
           cardsHtml +=
             '<div class="hn-card hnPCard" data-hn-idx="' +
             escapeHtml(String(idx)) +
@@ -4580,7 +4573,9 @@
         }
 
         contentHtml =
-          '<div class="hn-hand-wrap">' +
+          '<div class="hn-hand-wrap" style="margin-top:12px;padding-top:' +
+          escapeHtml(String(Math.max(0, (dispOrder.length - 1) * stepPx))) +
+          'px">' +
           '<div class="hn-hand" id="hnHand">' +
           cardsHtml +
           '</div>' +
@@ -4613,11 +4608,12 @@
       viewEl,
       '<div class="stack ll-player">' +
         '<div class="ll-topline">' +
-        '<div class="ll-status">犯人は踊る</div>' +
+        '<div class="ll-status">犯人は踊る ' + escapeHtml(playerId ? ('/ ' + hnPlayerName(room, playerId)) : '') + '</div>' +
         '<div class="badge">' +
         escapeHtml(isMyTurn ? 'TURN' : 'WAIT') +
         '</div>' +
         '</div>' +
+        (privateHtml || '') +
         (revealHtml || '') +
         (confirmHtml || '') +
         (modalHtml || '') +
@@ -4762,19 +4758,7 @@
                 return;
               }
 
-              if (pending && pending.type === 'info') {
-                // Once confirmed, ignore further taps.
-                if (pending.choices && pending.choices[String(playerId)] !== undefined) return;
-                // Tap sets local pre-selection.
-                ui.hnInfoSelectedIndex = idx;
-                try {
-                  var h2 = st && st.hands && Array.isArray(st.hands[playerId]) ? st.hands[playerId] : [];
-                  var cid2 = idx >= 0 && idx < h2.length ? String(h2[idx] || '') : '';
-                  ui.hnConfirm = { type: 'info', index: idx, cardId: cid2 };
-                } catch (eC1) {
-                  // ignore
-                }
-              } else if (pending && pending.type === 'rumor') {
+              if (pending && pending.type === 'rumor') {
                 // rumor tap is handled on hnRumorPick elements
                 return;
               } else if (pending && pending.type === 'deal') {
@@ -4827,16 +4811,6 @@
                 try {
                   var st = lastRoom && lastRoom.state ? lastRoom.state : null;
                   var pending = st && st.pending ? st.pending : null;
-                  if (pending && pending.type === 'info') {
-                    // Long-press confirms currently selected card.
-                    if (parseIntSafe(ui.hnInfoSelectedIndex, -1) < 0) {
-                      ui.hnInfoSelectedIndex = idx;
-                      renderNow(lastRoom);
-                      return;
-                    }
-                    tryConfirmInfoByLongPress();
-                    return;
-                  }
                   if (pending && pending.type === 'rumor') {
                     // Long-press confirms currently selected facedown card.
                     tryConfirmRumorByLongPress();
@@ -4993,6 +4967,27 @@
           }
 
           ui.inFlight = false;
+        });
+      }
+
+      // Private modal bindings (boy)
+      var pbg = document.getElementById('hnPrivateBg');
+      if (pbg && !pbg.__hn_bound) {
+        pbg.__hn_bound = true;
+        pbg.addEventListener('click', function () {
+          ackHanninPrivate(roomId, playerId).catch(function () {
+            // ignore
+          });
+        });
+      }
+
+      var pok = document.getElementById('hnPrivateOk');
+      if (pok && !pok.__hn_bound) {
+        pok.__hn_bound = true;
+        pok.addEventListener('click', function () {
+          ackHanninPrivate(roomId, playerId).catch(function () {
+            // ignore
+          });
         });
       }
 
@@ -5242,6 +5237,37 @@
         }
       }
 
+      var infoPicks = document.querySelectorAll('.hnInfoPick');
+      for (var iP = 0; iP < infoPicks.length; iP++) {
+        var ipEl = infoPicks[iP];
+        if (!ipEl) continue;
+        if (ipEl.__hn_click_bound) continue;
+        ipEl.__hn_click_bound = true;
+        ipEl.addEventListener('click', function (ev) {
+          var t = ev && ev.currentTarget ? ev.currentTarget : null;
+          if (!t) return;
+          if (ui.inFlight) return;
+          var idx = parseIntSafe(t.getAttribute('data-hn-info-idx'), -1);
+          if (idx < 0) return;
+          try {
+            var st = lastRoom && lastRoom.state ? lastRoom.state : null;
+            if (!st || !st.pending || st.pending.type !== 'info') return;
+            if (st.pending.choices && st.pending.choices[String(playerId)] !== undefined) return;
+          } catch (eTap2) {
+            return;
+          }
+          ui.hnInfoSelectedIndex = idx;
+          try {
+            var h = lastRoom && lastRoom.state && lastRoom.state.hands && Array.isArray(lastRoom.state.hands[playerId]) ? lastRoom.state.hands[playerId] : [];
+            var cid = idx >= 0 && idx < h.length ? String(h[idx] || '') : '';
+            ui.hnConfirm = { type: 'info', index: idx, cardId: cid };
+          } catch (eTap3) {
+            ui.hnConfirm = { type: 'info', index: idx, cardId: '' };
+          }
+          renderNow(lastRoom);
+        });
+      }
+
       var dealPicks = document.querySelectorAll('.hnDealPick');
       for (var dP = 0; dP < dealPicks.length; dP++) {
         var dpEl = dealPicks[dP];
@@ -5325,6 +5351,22 @@
         .finally(function () {
           ui.inFlight = false;
         });
+    }
+
+    function ackHanninPrivate(roomId, playerId) {
+      var base = hanninRoomPath(roomId);
+      return runTxn(base, function (room) {
+        if (!room || room.phase !== 'playing') return room;
+        var st = assign({}, room.state || {});
+        var pid = String(playerId || '');
+        if (!pid) return room;
+        if (!st.private || typeof st.private !== 'object') return room;
+        if (!st.private[pid]) return room;
+        var nextPrivate = assign({}, st.private);
+        delete nextPrivate[pid];
+        st.private = nextPrivate;
+        return assign({}, room, { state: st });
+      });
     }
 
     function tryConfirmRumorByLongPress() {
@@ -5639,7 +5681,14 @@
       }
 
       if (cardId === 'boy') {
-        // Reveal is handled client-side.
+        // Private reveal: show culprit holder only to the actor.
+        try {
+          var cpid = hnFindCulpritHolder(order, hands);
+          if (!st.private || typeof st.private !== 'object') st.private = {};
+          st.private[pid] = { type: 'boy', createdAt: serverNowMs(), culpritPid: String(cpid || '') };
+        } catch (eBoy) {
+          // ignore
+        }
         advanceTurn();
         return assign({}, room, { state: st });
       }
