@@ -10207,6 +10207,13 @@
         hands[ids[h]] = [String(deck[idx++]), String(deck[idx++]), String(deck[idx++]), String(deck[idx++])];
       }
 
+      var used = {};
+      for (var u = 0; u < ids.length; u++) used[ids[u]] = [];
+
+      var firstPid = hnFindFirstHolder(ids, hands);
+      var firstIdx = ids.indexOf(String(firstPid || ''));
+      if (firstIdx < 0) firstIdx = 0;
+
       sim = {
         room: {
           createdAt: serverNowMs(),
@@ -10217,14 +10224,16 @@
             order: ids.slice(),
             hands: hands,
             graveyard: [],
-            used: {},
-            turn: { index: 0, playerId: ids[0] },
-            started: true,
+            used: used,
+            turn: { index: firstIdx, playerId: String(ids[firstIdx] || '') },
+            started: false,
             turnCount: 0,
             pending: null,
             waitFor: null,
             lastPlay: { at: 0, playerId: '', cardId: '' },
-            result: { side: '', winners: [], culpritId: '', decidedAt: 0, reason: '' }
+            result: { side: '', winners: [], culpritId: '', decidedAt: 0, reason: '' },
+            allies: {},
+            log: ['配布しました。第一発見者の番です（第一発見者を使用して開始）']
           },
           result: null
         }
@@ -10237,6 +10246,10 @@
       var room = sim.room;
       var st = room && room.state ? room.state : {};
       if (String(room.phase || '') === 'finished') return;
+      if (st && st.result && st.result.decidedAt) {
+        room.phase = 'finished';
+        return;
+      }
 
       var order = Array.isArray(st.order) ? st.order : [];
       var hands = st.hands || {};
@@ -10245,6 +10258,216 @@
       function handCount(pid) {
         var h = hands && Array.isArray(hands[pid]) ? hands[pid] : [];
         return h.length || 0;
+      }
+
+      function pickOtherPid(actorPid) {
+        var a = String(actorPid || '');
+        if (!a) return '';
+        for (var i = 0; i < order.length; i++) {
+          var pid = String(order[i] || '');
+          if (!pid) continue;
+          if (pid === a) continue;
+          if (handCount(pid) <= 0) continue;
+          return pid;
+        }
+        // Fallback: any other pid
+        for (var j = 0; j < order.length; j++) {
+          var pid2 = String(order[j] || '');
+          if (!pid2) continue;
+          if (pid2 === a) continue;
+          return pid2;
+        }
+        return '';
+      }
+
+      function ensureLog() {
+        if (!Array.isArray(st.log)) st.log = [];
+      }
+
+      function advanceTurnFrom(pid0) {
+        st.turn = hnNextTurnSkipEmpty(order, String(pid0 || ''), hands);
+      }
+
+      // If waiting for an acknowledgement, resolve it in this step.
+      try {
+        if (st.waitFor && st.waitFor.type) {
+          var wf = st.waitFor;
+          st.waitFor = null;
+          ensureLog();
+          st.log = st.log.concat(['（デバッグ）確認完了']);
+          var by = wf && wf.by ? String(wf.by || '') : '';
+          if (by && st.turn && String(st.turn.playerId || '') === by) {
+            advanceTurnFrom(by);
+          }
+          room.state = st;
+          return;
+        }
+      } catch (eWf) {
+        // ignore
+      }
+
+      // If a pending group effect exists, resolve it in this step.
+      try {
+        if (st.pending && st.pending.type) {
+          var pending = st.pending;
+          var type = String(pending.type || '');
+          var resumeFrom = String((pending && (pending.resumeFrom || pending.actorId)) || '');
+
+          ensureLog();
+
+          if (type === 'deal') {
+            var aPid = String(pending.actorId || '');
+            var tPid = String(pending.targetPid || '');
+            var aHand = aPid && hands && Array.isArray(hands[aPid]) ? hands[aPid].slice() : [];
+            var tHand = tPid && hands && Array.isArray(hands[tPid]) ? hands[tPid].slice() : [];
+            if (aPid && tPid && aHand.length && tHand.length) {
+              var ai = randomInt(aHand.length);
+              var ti = randomInt(tHand.length);
+              var give = String(aHand.splice(ai, 1)[0] || '');
+              var take = String(tHand.splice(ti, 1)[0] || '');
+              aHand.push(take);
+              tHand.push(give);
+              hands[aPid] = aHand;
+              hands[tPid] = tHand;
+              st.hands = hands;
+              st.log = st.log.concat(['取引：交換しました']);
+            } else {
+              st.log = st.log.concat(['取引：交換できませんでした']);
+            }
+            st.pending = null;
+            if (resumeFrom) advanceTurnFrom(resumeFrom);
+            room.state = st;
+            return;
+          }
+
+          if (type === 'info') {
+            // Each player passes 1 random card to left neighbor.
+            var snapshot = {};
+            for (var s0 = 0; s0 < order.length; s0++) {
+              var p0 = String(order[s0] || '');
+              snapshot[p0] = hands && Array.isArray(hands[p0]) ? hands[p0].slice() : [];
+            }
+
+            var giveCard = {};
+            for (var g0 = 0; g0 < order.length; g0++) {
+              var pG = String(order[g0] || '');
+              var hG = snapshot[pG] || [];
+              if (!hG.length) continue;
+              var pickIdx = randomInt(hG.length);
+              giveCard[pG] = String(hG[pickIdx] || '');
+              hG.splice(pickIdx, 1);
+              snapshot[pG] = hG;
+            }
+
+            // Apply removals
+            for (var r0 = 0; r0 < order.length; r0++) {
+              var pR = String(order[r0] || '');
+              hands[pR] = snapshot[pR] ? snapshot[pR].slice() : [];
+            }
+
+            // Give to left
+            for (var l0 = 0; l0 < order.length; l0++) {
+              var pL = String(order[l0] || '');
+              var left = hnLeftPid(order, pL);
+              var c = giveCard[pL] ? String(giveCard[pL] || '') : '';
+              if (!left || !c) continue;
+              var lh = hands[left] ? hands[left].slice() : [];
+              lh.push(c);
+              hands[left] = lh;
+            }
+
+            st.hands = hands;
+            st.pending = null;
+            st.log = st.log.concat(['情報操作：全員が左隣へ1枚渡した']);
+            if (resumeFrom) advanceTurnFrom(resumeFrom);
+            room.state = st;
+            return;
+          }
+
+          if (type === 'rumor') {
+            // Each player draws 1 random facedown card from right neighbor who has cards.
+            function rightWithCards(snapshotHands, fromPid) {
+              var from = String(fromPid || '');
+              var startIdx = order.indexOf(from);
+              if (startIdx < 0) return '';
+              for (var step = 1; step < order.length; step++) {
+                var cand = String(order[(startIdx + step) % order.length] || '');
+                if (!cand) continue;
+                var h0 = snapshotHands && Array.isArray(snapshotHands[cand]) ? snapshotHands[cand] : [];
+                if (h0.length) return cand;
+              }
+              return '';
+            }
+
+            var snapshot2 = {};
+            for (var s1 = 0; s1 < order.length; s1++) {
+              var p1 = String(order[s1] || '');
+              snapshot2[p1] = hands && Array.isArray(hands[p1]) ? hands[p1].slice() : [];
+            }
+
+            var requestsByTarget = {};
+            for (var rq = 0; rq < order.length; rq++) {
+              var actor = String(order[rq] || '');
+              if (!actor) continue;
+              var rpid = rightWithCards(snapshot2, actor);
+              var sh = rpid ? (snapshot2[rpid] || []) : [];
+              if (!rpid || !sh.length) continue;
+              var pickIdx2 = randomInt(sh.length);
+              if (!requestsByTarget[rpid]) requestsByTarget[rpid] = [];
+              requestsByTarget[rpid].push({ actor: actor, idx: pickIdx2 });
+            }
+
+            var nextHands = {};
+            for (var s2 = 0; s2 < order.length; s2++) {
+              var p2 = String(order[s2] || '');
+              nextHands[p2] = snapshot2[p2] ? snapshot2[p2].slice() : [];
+            }
+
+            var takenByActor = {};
+            for (var t0 = 0; t0 < order.length; t0++) {
+              var targetPid = String(order[t0] || '');
+              var reqs = requestsByTarget[targetPid] || [];
+              if (!reqs.length) continue;
+              reqs.sort(function (a, b) {
+                return parseIntSafe(b.idx, 0) - parseIntSafe(a.idx, 0);
+              });
+              var real = nextHands[targetPid] ? nextHands[targetPid].slice() : [];
+              for (var q0 = 0; q0 < reqs.length; q0++) {
+                var rr = reqs[q0];
+                var ix = parseIntSafe(rr.idx, -1);
+                if (ix < 0 || ix >= real.length) continue;
+                var card = String(real.splice(ix, 1)[0] || '');
+                if (card) takenByActor[String(rr.actor || '')] = card;
+              }
+              nextHands[targetPid] = real;
+            }
+
+            for (var g1 = 0; g1 < order.length; g1++) {
+              var pG2 = String(order[g1] || '');
+              var tk = takenByActor[pG2] ? String(takenByActor[pG2] || '') : '';
+              if (!tk) continue;
+              var hh = nextHands[pG2] ? nextHands[pG2].slice() : [];
+              hh.push(tk);
+              nextHands[pG2] = hh;
+            }
+
+            st.hands = nextHands;
+            hands = nextHands;
+            st.pending = null;
+            st.log = st.log.concat(['うわさ：全員が右隣から1枚引いた']);
+            if (resumeFrom) advanceTurnFrom(resumeFrom);
+            room.state = st;
+            return;
+          }
+
+          // Unknown pending: cancel.
+          st.pending = null;
+          if (resumeFrom) advanceTurnFrom(resumeFrom);
+          room.state = st;
+          return;
+        }
+      } catch (ePend) {
+        // ignore
       }
 
       // Find current actor (or next with cards).
@@ -10267,31 +10490,209 @@
         return;
       }
 
-      // Auto play: discard a random card to grave and advance turn.
+      // Auto play: choose a legal card and apply simplified rules.
       var h0 = hands && Array.isArray(hands[actor]) ? hands[actor].slice() : [];
-      var pick = '';
-      if (h0.length) {
-        var pi = randomInt(h0.length);
-        pick = String(h0.splice(pi, 1)[0] || '');
+      if (!h0.length) {
+        advanceTurnFrom(actor);
+        room.state = st;
+        return;
       }
+
+      function isLegalCard(cardId) {
+        var cid = String(cardId || '');
+        if (!cid) return false;
+        if (!st.started && cid !== 'first') return false;
+        if (cid === 'detective' && st.started) {
+          var tc = parseIntSafe(st.turnCount, 0);
+          if (order && order.length && tc < order.length) return false;
+        }
+        if (cid === 'culprit') {
+          if (h0.length !== 1) return false;
+        }
+        return true;
+      }
+
+      var legalIdx = [];
+      for (var ci = 0; ci < h0.length; ci++) {
+        if (isLegalCard(h0[ci])) legalIdx.push(ci);
+      }
+
+      // If current actor has no legal card, move to next player who does.
+      if (!legalIdx.length) {
+        for (var step2 = 1; step2 <= order.length; step2++) {
+          var candPid = String(order[(order.indexOf(actor) + step2 + order.length) % order.length] || '');
+          if (!candPid) continue;
+          var hh0 = hands && Array.isArray(hands[candPid]) ? hands[candPid] : [];
+          if (!hh0.length) continue;
+          var hasLegal = false;
+          for (var k0 = 0; k0 < hh0.length; k0++) {
+            var cid0 = String(hh0[k0] || '');
+            // evaluate in that player's context
+            if (!st.started && cid0 !== 'first') continue;
+            if (cid0 === 'detective' && st.started) {
+              var tc2 = parseIntSafe(st.turnCount, 0);
+              if (order && order.length && tc2 < order.length) continue;
+            }
+            if (cid0 === 'culprit' && hh0.length !== 1) continue;
+            hasLegal = true;
+            break;
+          }
+          if (hasLegal) {
+            actor = candPid;
+            st.turn = { index: order.indexOf(actor), playerId: actor };
+            h0 = hh0.slice();
+            legalIdx = [];
+            for (var k1 = 0; k1 < h0.length; k1++) if (isLegalCard(h0[k1])) legalIdx.push(k1);
+            break;
+          }
+        }
+      }
+
+      var pickIndex = legalIdx.length ? legalIdx[randomInt(legalIdx.length)] : 0;
+      var cardId = String(h0[pickIndex] || '');
+      if (!cardId) cardId = String(h0[0] || '');
+
+      // Discard played card
+      h0.splice(pickIndex, 1);
       hands[actor] = h0;
       st.hands = hands;
       if (!Array.isArray(st.graveyard)) st.graveyard = [];
-      if (pick) st.graveyard.push(pick);
-      st.lastPlay = { at: serverNowMs(), playerId: actor, cardId: String(pick || '') };
-      st.turnCount = parseIntSafe(st.turnCount, 0) + 1;
+      st.graveyard.push(cardId);
+      if (!st.used || typeof st.used !== 'object') st.used = {};
+      if (!Array.isArray(st.used[actor])) st.used[actor] = [];
+      st.used[actor] = st.used[actor].concat([cardId]);
 
-      // Advance to next player in order.
-      var curIdx = -1;
-      for (var j = 0; j < order.length; j++) {
-        if (String(order[j] || '') === String(actor)) {
-          curIdx = j;
-          break;
+      if (typeof st.turnCount !== 'number') st.turnCount = 0;
+      st.turnCount = (parseIntSafe(st.turnCount, 0) || 0) + 1;
+      st.lastPlay = { at: serverNowMs(), playerId: actor, cardId: cardId };
+      ensureLog();
+      var nm = hnPlayerName(room, actor);
+      var cardNm = (HANNIN_CARD_DEFS[cardId] ? HANNIN_CARD_DEFS[cardId].name : cardId);
+      st.log = st.log.concat([nm + '：' + cardNm + ' をプレイ']);
+
+      function finish(side, culpritId, reason) {
+        st.result = { side: String(side || ''), winners: [], culpritId: String(culpritId || ''), decidedAt: serverNowMs(), reason: String(reason || '') };
+        room.phase = 'finished';
+      }
+
+      // Apply simplified effects / state transitions
+      if (cardId === 'first') {
+        st.started = true;
+        st.log = st.log.concat(['ゲーム開始']);
+        advanceTurnFrom(actor);
+        room.state = st;
+        return;
+      }
+
+      if (cardId === 'plot') {
+        if (!st.allies || typeof st.allies !== 'object') st.allies = {};
+        st.allies[actor] = true;
+        advanceTurnFrom(actor);
+        room.state = st;
+        return;
+      }
+
+      if (cardId === 'citizen' || cardId === 'alibi') {
+        advanceTurnFrom(actor);
+        room.state = st;
+        return;
+      }
+
+      if (cardId === 'culprit') {
+        finish('culprit', actor, '犯人が最後の手札「犯人」を出した');
+        st.log = st.log.concat(['犯人側の勝利']);
+        room.state = st;
+        return;
+      }
+
+      if (cardId === 'boy') {
+        st.waitFor = { type: 'private_ack', by: actor, createdAt: serverNowMs(), cardId: 'boy' };
+        room.state = st;
+        return;
+      }
+
+      if (cardId === 'witness') {
+        // Choose a target for realism, but effect is private; just advance.
+        advanceTurnFrom(actor);
+        room.state = st;
+        return;
+      }
+
+      if (cardId === 'deal') {
+        var tp = pickOtherPid(actor);
+        if (!tp || tp === actor) {
+          advanceTurnFrom(actor);
+          room.state = st;
+          return;
+        }
+        st.pending = { type: 'deal', actorId: actor, targetPid: tp, createdAt: serverNowMs(), choices: {}, resumeFrom: actor };
+        st.log = st.log.concat([nm + ' は ' + hnPlayerName(room, tp) + ' と取引：双方が出すカードを選択中']);
+        room.state = st;
+        return;
+      }
+
+      if (cardId === 'rumor') {
+        st.pending = { type: 'rumor', actorId: actor, createdAt: serverNowMs(), choices: {}, resumeFrom: actor };
+        st.log = st.log.concat(['うわさ：全員が右隣から引くカードを選択中']);
+        room.state = st;
+        return;
+      }
+
+      if (cardId === 'info') {
+        st.pending = { type: 'info', actorId: actor, createdAt: serverNowMs(), choices: {}, resumeFrom: actor };
+        st.log = st.log.concat(['情報操作：全員が左隣へ渡すカードを選択中']);
+        room.state = st;
+        return;
+      }
+
+      if (cardId === 'detective' || cardId === 'dog') {
+        var tPid = pickOtherPid(actor);
+        if (!tPid || tPid === actor) {
+          advanceTurnFrom(actor);
+          room.state = st;
+          return;
+        }
+        var th = hands && Array.isArray(hands[tPid]) ? hands[tPid] : [];
+        var hasC = false;
+        var hasA = false;
+        for (var x0 = 0; x0 < th.length; x0++) {
+          if (String(th[x0] || '') === 'culprit') hasC = true;
+          if (String(th[x0] || '') === 'alibi') hasA = true;
+        }
+
+        if (cardId === 'detective') {
+          if (hasA) {
+            st.waitFor = { type: 'notice_ack', by: actor, createdAt: serverNowMs(), cardId: 'detective' };
+            st.log = st.log.concat(['アリバイにより探偵の効果は無効']);
+            room.state = st;
+            return;
+          }
+          if (hasC && !hasA) {
+            finish('citizen', tPid, '探偵が犯人を指摘した');
+            st.log = st.log.concat(['一般人側の勝利']);
+            room.state = st;
+            return;
+          }
+          st.waitFor = { type: 'notice_ack', by: actor, createdAt: serverNowMs(), cardId: 'detective' };
+          room.state = st;
+          return;
+        }
+
+        if (cardId === 'dog') {
+          if (hasC) {
+            finish('citizen', tPid, 'いぬが犯人カードを当てた');
+            st.log = st.log.concat(['一般人側の勝利']);
+            room.state = st;
+            return;
+          }
+          st.waitFor = { type: 'notice_ack', by: actor, createdAt: serverNowMs(), cardId: 'dog' };
+          room.state = st;
+          return;
         }
       }
-      if (curIdx < 0) curIdx = 0;
-      var nextIdx = (curIdx + 1) % order.length;
-      st.turn = { index: nextIdx, playerId: String(order[nextIdx] || '') };
+
+      // Default: just advance.
+      advanceTurnFrom(actor);
       room.state = st;
     }
 
@@ -10356,11 +10757,28 @@
         '<div class="ll-table-grave-stack">' +
         graveHtml +
         '</div>' +
+        (function () {
+          var lp = '';
+          try {
+            var log = st && Array.isArray(st.log) ? st.log : [];
+            lp = log && log.length ? String(log[log.length - 1] || '') : '';
+          } catch (eLP) {
+            lp = '';
+          }
+          return lp ? '<div class="ll-table-lastplay muted">' + escapeHtml(lp) + '</div>' : '';
+        })() +
         '</div>' +
         '</div>';
 
-      var seatsHtml = '';
+      var arrowHtml = '';
+      var arrowIconHtml = '';
       var nSeats = order.length || 0;
+      for (var ai = 0; ai < nSeats; ai++) {
+        arrowHtml += '<svg class="ll-table-arrow" data-hn-arrow="' + escapeHtml(String(ai)) + '"></svg>';
+        arrowIconHtml += '<div class="ll-table-arrow-icon" data-hn-arrow-icon="' + escapeHtml(String(ai)) + '"></div>';
+      }
+
+      var seatsHtml = '';
       var radius = 42;
       for (var si = 0; si < nSeats; si++) {
         var pid = String(order[si] || '');
@@ -10375,6 +10793,8 @@
           '<div class="ll-seat' +
           (isTurnSeat ? ' ll-seat--turn' : '') +
           '" data-hn-pid="' +
+          escapeHtml(String(pid)) +
+          '" data-ll-pid="' +
           escapeHtml(String(pid)) +
           '" style="left:' +
           escapeHtml(String(x.toFixed(3))) +
@@ -10398,6 +10818,8 @@
       render(
         rootEl,
         '<div class="ll-table">' +
+          arrowHtml +
+          arrowIconHtml +
           seatsHtml +
           '<div class="ll-table-inner">' +
           centerHtml +
@@ -10414,7 +10836,10 @@
       );
 
       var inner = document.getElementById('hnSimView');
-      if (inner) renderHanninSimTableView(inner, sim.room);
+      if (inner) {
+        renderHanninSimTableView(inner, sim.room);
+        updateHanninTableEffectArrow(inner, sim.room);
+      }
 
       var stepBtn = document.getElementById('hnSimStep');
       if (stepBtn && !stepBtn.__hn_bound) {
