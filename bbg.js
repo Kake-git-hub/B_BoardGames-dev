@@ -6540,61 +6540,13 @@
           }
         }
 
-        // Overload handling (house rule): discard Minister first, then the drawn card; draw 1 replacement and pass turn.
+        // Overload: resolve on acknowledgement so the player sees what happened.
         var other0 = a0 === '7' ? String(b0 || '') : String(a0 || '');
-
-        discards[startId] = (Array.isArray(discards[startId]) ? discards[startId].slice() : []).concat(['7', other0].filter(Boolean));
-        grave.push('7');
-        if (other0) grave.push(other0);
-        hands[startId] = [];
-
-        var repl0 = '';
-        var replFrom = '';
-        if (deck.length) {
-          repl0 = String(deck.pop());
-          replFrom = '山札';
-        } else {
-          var burnCard0 = grave && Array.isArray(grave) && grave.length ? String(grave[0] || '') : '';
-          if (burnCard0) {
-            grave.shift();
-            repl0 = burnCard0;
-            replFrom = '伏せ札';
-          }
-        }
-        if (repl0) hands[startId] = [repl0];
+        hands[startId] = ['7', other0].filter(Boolean);
 
         var otherDef0 = llCardDef(String(other0 || ''));
         var otherLabel0 = String((otherDef0 && otherDef0.name) || '-') + '(' + String((otherDef0 && otherDef0.rank) || llCardRankStr(String(other0 || '')) || '-') + ')';
-        var lpText0 =
-          _pname0(startId) +
-          ' は大臣(7)を持っていて ' +
-          otherLabel0 +
-          ' を引いたため、まず大臣(7)を捨て、そのあと ' +
-          otherLabel0 +
-          ' を捨てた。' +
-          (replFrom ? (replFrom + 'からカードを1枚引いて次ターンへ進む。') : '次ターンへ進む。');
-
-        // Pass the first turn to the next player.
-        var nextIndex0 = (startIndex + 1) % ids.length;
-        var nextId0 = String(ids[nextIndex0] || '');
-        if (nextId0) protectedMap[nextId0] = false;
-        if (nextId0) {
-          var nh0 = Array.isArray(hands[nextId0]) ? hands[nextId0] : [];
-          if (nh0.length < 2) {
-            var d0 = '';
-            if (deck.length) {
-              d0 = String(deck.pop());
-            } else {
-              var burnCard1 = grave && Array.isArray(grave) && grave.length ? String(grave[0] || '') : '';
-              if (burnCard1) {
-                grave.shift();
-                d0 = burnCard1;
-              }
-            }
-            if (d0) nh0 = nh0.concat([d0]);
-            hands[nextId0] = nh0;
-          }
-        }
+        var lpText0 = _pname0(startId) + ' が大臣(7)を持っていて ' + otherLabel0 + ' を引いたため脱落した。';
 
         return {
           no: parseIntSafe(room && room.round && room.round.no, 0) + 1,
@@ -6602,8 +6554,8 @@
           startedAt: serverNowMs(),
           endedAt: 0,
           order: ids,
-          currentIndex: nextIndex0,
-          currentPlayerId: nextId0,
+          currentIndex: startIndex,
+          currentPlayerId: startId,
           deck: deck,
           grave: grave,
           burn: '',
@@ -6615,7 +6567,7 @@
           peek: null,
           lastPlay: { by: startId, to: '', card: String(other0 || ''), at: serverNowMs(), text: lpText0 },
           reveal: { type: 'minister_overload', by: startId, had: '7', drew: String(other0 || '') },
-          waitFor: null,
+          waitFor: { type: 'minister_overload_ack', by: startId, pending: { type: 'minister_overload', pid: startId, other: String(other0 || '') } },
           winners: []
         };
       }
@@ -7077,31 +7029,13 @@
           var before = nextHand.length ? String(nextHand[0]) : '';
           nextHand.push(String(drawn2));
 
-          // Minister overload (house rule): discard Minister first, then the drawn card; draw 1 replacement and pass turn.
+          // Minister overload: resolve on acknowledgement (megane revives, normal princess does not).
           var total = (llCardRank(before) || 0) + (llCardRank(drawn2) || 0);
           if ((before === '7' || String(drawn2) === '7') && total >= 12) {
             var overPid = String(next.id || '');
             var other = before === '7' ? String(drawn2 || '') : String(before || '');
-            // Discard in order: 7 then other.
-            pushDiscard(overPid, '7');
-            if (other) pushDiscard(overPid, other);
-            hands[overPid] = [];
-
-            var repl = '';
-            var replFrom = '';
-            var dmo = llDrawFromRound(round);
-            if (dmo) {
-              repl = String(dmo);
-              replFrom = '山札';
-            } else {
-              var burnCard = grave && Array.isArray(grave) && grave.length ? String(grave[0] || '') : '';
-              if (burnCard) {
-                grave.shift();
-                repl = burnCard;
-                replFrom = '伏せ札';
-              }
-            }
-            if (repl) hands[overPid] = [repl];
+            hands[overPid] = ['7', other].filter(Boolean);
+            round.hands = hands;
 
             try {
               var otherDef = llCardDef(String(other || ''));
@@ -7111,50 +7045,15 @@
                 to: '',
                 card: String(other || ''),
                 at: serverNowMs(),
-                text:
-                  pname(overPid) +
-                  ' は大臣(7)を持っていて ' +
-                  otherLabel +
-                  ' を引いたため、まず大臣(7)を捨て、そのあと ' +
-                  otherLabel +
-                  ' を捨てた。' +
-                  (replFrom ? (replFrom + 'からカードを1枚引いて次ターンへ進む。') : '次ターンへ進む。')
+                text: pname(overPid) + ' が大臣(7)を持っていて ' + otherLabel + ' を引いたため脱落した。'
               };
             } catch (eLPmo) {
               // ignore
             }
 
-            round.hands = hands;
-            round.discards = discards;
-            round.eliminated = eliminated;
-            round.protected = protectedMap;
-            round.grave = grave;
-            round.reveal = null;
-            round.waitFor = null;
-
-            // Pass turn to the next alive player (skipping the overloaded player's turn).
-            var next2 = llFindNextAlive(round, order, next.index);
-            if (next2 && next2.id) {
-              round.currentIndex = next2.index;
-              round.currentPlayerId = next2.id;
-              round.protected[next2.id] = false;
-              var nh2 = Array.isArray(round.hands[next2.id]) ? round.hands[next2.id].slice() : [];
-              if (nh2.length < 2) {
-                var d2 = llDrawFromRound(round);
-                if (!d2) {
-                  var burn2 = grave && Array.isArray(grave) && grave.length ? String(grave[0] || '') : '';
-                  if (burn2) {
-                    grave.shift();
-                    d2 = burn2;
-                  }
-                }
-                if (d2) nh2.push(String(d2));
-              }
-              round.hands[next2.id] = nh2;
-            }
-
+            round.reveal = { type: 'minister_overload', by: overPid, had: '7', drew: String(other || '') };
+            round.waitFor = { type: 'minister_overload_ack', by: overPid, pending: { type: 'minister_overload', pid: overPid, other: String(other || '') } };
             nextRoom.round = round;
-            nextRoom.log = llAppendLog(nextRoom, pname(overPid) + '：大臣オーバーロード（2枚捨て→引き直し→次ターン）');
             return nextRoom;
           }
         }
@@ -7185,6 +7084,193 @@
 
       var nextRoom = assign({}, room);
       nextRoom.round = round;
+
+      // Minister overload acknowledgement: apply elimination now.
+      if (wfType === 'minister_overload_ack') {
+        var ps0 = room.players || {};
+        function pname0(pid) {
+          try {
+            return pid && ps0[pid] ? formatPlayerDisplayName(ps0[pid]) : String(pid || '-');
+          } catch (e) {
+            return String(pid || '-');
+          }
+        }
+
+        var overPid0 = String((wf.pending && wf.pending.pid) || wf.by || '');
+        var other0 = String((wf.pending && wf.pending.other) || '');
+        if (!other0) {
+          try {
+            var hh0 = round.hands && Array.isArray(round.hands[overPid0]) ? round.hands[overPid0] : [];
+            for (var hi0 = 0; hi0 < hh0.length; hi0++) {
+              var c0 = String(hh0[hi0] || '');
+              if (c0 && c0 !== '7') {
+                other0 = c0;
+                break;
+              }
+            }
+          } catch (eH0) {
+            other0 = '';
+          }
+        }
+
+        var order0 = Array.isArray(round.order) ? round.order : llListPlayerIdsByJoin(nextRoom);
+        var idx0 = parseIntSafe(round.currentIndex, 0);
+        if (overPid0) {
+          var iFind = order0.indexOf(overPid0);
+          if (iFind >= 0) idx0 = iFind;
+        }
+
+        var hands0 = assign({}, round.hands || {});
+        var discards0 = assign({}, round.discards || {});
+        var eliminated0 = assign({}, round.eliminated || {});
+        var protected0 = assign({}, round.protected || {});
+        var grave0 = Array.isArray(round.grave) ? round.grave.slice() : [];
+
+        function pushDiscard0(pid, cardRank) {
+          var d = Array.isArray(discards0[pid]) ? discards0[pid].slice() : [];
+          if (cardRank) d.push(String(cardRank));
+          discards0[pid] = d;
+          if (cardRank) grave0.push(String(cardRank));
+        }
+
+        function drawOne0() {
+          var d = llDrawFromRound(round);
+          if (d) return String(d);
+          var burnCard = grave0 && Array.isArray(grave0) && grave0.length ? String(grave0[0] || '') : '';
+          if (burnCard) {
+            grave0.shift();
+            return burnCard;
+          }
+          return '';
+        }
+
+        // Apply elimination: discard order must be 7 -> other.
+        eliminated0[overPid0] = true;
+        protected0[overPid0] = false;
+        pushDiscard0(overPid0, '7');
+        if (other0) pushDiscard0(overPid0, other0);
+        hands0[overPid0] = [];
+
+        var revived = false;
+        var revivedDraw = '';
+        var revivedFrom = '';
+        if (other0 === '8:megane') {
+          revivedDraw = drawOne0();
+          if (revivedDraw) {
+            hands0[overPid0] = [revivedDraw];
+          }
+          eliminated0[overPid0] = false;
+          protected0[overPid0] = false;
+          revived = true;
+          revivedFrom = Array.isArray(round.deck) && round.deck.length ? '山札' : '伏せ札';
+        }
+
+        try {
+          var otherDef = llCardDef(String(other0 || ''));
+          var otherLabel = String((otherDef && otherDef.name) || '-') + '(' + String((otherDef && otherDef.rank) || llCardRankStr(String(other0 || '')) || '-') + ')';
+          var extra = '';
+          if (revived) {
+            var drewDef = llCardDef(String(revivedDraw || ''));
+            var drewLabel = revivedDraw
+              ? String((drewDef && drewDef.name) || '-') + '(' + String((drewDef && drewDef.rank) || llCardRankStr(String(revivedDraw || '')) || '-') + ')'
+              : '（引けるカードがありません）';
+            extra = '（姫(眼鏡)：' + revivedFrom + 'から' + drewLabel + 'を引いて復活）';
+          }
+          round.lastPlay = {
+            by: String(overPid0 || ''),
+            to: '',
+            card: String(other0 || ''),
+            at: serverNowMs(),
+            text:
+              pname0(overPid0) +
+              ' が大臣(7)を持っていて ' +
+              otherLabel +
+              ' を引いたため脱落した。まず大臣(7)を捨て、そのあと ' +
+              otherLabel +
+              ' を捨てた。' +
+              extra +
+              '次ターンへ進む。'
+          };
+        } catch (eLPmo3) {
+          // ignore
+        }
+
+        // Write back.
+        round.hands = hands0;
+        round.discards = discards0;
+        round.eliminated = eliminated0;
+        round.protected = protected0;
+        round.grave = grave0;
+
+        // End checks.
+        nextRoom.round = round;
+        var alive0 = llAliveIds(nextRoom, round);
+        var deckLeft0 = Array.isArray(round.deck) ? round.deck.length : 0;
+        if (alive0.length <= 1) {
+          var winners0 = llRoundWinners(nextRoom, round);
+          round.winners = winners0;
+          round.endedAt = serverNowMs();
+          round.state = 'ended';
+          nextRoom.phase = 'finished';
+          nextRoom.result = { winners: winners0, finishedAt: serverNowMs() };
+          nextRoom.round = round;
+          nextRoom.log = llAppendLog(nextRoom, 'ゲーム終了');
+          return nextRoom;
+        }
+        if (deckLeft0 === 0) {
+          var hostId0 = llFindHostId(nextRoom) || String(round.currentPlayerId || '') || String(playerId || '');
+          round.reveal = { type: 'showdown', hostId: hostId0, hands: assign({}, round.hands || {}) };
+          round.waitFor = { type: 'showdown_ack', by: hostId0 };
+          nextRoom.round = round;
+          nextRoom.log = llAppendLog(nextRoom, '山札切れ：全員公開');
+          return nextRoom;
+        }
+
+        // Advance turn to next alive player.
+        round.order = order0;
+        round.currentIndex = idx0;
+        round.currentPlayerId = String(order0[idx0] || '');
+        var nxt0 = llFindNextAlive(round, order0, idx0);
+        if (nxt0 && nxt0.id) {
+          round.currentIndex = nxt0.index;
+          round.currentPlayerId = nxt0.id;
+          round.protected[nxt0.id] = false;
+
+          // Draw for next actor
+          var nh = Array.isArray(round.hands[nxt0.id]) ? round.hands[nxt0.id].slice() : [];
+          if (nh.length < 2) {
+            var d1 = llDrawFromRound(round);
+            if (!d1) {
+              var burn1 = round.grave && Array.isArray(round.grave) && round.grave.length ? String(round.grave[0] || '') : '';
+              if (burn1) {
+                round.grave.shift();
+                d1 = burn1;
+              }
+            }
+            if (d1) nh.push(String(d1));
+          }
+
+          // Minister overload can happen again on this draw.
+          if (nh.length >= 2) {
+            var x0 = String(nh[0] || '');
+            var y0 = String(nh[1] || '');
+            var tot0 = (llCardRank(x0) || 0) + (llCardRank(y0) || 0);
+            if ((x0 === '7' || y0 === '7') && tot0 >= 12) {
+              var otherN = x0 === '7' ? y0 : x0;
+              round.hands[nxt0.id] = ['7', otherN].filter(Boolean);
+              round.reveal = { type: 'minister_overload', by: nxt0.id, had: '7', drew: String(otherN || '') };
+              round.waitFor = { type: 'minister_overload_ack', by: nxt0.id, pending: { type: 'minister_overload', pid: nxt0.id, other: String(otherN || '') } };
+              nextRoom.round = round;
+              return nextRoom;
+            }
+          }
+
+          round.hands[nxt0.id] = nh;
+        }
+
+        nextRoom.round = round;
+        return nextRoom;
+      }
 
       // Determine end of round after any elimination that already happened.
       var alive = llAliveIds(nextRoom, round);
