@@ -7087,6 +7087,10 @@
 
       // Minister overload acknowledgement: apply elimination now.
       if (wfType === 'minister_overload_ack') {
+        // Clear modal gating by default; we may set a new waitFor later.
+        round.waitFor = null;
+        round.reveal = null;
+
         var ps0 = room.players || {};
         function pname0(pid) {
           try {
