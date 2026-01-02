@@ -4072,6 +4072,7 @@
       if (firstIdx < 0) firstIdx = 0;
       st.turn = { index: firstIdx, playerId: String(order[firstIdx] || '') };
       st.started = false;
+      st.turnCount = 0;
       st.pending = null;
       st.allies = {};
       st.lastPlay = { at: 0, playerId: '', cardId: '' };
@@ -4183,6 +4184,9 @@
         var cTitle = '';
         var cBody = '';
         var cErr = '';
+        var showOk = true;
+        var cancelLabel = 'キャンセル';
+        var okLabel = '決定';
 
         if (cType === 'play') {
           var cCardId = String(c.cardId || '');
@@ -4199,6 +4203,10 @@
         } else if (cType === 'deal') {
           cTitle = '取引：このカードを出す';
           cBody = '<div class="ll-action-card">' + hnCardImgHtml(String(c.cardId || '')) + '</div>';
+        } else if (cType === 'notice') {
+          cTitle = String(c.title || '注意');
+          cBody = '<div class="muted center">' + escapeHtml(String(c.message || '')) + '</div>';
+          showOk = false;
         }
 
         confirmHtml =
@@ -4210,8 +4218,8 @@
           (cBody || '') +
           '<div id="hnConfirmError" class="form-error" role="alert">' + cErr + '</div>' +
           '<div class="row ll-modal-actions" style="justify-content:space-between">' +
-          '<button class="ghost" id="hnConfirmCancel">キャンセル</button>' +
-          '<button class="primary" id="hnConfirmOk">決定</button>' +
+          '<button class="ghost" id="hnConfirmCancel">' + escapeHtml(cancelLabel) + '</button>' +
+          (showOk ? '<button class="primary" id="hnConfirmOk">' + escapeHtml(okLabel) + '</button>' : '') +
           '</div>' +
           '</div>' +
           '</div>' +
@@ -4269,6 +4277,20 @@
           '</div>' +
           '<div class="row ll-modal-actions" style="justify-content:center">' +
           '<button class="primary" id="hnPrivateOk">OK</button>' +
+          '</div>' +
+          '</div>' +
+          '</div>' +
+          '</div>';
+      } else if (pmsg && String(pmsg.type || '') === 'detective_alibi') {
+        privateHtml =
+          '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
+          '<div class="ll-overlay-backdrop" id="hnPrivateBg"></div>' +
+          '<div class="ll-overlay-panel">' +
+          '<div class="stack">' +
+          '<div class="big ll-modal-title">探偵</div>' +
+          '<div class="muted center">アリバイにより探偵の効果は無効です。</div>' +
+          '<div class="row ll-modal-actions" style="justify-content:center">' +
+          '<button class="primary" id="hnPrivateOk">犯人ではない</button>' +
           '</div>' +
           '</div>' +
           '</div>' +
@@ -4610,7 +4632,7 @@
         '<div class="ll-topline">' +
         '<div class="ll-status">犯人は踊る ' + escapeHtml(playerId ? ('/ ' + hnPlayerName(room, playerId)) : '') + '</div>' +
         '<div class="badge">' +
-        escapeHtml(isMyTurn ? 'TURN' : 'WAIT') +
+        escapeHtml('手番: ' + (turnPid ? hnPlayerName(room, turnPid) : '-')) +
         '</div>' +
         '</div>' +
         (privateHtml || '') +
@@ -4661,12 +4683,50 @@
       hnHandFrontIndex: 0,
       hnInfoSelectedIndex: -1,
       hnRumorSelectedIndex: -1,
+      hnPrevHand: [],
       inFlight: false,
       autoKeyDone: {},
       hnAction: null,
       hnReveal: null,
       hnConfirm: null
     };
+
+    function hnFindNewCardIndex(prevHand, curHand) {
+      var prev = Array.isArray(prevHand) ? prevHand : [];
+      var cur = Array.isArray(curHand) ? curHand : [];
+      if (!cur.length) return -1;
+      if (!prev.length) return cur.length - 1;
+
+      var prevCount = {};
+      for (var i = 0; i < prev.length; i++) {
+        var id = String(prev[i] || '');
+        if (!id) continue;
+        prevCount[id] = (prevCount[id] || 0) + 1;
+      }
+
+      var curCount = {};
+      for (var j = 0; j < cur.length; j++) {
+        var id2 = String(cur[j] || '');
+        if (!id2) continue;
+        curCount[id2] = (curCount[id2] || 0) + 1;
+      }
+
+      var newId = '';
+      var keys = Object.keys(curCount);
+      for (var k = 0; k < keys.length; k++) {
+        var key = keys[k];
+        if ((curCount[key] || 0) > (prevCount[key] || 0)) {
+          newId = key;
+          break;
+        }
+      }
+      if (!newId) return -1;
+
+      for (var z = cur.length - 1; z >= 0; z--) {
+        if (String(cur[z] || '') === newId) return z;
+      }
+      return -1;
+    }
 
     function canOperateThisDevice() {
       // Table device only operates test players.
@@ -4734,6 +4794,20 @@
 
     function renderNow(room) {
       lastRoom = room;
+
+      // Bring newly received cards (rumor/info/deal results) to the front.
+      try {
+        var st0 = room && room.state ? room.state : null;
+        var h0 = st0 && st0.hands && playerId && Array.isArray(st0.hands[playerId]) ? st0.hands[playerId] : [];
+        var newIdx = hnFindNewCardIndex(ui.hnPrevHand, h0);
+        if (newIdx >= 0 && newIdx < h0.length) {
+          ui.hnHandFrontIndex = newIdx;
+        }
+        ui.hnPrevHand = Array.isArray(h0) ? h0.slice() : [];
+      } catch (eFront) {
+        // ignore
+      }
+
       renderHanninPlayer(viewEl, { roomId: roomId, room: room, playerId: playerId, lobbyId: lobbyId, isHost: isHost, ui: ui, isTableGmDevice: isTableGmDevice });
 
       // Bind handlers on the freshly rendered DOM (important: renderNow can be called from events).
@@ -5321,6 +5395,20 @@
 
       var cardId = String(myHand[idx] || '');
 
+      // Before start, only the first discoverer card can be used (no reaction otherwise).
+      if (!st.started && cardId !== 'first') return;
+
+      // Detective can only be used from the 2nd round and later.
+      if (cardId === 'detective' && st.started) {
+        var tc = parseIntSafe(st.turnCount, -1);
+        var order = Array.isArray(st.order) ? st.order : [];
+        if (tc >= 0 && order && order.length && tc < order.length) {
+          ui.hnConfirm = { type: 'notice', title: '探偵', message: '探偵は二週目以降でしか使えません' };
+          renderNow(lastRoom);
+          return;
+        }
+      }
+
       // Cards with choices: open modal instead of prompt.
       if (cardId === 'detective' || cardId === 'dog' || cardId === 'deal' || cardId === 'witness') {
         ui.hnAction = { type: 'play', cardIndex: idx, cardId: cardId, step: 'target', targetPid: '', targetIndex: -1, giveIndex: -1, takeIndex: -1 };
@@ -5577,6 +5665,13 @@
         if (cardId !== 'first') return room;
       }
 
+      // Detective can only be played from the 2nd round and later.
+      if (cardId === 'detective' && st.started) {
+        if (typeof st.turnCount !== 'number') st.turnCount = order.length;
+        var tc0 = parseIntSafe(st.turnCount, 0);
+        if (order && order.length && tc0 < order.length) return room;
+      }
+
       // Culprit can only be played when it's the only card in hand.
       if (cardId === 'culprit') {
         if (h.length !== 1) return room;
@@ -5588,6 +5683,10 @@
       h.splice(idx, 1);
       hands[pid] = h;
       grave.push(cardId);
+
+      // Count turns (used for round-based restrictions).
+      if (typeof st.turnCount !== 'number') st.turnCount = 0;
+      st.turnCount = (parseIntSafe(st.turnCount, 0) || 0) + 1;
 
       st.hands = hands;
       st.graveyard = grave;
@@ -5618,7 +5717,7 @@
       if (cardId === 'plot') {
         if (!st.allies || typeof st.allies !== 'object') st.allies = {};
         st.allies[pid] = true;
-        st.log = st.log.concat([nm + ' は犯人側についた']);
+        // No immediate effect (behaves like citizen for now).
         advanceTurn();
         return assign({}, room, { state: st });
       }
@@ -5643,12 +5742,25 @@
           if (String(th[iC] || '') === 'culprit') hasC = true;
           if (String(th[iC] || '') === 'alibi') hasA = true;
         }
+
+        // If the target has any alibi, detective is nullified regardless of culprit.
+        if (hasA) {
+          try {
+            if (!st.private || typeof st.private !== 'object') st.private = {};
+            st.private[pid] = { type: 'detective_alibi', createdAt: serverNowMs(), targetPid: String(tPid || '') };
+          } catch (eDA) {
+            // ignore
+          }
+          st.log = st.log.concat(['アリバイにより探偵の効果は無効']);
+          advanceTurn();
+          return assign({}, room, { state: st });
+        }
+
         if (hasC && !hasA) {
           hnSetResult(st, 'citizen', room, tPid, '探偵が犯人を指摘した');
           st.log = st.log.concat(['一般人側の勝利']);
           return assign({}, room, { state: st });
         }
-        if (hasC && hasA) st.log = st.log.concat(['アリバイにより指摘は無効']);
         advanceTurn();
         return assign({}, room, { state: st });
       }
