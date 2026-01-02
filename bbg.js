@@ -3584,21 +3584,19 @@
   }
 
   function hnTestPlayerLabel(pid) {
-    try {
-      var m = /^__hn_test_(\d+)$/.exec(String(pid || ''));
-      if (m) return 'テスト' + String(m[1] || '');
-    } catch (e) {
-      // ignore
-    }
     return '';
   }
 
   function hnIsTestPlayerId(pid) {
-    try {
-      return /^__hn_test_\d+$/.test(String(pid || ''));
-    } catch (e) {
-      return false;
-    }
+    return false;
+  }
+
+  function hnGraveIconHtml(cardId) {
+    var id = String(cardId || '');
+    var def = HANNIN_CARD_DEFS[id] || { name: id || '-', icon: '' };
+    var icon = def && def.icon ? String(def.icon) : '';
+    if (!icon) return '';
+    return '<img class="ll-grave-icon" draggable="false" alt="' + escapeHtml(def.name || id) + '" src="' + escapeHtml(icon) + '" />';
   }
 
   function llCardRankStr(cardId) {
@@ -3890,6 +3888,7 @@
         order: Array.isArray(st.order) ? st.order.slice() : [],
         hands: {},
         graveyard: [],
+        used: {},
         turn: { index: 0, playerId: '' },
         log: [],
         result: { winner: '', decidedAt: 0, reason: '' }
@@ -4056,17 +4055,20 @@
       if (deck.length < 4 * n) return room;
 
       var hands = {};
+      var used = {};
       var idx = 0;
       for (var i = 0; i < order.length; i++) {
         var pid = String(order[i] || '');
         if (!pid) continue;
         hands[pid] = [String(deck[idx++]), String(deck[idx++]), String(deck[idx++]), String(deck[idx++])];
+        used[pid] = [];
       }
 
       var firstPid = hnFindFirstHolder(order, hands);
       st.order = order;
       st.hands = hands;
       st.graveyard = [];
+      st.used = used;
       // Start rule: the player who holds "first" starts, and only "first" can be played until it is used.
       var firstIdx = order.indexOf(String(firstPid || ''));
       if (firstIdx < 0) firstIdx = 0;
@@ -4136,13 +4138,8 @@
     var pending = (st && st.pending) || null;
     var myHand = playerId && hands && Array.isArray(hands[playerId]) ? hands[playerId] : [];
 
-    // Table device should not operate real players.
-    var canOperate = true;
-    try {
-      canOperate = !(isTableGmDevice && !hnIsTestPlayerId(playerId));
-    } catch (eOp) {
-      canOperate = true;
-    }
+    // Table device should not operate player screens.
+    var canOperate = !isTableGmDevice;
 
     var alreadyChosenInfo = false;
     try {
@@ -4171,6 +4168,21 @@
     }
 
     var contentHtml = '';
+
+    // "墓地" (used cards) - show your played cards in the top-right like LoveLetter.
+    var pilesHtml = '';
+    try {
+      var usedMine = st && st.used && playerId && Array.isArray(st.used[String(playerId)]) ? st.used[String(playerId)] : [];
+      var icons = '';
+      for (var ui0 = 0; ui0 < usedMine.length; ui0++) icons += hnGraveIconHtml(String(usedMine[ui0] || ''));
+      pilesHtml =
+        '<div class="ll-piles-box">' +
+        '<div class="ll-piles-text">墓地</div>' +
+        '<div class="hn-grave-icons">' + icons + '</div>' +
+        '</div>';
+    } catch (ePile) {
+      pilesHtml = '';
+    }
 
     // Action modal (target/index selection like LoveLetter)
     var modalHtml = '';
@@ -4318,7 +4330,26 @@
           '</div>' +
           '</div>' +
           '</div>';
+      } else if (pmsg && String(pmsg.type || '') === 'not_culprit') {
+        var np = String(pmsg.targetPid || '');
+        var nname = np ? hnPlayerName(room, np) : '';
+        var by = String(pmsg.byCard || '');
+        var title2 = by === 'detective' ? '探偵' : by === 'dog' ? 'いぬ' : '結果';
+        privateHtml =
+          '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
+          '<div class="ll-overlay-backdrop" id="hnPrivateBg"></div>' +
+          '<div class="ll-overlay-panel">' +
+          '<div class="stack">' +
+          '<div class="big ll-modal-title">' + escapeHtml(title2) + '</div>' +
+          '<div class="muted center">' + escapeHtml((nname || '対象') + 'は犯人ではありません') + '</div>' +
+          '<div class="row ll-modal-actions" style="justify-content:center">' +
+          '<button class="primary" id="hnPrivateOk">OK</button>' +
+          '</div>' +
+          '</div>' +
+          '</div>' +
+          '</div>';
       } else if (pmsg && String(pmsg.type || '') === 'dog_not_culprit') {
+        // Back-compat for older rooms.
         privateHtml =
           '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
           '<div class="ll-overlay-backdrop" id="hnPrivateBg"></div>' +
@@ -4607,12 +4638,13 @@
         if (frontIdx < 0 || frontIdx >= myHand.length) frontIdx = 0;
 
         // Compute an approximate pixel step as cardHeight/6.
+        // Reduce overlap by 20% (increase offset).
         var stepPx = 72;
         try {
           var vw = (typeof window !== 'undefined' && window && window.innerWidth) ? window.innerWidth : 420;
           var cardW = Math.min(340, Math.floor(vw * 0.9));
           var cardH = cardW * (4 / 3);
-          stepPx = Math.max(12, Math.round(cardH / 6));
+          stepPx = Math.max(12, Math.round((cardH / 6) * 1.2));
         } catch (eStep) {
           stepPx = 72;
         }
@@ -4750,6 +4782,7 @@
         escapeHtml('手番: ' + (turnPid ? hnPlayerName(room, turnPid) : '-')) +
         '</div>' +
         '</div>' +
+        (pilesHtml || '') +
         (resultHtml || '') +
         (privateHtml || '') +
         (revealHtml || '') +
@@ -4894,9 +4927,8 @@
     }
 
     function canOperateThisDevice() {
-      // Table device only operates test players.
-      if (isTableGmDevice && !hnIsTestPlayerId(playerId)) return false;
-      return true;
+      // Table GM device should not operate player screens.
+      return !isTableGmDevice;
     }
 
     function clearActionModal() {
@@ -5831,6 +5863,7 @@
       var order = Array.isArray(st.order) ? st.order.slice() : [];
       var hands = assign({}, st.hands || {});
       var grave = Array.isArray(st.graveyard) ? st.graveyard.slice() : [];
+      var used = assign({}, st.used || {});
 
       var turnPid = String(st.turn && st.turn.playerId ? st.turn.playerId : '');
       var pid = String(actorId || '');
@@ -5870,6 +5903,13 @@
       h.splice(idx, 1);
       hands[pid] = h;
       grave.push(cardId);
+      try {
+        var u0 = used && Array.isArray(used[pid]) ? used[pid].slice() : [];
+        u0.push(cardId);
+        used[pid] = u0;
+      } catch (eUsed0) {
+        // ignore
+      }
 
       // Count turns (used for round-based restrictions).
       if (typeof st.turnCount !== 'number') st.turnCount = 0;
@@ -5877,6 +5917,7 @@
 
       st.hands = hands;
       st.graveyard = grave;
+      st.used = used;
       st.lastPlay = { at: serverNowMs(), playerId: pid, cardId: cardId };
       if (!Array.isArray(st.log)) st.log = [];
 
@@ -5934,7 +5975,12 @@
         if (hasA) {
           try {
             if (!st.private || typeof st.private !== 'object') st.private = {};
-            st.private[pid] = { type: 'detective_alibi', createdAt: serverNowMs(), targetPid: String(tPid || '') };
+            var at0 = serverNowMs();
+            for (var da0 = 0; da0 < order.length; da0++) {
+              var pda0 = String(order[da0] || '');
+              if (!pda0) continue;
+              st.private[pda0] = { type: 'detective_alibi', createdAt: at0, targetPid: String(tPid || '') };
+            }
           } catch (eDA) {
             // ignore
           }
@@ -5947,6 +5993,18 @@
           hnSetResult(st, 'citizen', room, tPid, '探偵が犯人を指摘した');
           st.log = st.log.concat(['一般人側の勝利']);
           return assign({}, room, { state: st });
+        }
+
+        // Not culprit: broadcast to all players.
+        try {
+          if (!st.private || typeof st.private !== 'object') st.private = {};
+          for (var bi = 0; bi < order.length; bi++) {
+            var pbi = String(order[bi] || '');
+            if (!pbi) continue;
+            st.private[pbi] = { type: 'not_culprit', byCard: 'detective', createdAt: serverNowMs(), targetPid: String(tPid || '') };
+          }
+        } catch (eNC0) {
+          // ignore
         }
         advanceTurn();
         return assign({}, room, { state: st });
@@ -5970,11 +6028,15 @@
           return assign({}, room, { state: st });
         }
 
-        // Not culprit: show a private modal to the actor.
+        // Not culprit: broadcast to all players.
         try {
           if (!st.private || typeof st.private !== 'object') st.private = {};
-          st.private[pid] = { type: 'dog_not_culprit', createdAt: serverNowMs(), targetPid: String(tPid2 || '') };
-        } catch (eDogN) {
+          for (var bj = 0; bj < order.length; bj++) {
+            var pbj = String(order[bj] || '');
+            if (!pbj) continue;
+            st.private[pbj] = { type: 'not_culprit', byCard: 'dog', createdAt: serverNowMs(), targetPid: String(tPid2 || '') };
+          }
+        } catch (eDogN2) {
           // ignore
         }
         advanceTurn();
@@ -6622,6 +6684,13 @@
 
       var logText = actorName + ' が ' + cardDef.name + '(' + cardDef.rank + ') を使用';
 
+      // Persist the latest play so the table can show it until the next play.
+      try {
+        round.lastPlay = { by: String(actorId || ''), card: String(card || ''), at: serverNowMs() };
+      } catch (eLP0) {
+        // ignore
+      }
+
       // Apply effects
       if (cardRankStr === '1') {
         // Guard: choose target + guess (2-8)
@@ -6665,6 +6734,8 @@
             var seen = getSingleHand(t2);
             peek = { to: actorId, target: t2, card: seen, until: serverNowMs() + 60000 };
             logText += ' → ' + pname(t2) + ' の手札を確認';
+            // Show arrow on table while waiting for ack.
+            round.reveal = { type: 'clown', by: actorId, target: t2 };
             // Block turn advancement until the peeker acknowledges.
             round.waitFor = { type: 'peek_ack', by: actorId };
           }
@@ -10222,17 +10293,6 @@
           try {
             var ids0 = normalizeOrder(lobby);
             var n0 = Array.isArray(ids0) ? ids0.length : 0;
-            if (kind === 'hannin' && isDevDebugSite() && Array.isArray(ids0)) {
-              var real0 = 0;
-              for (var r0 = 0; r0 < ids0.length; r0++) {
-                var id0 = String(ids0[r0] || '');
-                if (!id0) continue;
-                if (/^__hn_test_\d+$/.test(id0)) continue;
-                real0++;
-              }
-              // Only boost to 5 when at least one real participant exists.
-              if (real0 >= 1) n0 = Math.max(n0, 5);
-            }
             var min = 0;
             if (kind === 'loveletter') min = 2;
             else if (kind === 'codenames') min = 4;
@@ -10385,25 +10445,6 @@
                 var orderH = normalizeOrder(lobby);
                 var membersH = (lobby && lobby.members) || {};
 
-                // Dev-only: auto-inject test players for quick UI iteration.
-                if (isDevDebugSite() && Array.isArray(orderH)) {
-                  var realH = 0;
-                  for (var rr = 0; rr < orderH.length; rr++) {
-                    var idH0 = String(orderH[rr] || '');
-                    if (!idH0) continue;
-                    if (/^__hn_test_\d+$/.test(idH0)) continue;
-                    realH++;
-                  }
-                  if (realH >= 1) {
-                  var nextNo = 1;
-                  while (orderH.length < 5) {
-                    var tid = '__hn_test_' + String(nextNo++);
-                    if (orderH.indexOf(tid) === -1) orderH.push(tid);
-                    if (nextNo > 20) break;
-                  }
-                  }
-                }
-
                 hostPidH = isTableGm ? (orderH && orderH.length ? String(orderH[0] || '') : '') : String(mid || '');
                 if (orderH.indexOf(hostPidH) === -1) hostPidH = orderH && orderH.length ? String(orderH[0] || '') : hostPidH;
                 return createHanninRoom(roomId, { order: orderH })
@@ -10413,7 +10454,7 @@
                       (function (pidH) {
                         seqH = seqH.then(function () {
                           var nmH = membersH && membersH[pidH] && membersH[pidH].name ? String(membersH[pidH].name) : '';
-                          if (!nmH) nmH = hnTestPlayerLabel(pidH) || '-';
+                          if (!nmH) nmH = '-';
                           return joinPlayerInHanninRoom(roomId, pidH, nmH || '-', hostPidH && String(pidH) === String(hostPidH));
                         });
                       })(orderH[hA]);
@@ -14096,6 +14137,30 @@
     var deckLeft = r && Array.isArray(r.deck) ? r.deck.length : 0;
     var graveArr = r && Array.isArray(r.grave) ? r.grave : [];
 
+    function pname(pid) {
+      try {
+        return pid && ps[pid] ? formatPlayerDisplayName(ps[pid]) : String(pid || '-');
+      } catch (e) {
+        return String(pid || '-');
+      }
+    }
+
+    var lastPlayHtml = '';
+    try {
+      var lp = r && r.lastPlay ? r.lastPlay : null;
+      var lpBy = lp && lp.by ? String(lp.by) : '';
+      var lpCard = lp && lp.card ? String(lp.card) : '';
+      if (phase !== 'lobby' && lpBy && lpCard) {
+        var dlp = llCardDef(lpCard);
+        lastPlayHtml =
+          '<div class="ll-table-lastplay muted" aria-live="polite">' +
+          escapeHtml(pname(lpBy) + '：' + String((dlp && dlp.name) || '-') + '(' + String((dlp && dlp.rank) || llCardRankStr(lpCard) || '-') + ')') +
+          '</div>';
+      }
+    } catch (eLP) {
+      lastPlayHtml = '';
+    }
+
     var centerHtml = '';
     var facedownHtml = '';
     if (phase === 'lobby') {
@@ -14149,6 +14214,7 @@
         '<div class="ll-table-pile-stack">' +
         deckStack +
         '</div>' +
+        (lastPlayHtml || '') +
         '</div>' +
         '<div class="ll-table-pile">' +
         '<div class="muted">墓地</div>' +
@@ -14195,6 +14261,7 @@
       var isTurnSeat = !!(turnPid && String(pid) === String(turnPid));
       var isElimSeat = !!(r && r.eliminated && r.eliminated[String(pid)]);
       var isSoloEffectSeat = !!(effectSoloId && String(pid) === String(effectSoloId));
+      var isProtectedSeat = !!(phase === 'playing' && r && r.protected && r.protected[String(pid)]);
       seatsHtml +=
         '<div class="ll-seat' +
         (isTurnSeat ? ' ll-seat--turn' : '') +
@@ -14208,7 +14275,8 @@
         escapeHtml(String(y.toFixed(3))) +
         '%">' +
         '<div class="ll-seat-card">' +
-        escapeHtml(nm) +
+        '<div class="ll-seat-name">' + escapeHtml(nm) + '</div>' +
+        (isProtectedSeat && !isElimSeat ? '<div class="ll-seat-sub muted">僧侶により保護中</div>' : '') +
         '</div>' +
         '</div>';
     }
@@ -14282,6 +14350,7 @@
       function revealCardRank(rev) {
         var t = rev && rev.type ? String(rev.type) : '';
         if (t === 'guard') return '1';
+        if (t === 'clown') return '2';
         if (t === 'knight') return '3';
         if (t === 'wizard_discard') return '5';
         if (t === 'general_swap') return '6';
@@ -14404,8 +14473,12 @@
           var d = rank ? llCardDef(rank) : null;
           var icon = d && d.icon ? String(d.icon) : '';
           if (rank && icon) {
-            var midX = (lineStart.x + lineEnd.x) / 2;
-            var midY = (lineStart.y + lineEnd.y) / 2;
+            // Place the icon closer to the acting player.
+            var tx = lineEnd.x - lineStart.x;
+            var ty = lineEnd.y - lineStart.y;
+            var tpos = 0.35;
+            var midX = lineStart.x + tx * tpos;
+            var midY = lineStart.y + ty * tpos;
             iconEl.style.left = String(midX.toFixed(1)) + 'px';
             iconEl.style.top = String(midY.toFixed(1)) + 'px';
             iconEl.style.display = 'block';
