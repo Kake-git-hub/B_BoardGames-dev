@@ -4386,6 +4386,207 @@
     function renderNow(room) {
       lastRoom = room;
       renderHanninPlayer(viewEl, { roomId: roomId, room: room, playerId: playerId, lobbyId: lobbyId, isHost: isHost, ui: ui });
+
+      // Bind handlers on the freshly rendered DOM (important: renderNow can be called from events).
+      var cards = document.querySelectorAll('.hnPCard');
+      for (var iC = 0; iC < cards.length; iC++) {
+        var el = cards[iC];
+        if (!el) continue;
+
+        if (!el.__hn_click_bound) {
+          el.__hn_click_bound = true;
+          el.addEventListener('click', function (ev) {
+            var t = ev && ev.currentTarget ? ev.currentTarget : null;
+            if (!t) return;
+            var idx = parseIntSafe(t.getAttribute('data-hn-idx'), -1);
+            if (idx < 0) return;
+
+            try {
+              var st = lastRoom && lastRoom.state ? lastRoom.state : null;
+              var pending = st && st.pending ? st.pending : null;
+              if (pending && pending.type === 'info') {
+                // Tap only sets local pre-selection (no blue frame shown).
+                ui.hnInfoSelectedIndex = idx;
+              } else {
+                ui.hnHandFrontIndex = idx;
+              }
+            } catch (e) {
+              // ignore
+            }
+            renderNow(lastRoom);
+          });
+        }
+
+        if (!el.__hn_hold_bound) {
+          el.__hn_hold_bound = true;
+          (function (btn) {
+            var holdMs = CN_LONG_PRESS_MS;
+            var timer = null;
+            var longFired = false;
+
+            function clearTimer() {
+              if (timer) {
+                clearTimeout(timer);
+                timer = null;
+              }
+            }
+
+            function startHold(ev) {
+              if (ui.inFlight) return;
+              if (ev && ev.button != null && ev.button !== 0) return;
+              if (ev && ev.preventDefault) ev.preventDefault();
+
+              clearTimer();
+              longFired = false;
+
+              var idx = parseIntSafe(btn.getAttribute('data-hn-idx'), -1);
+              if (idx < 0) return;
+
+              timer = setTimeout(function () {
+                longFired = true;
+                clearTimer();
+
+                try {
+                  var st = lastRoom && lastRoom.state ? lastRoom.state : null;
+                  var pending = st && st.pending ? st.pending : null;
+                  if (pending && pending.type === 'info') {
+                    // Long-press confirms currently selected card.
+                    if (parseIntSafe(ui.hnInfoSelectedIndex, -1) < 0) {
+                      ui.hnInfoSelectedIndex = idx;
+                      renderNow(lastRoom);
+                      return;
+                    }
+                    tryConfirmInfoByLongPress();
+                    return;
+                  }
+                  if (pending && pending.type === 'rumor') {
+                    // Long-press confirms currently selected facedown card.
+                    tryConfirmRumorByLongPress();
+                    return;
+                  }
+                } catch (e) {
+                  // ignore
+                }
+
+                // Normal play.
+                tryPlayCardByLongPress(idx);
+              }, holdMs);
+            }
+
+            btn.addEventListener('click', function (ev) {
+              // Ignore tap after long-press.
+              if (longFired) {
+                longFired = false;
+                if (ev && ev.preventDefault) ev.preventDefault();
+                if (ev && ev.stopPropagation) ev.stopPropagation();
+              }
+            });
+
+            if (typeof PointerEvent !== 'undefined') {
+              btn.addEventListener('pointerdown', startHold);
+              btn.addEventListener('pointerup', clearTimer);
+              btn.addEventListener('pointercancel', clearTimer);
+              btn.addEventListener('pointerleave', clearTimer);
+            } else {
+              btn.addEventListener('touchstart', startHold);
+              btn.addEventListener('touchend', clearTimer);
+              btn.addEventListener('touchcancel', clearTimer);
+
+              btn.addEventListener('mousedown', startHold);
+              btn.addEventListener('mouseup', clearTimer);
+              btn.addEventListener('mouseleave', clearTimer);
+            }
+
+            btn.addEventListener('contextmenu', function (ev) {
+              if (ev && ev.preventDefault) ev.preventDefault();
+            });
+          })(el);
+        }
+      }
+
+      var rumorPicks = document.querySelectorAll('.hnRumorPick');
+      for (var rP = 0; rP < rumorPicks.length; rP++) {
+        var rpEl = rumorPicks[rP];
+        if (!rpEl) continue;
+
+        if (!rpEl.__hn_click_bound) {
+          rpEl.__hn_click_bound = true;
+          rpEl.addEventListener('click', function (ev) {
+            var t = ev && ev.currentTarget ? ev.currentTarget : null;
+            if (!t) return;
+            var idx = parseIntSafe(t.getAttribute('data-hn-rumor-idx'), -1);
+            if (idx < 0) return;
+            ui.hnRumorSelectedIndex = idx;
+            renderNow(lastRoom);
+          });
+        }
+
+        if (!rpEl.__hn_hold_bound) {
+          rpEl.__hn_hold_bound = true;
+          (function (btn) {
+            var holdMs = CN_LONG_PRESS_MS;
+            var timer = null;
+            var longFired = false;
+
+            function clearTimer() {
+              if (timer) {
+                clearTimeout(timer);
+                timer = null;
+              }
+            }
+
+            function startHold(ev) {
+              if (ui.inFlight) return;
+              if (ev && ev.button != null && ev.button !== 0) return;
+              if (ev && ev.preventDefault) ev.preventDefault();
+              clearTimer();
+              longFired = false;
+
+              timer = setTimeout(function () {
+                longFired = true;
+                clearTimer();
+                // Enforce tap-select then long-press confirm.
+                if (parseIntSafe(ui.hnRumorSelectedIndex, -1) < 0) {
+                  var idx = parseIntSafe(btn.getAttribute('data-hn-rumor-idx'), -1);
+                  if (idx >= 0) {
+                    ui.hnRumorSelectedIndex = idx;
+                    renderNow(lastRoom);
+                  }
+                  return;
+                }
+                tryConfirmRumorByLongPress();
+              }, holdMs);
+            }
+
+            btn.addEventListener('click', function (ev) {
+              if (longFired) {
+                longFired = false;
+                if (ev && ev.preventDefault) ev.preventDefault();
+                if (ev && ev.stopPropagation) ev.stopPropagation();
+              }
+            });
+
+            if (typeof PointerEvent !== 'undefined') {
+              btn.addEventListener('pointerdown', startHold);
+              btn.addEventListener('pointerup', clearTimer);
+              btn.addEventListener('pointercancel', clearTimer);
+              btn.addEventListener('pointerleave', clearTimer);
+            } else {
+              btn.addEventListener('touchstart', startHold);
+              btn.addEventListener('touchend', clearTimer);
+              btn.addEventListener('touchcancel', clearTimer);
+
+              btn.addEventListener('mousedown', startHold);
+              btn.addEventListener('mouseup', clearTimer);
+              btn.addEventListener('mouseleave', clearTimer);
+            }
+
+            btn.addEventListener('contextmenu', function (ev) {
+              if (ev && ev.preventDefault) ev.preventDefault();
+            });
+          })(rpEl);
+        }
+      }
     }
 
     function tryPlayCardByLongPress(cardIndex) {
@@ -4579,199 +4780,6 @@
           }
           renderNow(room);
           maybeAutoAdvancePendingForTests(room);
-
-          // Tap: bring card to front, or (during info) select card.
-          var cards = document.querySelectorAll('.hnPCard');
-          for (var iC = 0; iC < cards.length; iC++) {
-            var el = cards[iC];
-            if (!el || el.__hn_bound) continue;
-            el.__hn_bound = true;
-
-            el.addEventListener('click', function (ev) {
-              var t = ev && ev.currentTarget ? ev.currentTarget : null;
-              if (!t) return;
-              var idx = parseIntSafe(t.getAttribute('data-hn-idx'), -1);
-              if (idx < 0) return;
-
-              try {
-                var st = lastRoom && lastRoom.state ? lastRoom.state : null;
-                var pending = st && st.pending ? st.pending : null;
-                if (pending && pending.type === 'info') {
-                  // Tap only sets local pre-selection (no blue frame shown).
-                  ui.hnInfoSelectedIndex = idx;
-                } else {
-                  ui.hnHandFrontIndex = idx;
-                }
-              } catch (e) {
-                // ignore
-              }
-              renderNow(lastRoom);
-            });
-          }
-
-          // Long-press: play card, or confirm selection (info/rumor).
-          for (var iL = 0; iL < cards.length; iL++) {
-            (function (btn) {
-              var holdMs = CN_LONG_PRESS_MS;
-              var timer = null;
-              var longFired = false;
-
-              function clearTimer() {
-                if (timer) {
-                  clearTimeout(timer);
-                  timer = null;
-                }
-              }
-
-              function startHold(ev) {
-                if (ui.inFlight) return;
-                if (ev && ev.button != null && ev.button !== 0) return;
-                if (ev && ev.preventDefault) ev.preventDefault();
-
-                clearTimer();
-                longFired = false;
-
-                var idx = parseIntSafe(btn.getAttribute('data-hn-idx'), -1);
-                if (idx < 0) return;
-
-                timer = setTimeout(function () {
-                  longFired = true;
-                  clearTimer();
-
-                  try {
-                    var st = lastRoom && lastRoom.state ? lastRoom.state : null;
-                    var pending = st && st.pending ? st.pending : null;
-                    if (pending && pending.type === 'info') {
-                      // Long-press confirms currently selected card.
-                      if (parseIntSafe(ui.hnInfoSelectedIndex, -1) < 0) {
-                        ui.hnInfoSelectedIndex = idx;
-                        renderNow(lastRoom);
-                        return;
-                      }
-                      tryConfirmInfoByLongPress();
-                      return;
-                    }
-                    if (pending && pending.type === 'rumor') {
-                      // Long-press confirms currently selected facedown card.
-                      tryConfirmRumorByLongPress();
-                      return;
-                    }
-                  } catch (e) {
-                    // ignore
-                  }
-
-                  // Normal play.
-                  tryPlayCardByLongPress(idx);
-                }, holdMs);
-              }
-
-              btn.addEventListener('click', function (ev) {
-                // Ignore tap after long-press.
-                if (longFired) {
-                  longFired = false;
-                  if (ev && ev.preventDefault) ev.preventDefault();
-                  if (ev && ev.stopPropagation) ev.stopPropagation();
-                }
-              });
-
-              if (typeof PointerEvent !== 'undefined') {
-                btn.addEventListener('pointerdown', startHold);
-                btn.addEventListener('pointerup', clearTimer);
-                btn.addEventListener('pointercancel', clearTimer);
-                btn.addEventListener('pointerleave', clearTimer);
-              } else {
-                btn.addEventListener('touchstart', startHold);
-                btn.addEventListener('touchend', clearTimer);
-                btn.addEventListener('touchcancel', clearTimer);
-
-                btn.addEventListener('mousedown', startHold);
-                btn.addEventListener('mouseup', clearTimer);
-                btn.addEventListener('mouseleave', clearTimer);
-              }
-
-              btn.addEventListener('contextmenu', function (ev) {
-                if (ev && ev.preventDefault) ev.preventDefault();
-              });
-            })(cards[iL]);
-          }
-
-          var rumorPicks = document.querySelectorAll('.hnRumorPick');
-          for (var rP = 0; rP < rumorPicks.length; rP++) {
-            var rpEl = rumorPicks[rP];
-            if (!rpEl || rpEl.__hn_bound) continue;
-            rpEl.__hn_bound = true;
-            rpEl.addEventListener('click', function (ev) {
-              var t = ev && ev.currentTarget ? ev.currentTarget : null;
-              if (!t) return;
-              var idx = parseIntSafe(t.getAttribute('data-hn-rumor-idx'), -1);
-              if (idx < 0) return;
-              ui.hnRumorSelectedIndex = idx;
-              renderNow(lastRoom);
-            });
-
-            (function (btn) {
-              var holdMs = CN_LONG_PRESS_MS;
-              var timer = null;
-              var longFired = false;
-
-              function clearTimer() {
-                if (timer) {
-                  clearTimeout(timer);
-                  timer = null;
-                }
-              }
-
-              function startHold(ev) {
-                if (ui.inFlight) return;
-                if (ev && ev.button != null && ev.button !== 0) return;
-                if (ev && ev.preventDefault) ev.preventDefault();
-                clearTimer();
-                longFired = false;
-
-                timer = setTimeout(function () {
-                  longFired = true;
-                  clearTimer();
-                  // Enforce tap-select then long-press confirm.
-                  if (parseIntSafe(ui.hnRumorSelectedIndex, -1) < 0) {
-                    var idx = parseIntSafe(btn.getAttribute('data-hn-rumor-idx'), -1);
-                    if (idx >= 0) {
-                      ui.hnRumorSelectedIndex = idx;
-                      renderNow(lastRoom);
-                    }
-                    return;
-                  }
-                  tryConfirmRumorByLongPress();
-                }, holdMs);
-              }
-
-              btn.addEventListener('click', function (ev) {
-                if (longFired) {
-                  longFired = false;
-                  if (ev && ev.preventDefault) ev.preventDefault();
-                  if (ev && ev.stopPropagation) ev.stopPropagation();
-                }
-              });
-
-              if (typeof PointerEvent !== 'undefined') {
-                btn.addEventListener('pointerdown', startHold);
-                btn.addEventListener('pointerup', clearTimer);
-                btn.addEventListener('pointercancel', clearTimer);
-                btn.addEventListener('pointerleave', clearTimer);
-              } else {
-                btn.addEventListener('touchstart', startHold);
-                btn.addEventListener('touchend', clearTimer);
-                btn.addEventListener('touchcancel', clearTimer);
-
-                btn.addEventListener('mousedown', startHold);
-                btn.addEventListener('mouseup', clearTimer);
-                btn.addEventListener('mouseleave', clearTimer);
-              }
-
-              btn.addEventListener('contextmenu', function (ev) {
-                if (ev && ev.preventDefault) ev.preventDefault();
-              });
-            })(rpEl);
-          }
         });
       })
       .then(function (u) {
