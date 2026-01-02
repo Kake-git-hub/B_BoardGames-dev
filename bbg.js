@@ -1036,7 +1036,7 @@
     var s = settings && typeof settings === 'object' ? settings : {};
     var out = {
       minorityCount: clamp(parseIntSafe(s.minorityCount, 1), 1, 5),
-      talkSeconds: clamp(parseIntSafe(s.talkSeconds, 180), 60, 5 * 60),
+      talkSeconds: clamp(parseIntSafe(s.talkSeconds, 180), 60, 10 * 60),
       topicCategoryId: String(s.topicCategoryId || 'random'),
       updatedAt: serverNowMs()
     };
@@ -3429,7 +3429,7 @@
 
       var talkSeconds = settings && settings.talkSeconds != null ? settings.talkSeconds : 180;
       var minorityCount = settings && settings.minorityCount != null ? settings.minorityCount : 1;
-      talkSeconds = clamp(parseIntSafe(talkSeconds, 180), 60, 5 * 60);
+      talkSeconds = clamp(parseIntSafe(talkSeconds, 180), 60, 10 * 60);
       if (FORCE_TALK_SECONDS > 0) talkSeconds = FORCE_TALK_SECONDS;
       minorityCount = clamp(parseIntSafe(minorityCount, 1), 1, Math.max(1, ids.length - 1));
       var reversal = !!(settings && settings.reversal);
@@ -8297,7 +8297,12 @@
     var revealed = board && board.revealed ? board.revealed : [];
 
     var nameText = escapeHtml(formatPlayerDisplayName(player));
-    var roleText = myTeam || myRole ? escapeHtml((myTeam === 'red' ? '赤' : myTeam === 'blue' ? '青' : '-') + ' / ' + (myRole === 'spymaster' ? 'スパイマスター' : myRole === 'operative' ? '諜報員' : '-')) : '-';
+    var teamLabel = myTeam === 'red' ? '赤' : myTeam === 'blue' ? '青' : '-';
+    var roleLabel = myRole === 'spymaster' ? 'スパイマスター' : myRole === 'operative' ? '諜報員' : '-';
+    var roleHtml =
+      myTeam || myRole
+        ? '<div>' + escapeHtml(teamLabel) + '</div><div>' + escapeHtml(roleLabel) + '</div>'
+        : '-';
     var tt0 = phase === 'playing' && room && room.turn ? room.turn : {};
     var turnTeam = phase === 'playing' && room && room.turn ? room.turn.team : '';
     var turnLabel = turnTeam === 'red' ? '赤' : turnTeam === 'blue' ? '青' : '-';
@@ -8372,8 +8377,16 @@
     }
     var timerTopHtml = '';
     if (phase === 'playing') {
-      timerTopHtml = '<div class="cn-timer">残り: <b id="cnTimer">-:--</b></div>';
+      timerTopHtml =
+        '<div class="cn-timer">' +
+        '<div class="muted">残り時間</div>' +
+        '<div><b id="cnTimer">-:--</b></div>' +
+        '</div>';
     }
+
+    var turnHtml =
+      '<div>' + escapeHtml(turnLabel + 'のターン') + '</div>' +
+      (who ? '<div class="muted">（' + escapeHtml(who) + '）</div>' : '');
 
     var topLine =
       '<div class="cn-topline">' +
@@ -8381,13 +8394,12 @@
       nameText +
       '</div>' +
       '<div class="cn-role">' +
-      roleText +
+      roleHtml +
       '</div>' +
       '<div class="' +
       turnCls +
-      '">手番: ' +
-      escapeHtml(turnLabel) +
-      (who ? '（' + escapeHtml(who) + '）' : '') +
+      '">' +
+      turnHtml +
       '</div>' +
       timerTopHtml +
       (lobbyId && isHost ? '<button id="cnAbortToLobby" class="ghost">ロビーへ</button>' : '') +
@@ -8612,9 +8624,14 @@
 
     var turnCls = 'cn-turn' + (turnTeam === 'red' ? ' cn-turn-red' : turnTeam === 'blue' ? ' cn-turn-blue' : '');
 
-    var timerTopHtml = '';
+    // Table timer: show big between clue row and board.
+    var timerMidHtml = '';
     if (phase === 'playing') {
-      timerTopHtml = '<div class="cn-timer">残り: <b id="cnTimer">-:--</b></div>';
+      timerMidHtml =
+        '<div class="card center" style="padding:12px">' +
+        '<div class="muted" style="margin-bottom:6px">残り時間</div>' +
+        '<div class="big"><b id="cnTimer">-:--</b></div>' +
+        '</div>';
     }
 
     var topLine =
@@ -8627,7 +8644,6 @@
       escapeHtml(turnLabel) +
       (who ? '（' + escapeHtml(who) + '）' : '') +
       '</div>' +
-      timerTopHtml +
       (lobbyId && isHost ? '<button id="cnAbortToLobbyTable" class="ghost">ロビーへ</button>' : '') +
       '</div>';
 
@@ -8728,6 +8744,7 @@
         '\n\n      ' +
         (phase === 'lobby' ? lobbyHtml : '') +
         (phase === 'playing' ? clueRowHtml : '') +
+        (phase === 'playing' ? timerMidHtml : '') +
         (phase === 'finished' ? finishedHtml : '') +
         boardHtml +
         clueHistoryHtml +
@@ -8903,7 +8920,7 @@
     }
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="big">部屋を作成</div>\n      <div id="wwCreateError" class="form-error" role="alert"></div>\n\n      <div class="field">\n        <label>ゲームマスターの名前（表示用）</label>\n        <input id="gmName" placeholder="例: たろう" />\n        <div class="muted">※ 待機中など一部の画面では「(ゲームマスター)」を付けて表示します。</div>\n      </div>\n\n      <div class="field">\n        <label>少数側の人数（最大5）</label>\n        <input id="minorityCount" type="range" min="1" max="5" step="1" value="1" />\n        <div class="kv"><span class="muted">現在</span><b id="minorityCountLabel">1</b></div>\n      </div>\n\n      <div class="field">\n        <label>トーク時間（分・最大5分）</label>\n        <input id="talkMinutes" type="range" min="1" max="5" step="1" value="3" />\n        <div class="kv"><span class="muted">現在</span><b id="talkMinutesLabel">3分</b></div>\n      </div>\n\n      <div class="field">\n        <label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>\n        <select id="reversal">\n          <option value="1" selected>あり</option>\n          <option value="0">なし</option>\n        </select>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>お題カテゴリ</label>\n        <select id="topicCategory"></select>\n        <div class="muted">※ 作成時点（QR表示時）にワードを確定してDBに保持します。画面には表示しません。</div>\n      </div>\n\n      <div class="row">\n        <button id="createRoom" class="primary">QRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
+      '\n    <div class="stack">\n      <div class="big">部屋を作成</div>\n      <div id="wwCreateError" class="form-error" role="alert"></div>\n\n      <div class="field">\n        <label>ゲームマスターの名前（表示用）</label>\n        <input id="gmName" placeholder="例: たろう" />\n        <div class="muted">※ 待機中など一部の画面では「(ゲームマスター)」を付けて表示します。</div>\n      </div>\n\n      <div class="field">\n        <label>少数側の人数（最大5）</label>\n        <input id="minorityCount" type="range" min="1" max="5" step="1" value="1" />\n        <div class="kv"><span class="muted">現在</span><b id="minorityCountLabel">1</b></div>\n      </div>\n\n      <div class="field">\n        <label>トーク時間（分・最大10分）</label>\n        <input id="talkMinutes" type="range" min="1" max="10" step="1" value="3" />\n        <div class="kv"><span class="muted">現在</span><b id="talkMinutesLabel">3分</b></div>\n      </div>\n\n      <div class="field">\n        <label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>\n        <select id="reversal">\n          <option value="1" selected>あり</option>\n          <option value="0">なし</option>\n        </select>\n      </div>\n\n      <hr />\n\n      <div class="field">\n        <label>お題カテゴリ</label>\n        <select id="topicCategory"></select>\n        <div class="muted">※ 作成時点（QR表示時）にワードを確定してDBに保持します。画面には表示しません。</div>\n      </div>\n\n      <div class="row">\n        <button id="createRoom" class="primary">QRを表示</button>\n        <a class="btn ghost" href="./">戻る</a>\n      </div>\n    </div>\n  '
     );
 
     var sel = document.getElementById('topicCategory');
@@ -8942,7 +8959,7 @@
 
     var gmName = String((gn && gn.value) || '').trim();
     var minorityCount = clamp(parseIntSafe(mc && mc.value, 1), 1, 5);
-    var talkMinutes = clamp(parseIntSafe(tm && tm.value, 3), 1, 5);
+    var talkMinutes = clamp(parseIntSafe(tm && tm.value, 3), 1, 10);
     var talkSeconds = talkMinutes * 60;
     var reversal = ((rv && rv.value) || '1') === '1';
 
@@ -9446,12 +9463,12 @@
                 '<div class="kv"><span class="muted">現在</span><b id="cMinorityCountLabel">' +
                 escapeHtml(String((room && room.settings && room.settings.minorityCount) || 1)) +
                 '</b></div></div>' +
-                '<div class="field"><label>トーク時間（分・最大5分）</label>' +
-                '<input id="cTalkMinutes" type="range" min="1" max="5" step="1" value="' +
-                escapeHtml(String(Math.max(1, Math.min(5, Math.round(((room && room.settings && room.settings.talkSeconds) || 180) / 60))))) +
+                '<div class="field"><label>トーク時間（分・最大10分）</label>' +
+                '<input id="cTalkMinutes" type="range" min="1" max="10" step="1" value="' +
+                escapeHtml(String(Math.max(1, Math.min(10, Math.round(((room && room.settings && room.settings.talkSeconds) || 180) / 60))))) +
                 '" />' +
                 '<div class="kv"><span class="muted">現在</span><b id="cTalkMinutesLabel">' +
-                escapeHtml(String(Math.max(1, Math.min(5, Math.round(((room && room.settings && room.settings.talkSeconds) || 180) / 60)))) + '分') +
+                escapeHtml(String(Math.max(1, Math.min(10, Math.round(((room && room.settings && room.settings.talkSeconds) || 180) / 60)))) + '分') +
                 '</b></div></div>' +
                 '<div class="field"><label>逆転あり（少数側が最後に多数側ワードを当てたら勝ち）</label>' +
                 '<select id="cReversal">' +
@@ -11869,8 +11886,8 @@
         if (mcWrap && mcWrap.parentNode) {
           var html2 =
             '<div class="field">' +
-            '<label>トーク時間（分・最大5分）</label>' +
-            '<input id="talkMinutes" type="range" min="1" max="5" step="1" value="3" />' +
+            '<label>トーク時間（分・最大10分）</label>' +
+            '<input id="talkMinutes" type="range" min="1" max="10" step="1" value="3" />' +
             '<div class="kv"><span class="muted">現在</span><b id="talkMinutesLabel">3分</b></div>' +
             '</div>';
           // insert after minorityCount field block
@@ -11938,7 +11955,14 @@
             var tm0 = document.getElementById('talkMinutes');
             var tc0 = document.getElementById('topicCategory');
             if (mc0 && s0.minorityCount != null) mc0.value = String(clamp(parseIntSafe(s0.minorityCount, 1), 1, 5));
-            if (tm0 && s0.talkSeconds != null) tm0.value = String(clamp(Math.round(clamp(parseIntSafe(s0.talkSeconds, 180), 60, 5 * 60) / 60), 1, 5));
+            if (tm0 && s0.talkSeconds != null) {
+              var mins0 = clamp(
+                Math.round(clamp(parseIntSafe(s0.talkSeconds, 180), 60, 10 * 60) / 60),
+                1,
+                10
+              );
+              tm0.value = String(mins0);
+            }
             if (tc0 && s0.topicCategoryId) tc0.value = String(s0.topicCategoryId || 'random');
             updateMinorityLabel();
           } catch (eSet) {
@@ -11963,7 +11987,7 @@
           var tm2 = document.getElementById('talkMinutes');
           var tc2 = document.getElementById('topicCategory');
           var minorityCount = clamp(parseIntSafe(mc2 && mc2.value, 1), 1, 5);
-          var talkMinutes = clamp(parseIntSafe(tm2 && tm2.value, 3), 1, 5);
+          var talkMinutes = clamp(parseIntSafe(tm2 && tm2.value, 3), 1, 10);
           var talkSeconds = talkMinutes * 60;
           var topicCategoryId = String((tc2 && tc2.value) || 'random');
           form = { minorityCount: minorityCount, talkSeconds: talkSeconds, topicCategoryId: topicCategoryId };
@@ -12780,7 +12804,7 @@
                   var rv2 = document.getElementById('cReversal');
                   var tc2 = document.getElementById('cTopicCategory');
                   var minorityCount = clamp(parseIntSafe(mc2 && mc2.value, 1), 1, 5);
-                  var talkMinutes = clamp(parseIntSafe(tm2 && tm2.value, 3), 1, 5);
+                  var talkMinutes = clamp(parseIntSafe(tm2 && tm2.value, 3), 1, 10);
                   var talkSeconds = talkMinutes * 60;
                   var reversal = ((rv2 && rv2.value) || '1') === '1';
                   var topicCategoryId = String((tc2 && tc2.value) || 'random');
@@ -15619,6 +15643,150 @@
     var started = !!(st && st.started);
     var pending = (st && st.pending) || null;
 
+    function hnLastPlayText(room) {
+      try {
+        var st0 = room && room.state ? room.state : null;
+        var log = st0 && Array.isArray(st0.log) ? st0.log : [];
+        var last = log && log.length ? String(log[log.length - 1] || '') : '';
+        if (last) return last;
+      } catch (e0) {
+        // ignore
+      }
+      try {
+        var lp = st && st.lastPlay ? st.lastPlay : null;
+        var pid = lp && lp.playerId ? String(lp.playerId || '') : '';
+        var cardId = lp && lp.cardId ? String(lp.cardId || '') : '';
+        var pn = pid ? hnPlayerName(room, pid) : '';
+        var def = cardId && HANNIN_CARD_DEFS ? HANNIN_CARD_DEFS[cardId] : null;
+        var cn = def && def.name ? String(def.name || '') : (cardId || '');
+        if (pn && cn) return pn + ' が ' + cn + ' を使用';
+      } catch (e1) {
+        // ignore
+      }
+      return '';
+    }
+
+    function hanninTableVizHtml() {
+      var order0 = Array.isArray(order) ? order : [];
+      var nSeats = order0.length || 0;
+      if (!nSeats) return '';
+
+      function pname(pid) {
+        var p = pid && players ? players[pid] : null;
+        return p ? formatPlayerDisplayName(p) : String(pid || '-');
+      }
+
+      function handCount(pid) {
+        var h = hands && Array.isArray(hands[pid]) ? hands[pid] : [];
+        return h.length || 0;
+      }
+
+      function handBacksHtml(pid) {
+        var cnt = handCount(pid);
+        var out = '';
+        for (var i = 0; i < 4; i++) {
+          var empty = i >= cnt;
+          out += '<div class="hn-sim-handback' + (empty ? ' hn-sim-handback--empty' : '') + '">' + hnCardBackImgHtml() + '</div>';
+        }
+        return out;
+      }
+
+      var graveHtml2 = '';
+      if (!grave.length) {
+        graveHtml2 = '<div class="muted">（なし）</div>';
+      } else {
+        var graveCount = grave.length;
+        var top = String(grave[graveCount - 1] || '');
+        var layerCount = Math.min(4, graveCount);
+        for (var gi = layerCount - 1; gi >= 1; gi--) {
+          graveHtml2 +=
+            '<div class="ll-table-grave-stack-card ll-table-grave-stack-card--under" style="left:' +
+            String(gi * 7) +
+            'px;top:' +
+            String(gi * -3) +
+            'px"></div>';
+        }
+        graveHtml2 += '<div class="ll-table-grave-stack-card" style="left:0px;top:0px">' + hnCardImgHtml(top) + '</div>';
+      }
+
+      var lastPlay = hnLastPlayText(room);
+
+      var centerHtml =
+        '<div class="ll-table-center" style="margin-top:-8px">' +
+        '<div class="ll-table-pile">' +
+        '<div class="muted">墓地</div>' +
+        '<div class="ll-table-pile-count"><b>' +
+        escapeHtml(String(grave.length || 0)) +
+        '</b></div>' +
+        '<div class="ll-table-grave-stack">' +
+        graveHtml2 +
+        '</div>' +
+        (lastPlay ? '<div class="ll-table-lastplay muted">' + escapeHtml(lastPlay) + '</div>' : '') +
+        '</div>' +
+        '</div>';
+
+      var arrowHtml = '';
+      var arrowIconHtml = '';
+      for (var ai = 0; ai < nSeats; ai++) {
+        arrowHtml += '<svg class="ll-table-arrow" data-hn-arrow="' + escapeHtml(String(ai)) + '"></svg>';
+        arrowIconHtml += '<div class="ll-table-arrow-icon" data-hn-arrow-icon="' + escapeHtml(String(ai)) + '"></div>';
+      }
+
+      var seatsHtml = '';
+      var radius = 42;
+      var turnPid = '';
+      try {
+        turnPid = turn && turn.playerId ? String(turn.playerId || '') : '';
+      } catch (eT0) {
+        turnPid = '';
+      }
+      for (var si = 0; si < nSeats; si++) {
+        var pid = String(order0[si] || '');
+        if (!pid) continue;
+        var angle = -90 + (360 * si) / nSeats;
+        var rad = (Math.PI / 180) * angle;
+        var x = 50 + radius * Math.cos(rad);
+        var y = 50 + radius * Math.sin(rad);
+        var isTurnSeat = !!(turnPid && String(pid) === String(turnPid));
+        var cnt = handCount(pid);
+        seatsHtml +=
+          '<div class="ll-seat' +
+          (isTurnSeat ? ' ll-seat--turn' : '') +
+          '" data-hn-pid="' +
+          escapeHtml(String(pid)) +
+          '" data-ll-pid="' +
+          escapeHtml(String(pid)) +
+          '" style="left:' +
+          escapeHtml(String(x.toFixed(3))) +
+          '%;top:' +
+          escapeHtml(String(y.toFixed(3))) +
+          '%">' +
+          '<div class="ll-seat-card hn-sim-seat-card">' +
+          '<div class="ll-seat-name">' +
+          escapeHtml(pname(pid)) +
+          '</div>' +
+          '<div class="hn-sim-handcount muted">手札: ' +
+          escapeHtml(String(cnt)) +
+          '</div>' +
+          '<div class="hn-sim-handbacks">' +
+          handBacksHtml(pid) +
+          '</div>' +
+          '</div>' +
+          '</div>';
+      }
+
+      return (
+        '<div class="ll-table">' +
+        arrowHtml +
+        arrowIconHtml +
+        seatsHtml +
+        '<div class="ll-table-inner">' +
+        centerHtml +
+        '</div>' +
+        '</div>'
+      );
+    }
+
     var debugIframeHtml = '';
     try {
       var isTableGmDevice = false;
@@ -15866,6 +16034,9 @@
             '</div>'
           : '') +
         (debugIframeHtml || '') +
+        '<div class="stack"><div class="muted">テーブル</div>' +
+        (hanninTableVizHtml() || '<div class="muted">（表示できません）</div>') +
+        '</div>' +
         '<div class="stack"><div class="muted">プレイヤー</div>' +
         playersHtml +
         '</div>' +
@@ -15876,7 +16047,266 @@
     );
   }
 
+  function updateHanninTableEffectArrow(rootEl, room, _attempted) {
+    try {
+      if (!rootEl) return;
+      var tableEl = rootEl.querySelector ? rootEl.querySelector('.ll-table') : null;
+      if (!tableEl) return;
+
+      var st = room && room.state ? room.state : null;
+      var pending = st && st.pending ? st.pending : null;
+      var order = st && Array.isArray(st.order) ? st.order : [];
+      var hands = st && st.hands ? st.hands : {};
+
+      function hideIcon(iconEl) {
+        try {
+          if (!iconEl) return;
+          iconEl.style.display = 'none';
+          iconEl.innerHTML = '';
+        } catch (e0) {
+          // ignore
+        }
+      }
+
+      function rightWithCards(fromPid) {
+        var from = String(fromPid || '');
+        var startIdx = order.indexOf(from);
+        if (startIdx < 0) return '';
+        for (var step = 1; step < order.length; step++) {
+          var cand = String(order[(startIdx + step) % order.length] || '');
+          if (!cand) continue;
+          var h0 = hands && Array.isArray(hands[cand]) ? hands[cand] : [];
+          if (h0.length) return cand;
+        }
+        return '';
+      }
+
+      var arrows = [];
+      var pType = pending && pending.type ? String(pending.type) : '';
+      if (pType === 'deal') {
+        var a = String(pending.actorId || '');
+        var t = String(pending.targetPid || '');
+        if (a && t && a !== t) {
+          arrows.push({ from: a, to: t, iconCard: 'deal', bidirectional: true });
+        }
+      } else if (pType === 'info') {
+        for (var i = 0; i < order.length; i++) {
+          var pid = String(order[i] || '');
+          if (!pid) continue;
+          var left = hnLeftPid(order, pid);
+          if (!left || String(left) === String(pid)) continue;
+          arrows.push({ from: pid, to: left, iconCard: 'info', bidirectional: false });
+        }
+      } else if (pType === 'rumor') {
+        for (var j = 0; j < order.length; j++) {
+          var pid2 = String(order[j] || '');
+          if (!pid2) continue;
+          var right = rightWithCards(pid2);
+          if (!right || String(right) === String(pid2)) continue;
+          arrows.push({ from: pid2, to: right, iconCard: 'rumor', bidirectional: false });
+        }
+      }
+
+      var seatEls = tableEl.querySelectorAll ? tableEl.querySelectorAll('.ll-seat') : [];
+      var seatMap = {};
+      for (var si = 0; si < seatEls.length; si++) {
+        var el = seatEls[si];
+        var pid3 = '';
+        try {
+          pid3 = String(el && el.getAttribute ? (el.getAttribute('data-hn-pid') || el.getAttribute('data-ll-pid') || '') : '');
+        } catch (ePid) {
+          pid3 = '';
+        }
+        if (pid3) seatMap[pid3] = el;
+      }
+
+      var tableRect = tableEl.getBoundingClientRect();
+      var w = tableRect && tableRect.width ? tableRect.width : 0;
+      var h = tableRect && tableRect.height ? tableRect.height : 0;
+
+      function centerOf(el) {
+        var rc = el.getBoundingClientRect();
+        return { x: (rc.left + rc.width / 2) - tableRect.left, y: (rc.top + rc.height / 2) - tableRect.top };
+      }
+
+      function seatPad(el) {
+        try {
+          var rc = el.getBoundingClientRect();
+          var r0 = Math.max(12, Math.min(48, Math.min(rc.width, rc.height) / 2));
+          return r0 + 10;
+        } catch (e) {
+          return 26;
+        }
+      }
+
+      var maxSlots = order.length || 0;
+      for (var slot = 0; slot < maxSlots; slot++) {
+        var svg = tableEl.querySelector ? tableEl.querySelector('svg.ll-table-arrow[data-hn-arrow="' + String(slot) + '"]') : null;
+        var iconEl = tableEl.querySelector ? tableEl.querySelector('div.ll-table-arrow-icon[data-hn-arrow-icon="' + String(slot) + '"]') : null;
+        if (!svg) continue;
+        if (!(w > 0 && h > 0)) {
+          svg.innerHTML = '';
+          hideIcon(iconEl);
+          continue;
+        }
+
+        var spec = slot < arrows.length ? arrows[slot] : null;
+        if (!spec || !spec.from || !spec.to) {
+          svg.innerHTML = '';
+          hideIcon(iconEl);
+          continue;
+        }
+        var fromEl = seatMap[String(spec.from)] || null;
+        var toEl = seatMap[String(spec.to)] || null;
+        if (!fromEl || !toEl) {
+          svg.innerHTML = '';
+          hideIcon(iconEl);
+          continue;
+        }
+
+        var p1 = centerOf(fromEl);
+        var p2 = centerOf(toEl);
+        var dx = p2.x - p1.x;
+        var dy = p2.y - p1.y;
+        var len = Math.sqrt(dx * dx + dy * dy);
+        if (!(len > 0.0001)) {
+          svg.innerHTML = '';
+          hideIcon(iconEl);
+          continue;
+        }
+
+        var ux = dx / len;
+        var uy = dy / len;
+        var minDim = Math.min(w, h);
+        var headLen = Math.max(12, Math.min(26, minDim * 0.045));
+        var headW = headLen * 0.65;
+
+        var pad1 = seatPad(fromEl);
+        var pad2 = seatPad(toEl);
+        var sp1 = { x: p1.x + ux * pad1, y: p1.y + uy * pad1 };
+        var sp2 = { x: p2.x - ux * pad2, y: p2.y - uy * pad2 };
+        var sdx = sp2.x - sp1.x;
+        var sdy = sp2.y - sp1.y;
+        var slen = Math.sqrt(sdx * sdx + sdy * sdy);
+        var isBidirectional = !!spec.bidirectional;
+        if (!(slen > headLen * (isBidirectional ? 2.4 : 1.6))) {
+          svg.innerHTML = '';
+          hideIcon(iconEl);
+          continue;
+        }
+
+        var tip2 = sp2;
+        var base2 = { x: tip2.x - ux * headLen, y: tip2.y - uy * headLen };
+        var px = -uy;
+        var py = ux;
+        var left2 = { x: base2.x + px * headW, y: base2.y + py * headW };
+        var right2 = { x: base2.x - px * headW, y: base2.y - py * headW };
+
+        var tip1 = sp1;
+        var base1 = { x: tip1.x + ux * headLen, y: tip1.y + uy * headLen };
+        var left1 = { x: base1.x + px * headW, y: base1.y + py * headW };
+        var right1 = { x: base1.x - px * headW, y: base1.y - py * headW };
+
+        var lineStart = isBidirectional ? base1 : sp1;
+        var lineEnd = base2;
+
+        try {
+          if (iconEl) {
+            var cid = spec.iconCard ? String(spec.iconCard) : '';
+            var def = cid && HANNIN_CARD_DEFS ? HANNIN_CARD_DEFS[cid] : null;
+            var icon = def && def.icon ? String(def.icon) : '';
+            if (icon) {
+              var tx = lineEnd.x - lineStart.x;
+              var ty = lineEnd.y - lineStart.y;
+              var tpos = 0.14;
+              var midX = lineStart.x + tx * tpos;
+              var midY = lineStart.y + ty * tpos;
+              iconEl.style.left = String(midX.toFixed(1)) + 'px';
+              iconEl.style.top = String(midY.toFixed(1)) + 'px';
+              iconEl.style.display = 'block';
+              iconEl.innerHTML = '<img class="ll-table-effect-icon" alt="" src="' + escapeHtml(icon) + '" />';
+            } else {
+              hideIcon(iconEl);
+            }
+          }
+        } catch (eIcon) {
+          hideIcon(iconEl);
+        }
+
+        svg.setAttribute('viewBox', '0 0 ' + String(w) + ' ' + String(h));
+        svg.setAttribute('preserveAspectRatio', 'none');
+        svg.innerHTML =
+          '<line class="ll-table-arrow-line" x1="' +
+          escapeHtml(String(lineStart.x.toFixed(2))) +
+          '" y1="' +
+          escapeHtml(String(lineStart.y.toFixed(2))) +
+          '" x2="' +
+          escapeHtml(String(lineEnd.x.toFixed(2))) +
+          '" y2="' +
+          escapeHtml(String(lineEnd.y.toFixed(2))) +
+          '" />' +
+          (isBidirectional
+            ? '<path class="ll-table-arrow-head" d="M ' +
+              escapeHtml(String(tip1.x.toFixed(2))) +
+              ' ' +
+              escapeHtml(String(tip1.y.toFixed(2))) +
+              ' L ' +
+              escapeHtml(String(left1.x.toFixed(2))) +
+              ' ' +
+              escapeHtml(String(left1.y.toFixed(2))) +
+              ' L ' +
+              escapeHtml(String(right1.x.toFixed(2))) +
+              ' ' +
+              escapeHtml(String(right1.y.toFixed(2))) +
+              ' Z" />'
+            : '') +
+          '<path class="ll-table-arrow-head" d="M ' +
+          escapeHtml(String(tip2.x.toFixed(2))) +
+          ' ' +
+          escapeHtml(String(tip2.y.toFixed(2))) +
+          ' L ' +
+          escapeHtml(String(left2.x.toFixed(2))) +
+          ' ' +
+          escapeHtml(String(left2.y.toFixed(2))) +
+          ' L ' +
+          escapeHtml(String(right2.x.toFixed(2))) +
+          ' ' +
+          escapeHtml(String(right2.y.toFixed(2))) +
+          ' Z" />';
+      }
+
+      if (!_attempted && typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(function () {
+          try {
+            updateHanninTableEffectArrow(rootEl, room, true);
+          } catch (e2) {
+            // ignore
+          }
+        });
+      }
+    } catch (e0) {
+      try {
+        var tableEl2 = rootEl && rootEl.querySelector ? rootEl.querySelector('.ll-table') : null;
+        if (!tableEl2) return;
+        var svgs = tableEl2.querySelectorAll ? tableEl2.querySelectorAll('svg.ll-table-arrow') : [];
+        for (var i = 0; i < svgs.length; i++) if (svgs[i]) svgs[i].innerHTML = '';
+        var icons = tableEl2.querySelectorAll ? tableEl2.querySelectorAll('div.ll-table-arrow-icon') : [];
+        for (var j = 0; j < icons.length; j++) hideIcon(icons[j]);
+      } catch (e1) {
+        // ignore
+      }
+    }
+  }
+
   function routeHanninTable(roomId, isHost) {
+    try {
+      if (document && document.body && document.body.classList) {
+        document.body.classList.remove('ll-player-screen');
+        document.body.classList.add('ll-table-screen');
+      }
+    } catch (e0) {
+      // ignore
+    }
     if (!isHost) {
       var qx0 = {};
       var vx0 = getCacheBusterParam();
@@ -15972,6 +16402,7 @@
           }
           lastRoom = room;
           renderHanninTable(viewEl, { roomId: roomId, room: room, isHost: isHost, lobbyId: lobbyId, playerId: playerId });
+          updateHanninTableEffectArrow(viewEl, room);
 
           // Auto-deal at game start: no distribution screen.
           try {
@@ -16407,7 +16838,13 @@
               nextBtn.disabled = true;
               firebaseReady()
                 .then(function () {
-                  return setLobbyCurrentGame(lobbyId, null);
+                  return resetCodenamesToLobby(roomId)
+                    .catch(function () {
+                      return null;
+                    })
+                    .then(function () {
+                      return setLobbyCurrentGame(lobbyId, null);
+                    });
                 })
                 .then(function () {
                   redirectToLobby();
@@ -16912,6 +17349,51 @@
     var hostPlayerId = getOrCreateCodenamesPlayerId(roomId);
     var didLockLobby = false;
 
+    var lobbyId = '';
+    try {
+      var qL = parseQuery();
+      lobbyId = qL && qL.lobby ? String(qL.lobby) : '';
+    } catch (eL) {
+      lobbyId = '';
+    }
+
+    var lobbyReturnWatching = false;
+    var lobbyUnsub = null;
+    function ensureLobbyReturnWatcher() {
+      if (!lobbyId) return;
+      if (lobbyReturnWatching) return;
+      lobbyReturnWatching = true;
+      firebaseReady()
+        .then(function () {
+          return subscribeLobby(lobbyId, function (lobby) {
+            var cg = (lobby && lobby.currentGame) || null;
+            var kind = cg && cg.kind ? String(cg.kind) : '';
+            var rid = cg && cg.roomId ? String(cg.roomId) : '';
+            if (!cg || kind !== 'codenames' || rid !== String(roomId || '')) {
+              try {
+                if (lobbyUnsub) lobbyUnsub();
+              } catch (e) {
+                // ignore
+              }
+              lobbyUnsub = null;
+              var q = {};
+              var v = getCacheBusterParam();
+              if (v) q.v = v;
+              q.lobby = lobbyId;
+              q.screen = 'lobby_host';
+              setQuery(q);
+              route();
+            }
+          });
+        })
+        .then(function (u2) {
+          lobbyUnsub = u2;
+        })
+        .catch(function () {
+          // ignore
+        });
+    }
+
     function drawQr() {
       return new Promise(function (resolve) {
         var canvas = document.getElementById('qr');
@@ -17174,11 +17656,13 @@
 
     firebaseReady()
       .then(function () {
+        if (lobbyId) ensureLobbyReturnWatcher();
         return subscribeCodenamesRoom(roomId, function (room) {
           if (!room) {
             renderError(viewEl, '部屋が見つかりません');
             return;
           }
+          if (lobbyId) ensureLobbyReturnWatcher();
           renderWithRoom(room);
         });
       })
@@ -17227,7 +17711,9 @@
         .then(function () {
           return subscribeLobby(lobbyId, function (lobby) {
             var cg = (lobby && lobby.currentGame) || null;
-            if (!cg) {
+            var kind = cg && cg.kind ? String(cg.kind) : '';
+            var rid = cg && cg.roomId ? String(cg.roomId) : '';
+            if (!cg || kind !== 'codenames' || rid !== String(roomId || '')) {
               try {
                 if (ui.lobbyUnsub) ui.lobbyUnsub();
               } catch (e) {
@@ -17248,6 +17734,7 @@
 
     firebaseReady()
       .then(function () {
+        if (lobbyId) ensureLobbyReturnWatcher();
         return subscribeCodenamesRoom(roomId, function (room) {
           if (!room) {
             renderError(viewEl, '部屋が見つかりません');
@@ -17256,6 +17743,8 @@
 
           var player = room.players ? room.players[playerId] : null;
           renderCodenamesPlayer(viewEl, { roomId: roomId, playerId: playerId, room: room, player: player, isHost: isHost, lobbyId: lobbyId });
+
+          if (lobbyId) ensureLobbyReturnWatcher();
 
           function rerenderCnTimer() {
             var el = document.getElementById('cnTimer');
@@ -17315,7 +17804,14 @@
               nextBtn.disabled = true;
               firebaseReady()
                 .then(function () {
-                  return setLobbyCurrentGame(lobbyId, null);
+                  // Reset room state so rejoin/restart won't stick to timer/settings.
+                  return resetCodenamesToLobby(roomId)
+                    .catch(function () {
+                      return null;
+                    })
+                    .then(function () {
+                      return setLobbyCurrentGame(lobbyId, null);
+                    });
                 })
                 .then(function () {
                   redirectToLobby();
