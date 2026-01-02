@@ -4160,7 +4160,20 @@
     var rightPid = '';
     var rightCount = 0;
     try {
-      rightPid = hnRightPid(order, playerId);
+      function rightWithCards(snapshotHands, fromPid) {
+        var from = String(fromPid || '');
+        var startIdx = order.indexOf(from);
+        if (startIdx < 0) return '';
+        for (var step = 1; step < order.length; step++) {
+          var cand = String(order[(startIdx + step) % order.length] || '');
+          if (!cand) continue;
+          var h0 = snapshotHands && Array.isArray(snapshotHands[cand]) ? snapshotHands[cand] : [];
+          if (h0.length) return cand;
+        }
+        return '';
+      }
+
+      rightPid = rightWithCards(hands, playerId);
       var rh = rightPid && hands && Array.isArray(hands[rightPid]) ? hands[rightPid] : [];
       rightCount = rh && Array.isArray(rh) ? rh.length : 0;
     } catch (eR0) {
@@ -6188,6 +6201,8 @@
       var done = true;
       for (var i = 0; i < order.length; i++) {
         var p = String(order[i] || '');
+        var hh = hands && Array.isArray(hands[p]) ? hands[p] : [];
+        if (!hh.length) continue; // skip players with no hand
         if (st.pending.choices[p] === undefined) {
           done = false;
           break;
@@ -6205,6 +6220,7 @@
       for (var iG = 0; iG < order.length; iG++) {
         var pG = String(order[iG] || '');
         var hG = snapshot[pG] || [];
+        if (!hG.length) continue; // skip players with no hand
         var choose = parseIntSafe(st.pending.choices[pG], -1);
         if (choose < 0 || choose >= hG.length) return room;
         giveCard[pG] = String(hG[choose] || '');
@@ -6214,6 +6230,10 @@
       for (var iR = 0; iR < order.length; iR++) {
         var pR = String(order[iR] || '');
         var real = hands && Array.isArray(hands[pR]) ? hands[pR].slice() : [];
+        if (!giveCard[pR]) {
+          hands[pR] = real;
+          continue;
+        }
         var choose2 = parseIntSafe(st.pending.choices[pR], -1);
         if (choose2 >= 0 && choose2 < real.length) real.splice(choose2, 1);
         else {
@@ -6228,6 +6248,7 @@
         var pL = String(order[iL] || '');
         var left = hnLeftPid(order, pL);
         if (!left) continue;
+        if (!giveCard[pL]) continue;
         var lh = hands && Array.isArray(hands[left]) ? hands[left].slice() : [];
         lh.push(giveCard[pL]);
         hands[left] = lh;
@@ -6296,6 +6317,11 @@
       var done = true;
       for (var i = 0; i < order.length; i++) {
         var p = String(order[i] || '');
+        var myH = hands && Array.isArray(hands[p]) ? hands[p] : [];
+        if (!myH.length) continue; // skip players with no hand
+        var rPid0 = rightWithCards(hands, p);
+        var rH0 = rPid0 && hands && Array.isArray(hands[rPid0]) ? hands[rPid0] : [];
+        if (!rPid0 || !rH0.length) continue; // skip if there is no valid target with cards
         if (st.pending.choices[p] === undefined) {
           done = false;
           break;
@@ -6312,6 +6338,8 @@
       var requestsByTarget = {};
       for (var iT = 0; iT < order.length; iT++) {
         var pT = String(order[iT] || '');
+        var myHT = hands && Array.isArray(hands[pT]) ? hands[pT] : [];
+        if (!myHT.length) continue; // skip players with no hand
         var rPid = rightWithCards(snapshot, pT);
         var sh = rPid ? snapshot[rPid] || [] : [];
         var choose = parseIntSafe(st.pending.choices[pT], -1);
@@ -10765,6 +10793,7 @@
           } catch (eLP) {
             lp = '';
           }
+          if (lp && lp[lp.length - 1] !== '。') lp += '。';
           return lp ? '<div class="ll-table-lastplay muted">' + escapeHtml(lp) + '</div>' : '';
         })() +
         '</div>' +
@@ -16073,7 +16102,10 @@
         var st0 = room && room.state ? room.state : null;
         var log = st0 && Array.isArray(st0.log) ? st0.log : [];
         var last = log && log.length ? String(log[log.length - 1] || '') : '';
-        if (last) return last;
+        if (last) {
+          if (last && last[last.length - 1] !== '。') last += '。';
+          return last;
+        }
       } catch (e0) {
         // ignore
       }
@@ -16084,7 +16116,11 @@
         var pn = pid ? hnPlayerName(room, pid) : '';
         var def = cardId && HANNIN_CARD_DEFS ? HANNIN_CARD_DEFS[cardId] : null;
         var cn = def && def.name ? String(def.name || '') : (cardId || '');
-        if (pn && cn) return pn + ' が ' + cn + ' を使用';
+        if (pn && cn) {
+          var t = pn + ' が ' + cn + ' を使用';
+          if (t && t[t.length - 1] !== '。') t += '。';
+          return t;
+        }
       } catch (e1) {
         // ignore
       }
@@ -16304,7 +16340,20 @@
           // ignore
         }
         if (canChooseRumor) {
-          var rightPid = hnRightPid(order, pid);
+          function rightWithCards(snapshotHands, fromPid) {
+            var from = String(fromPid || '');
+            var startIdx = order.indexOf(from);
+            if (startIdx < 0) return '';
+            for (var step = 1; step < order.length; step++) {
+              var cand = String(order[(startIdx + step) % order.length] || '');
+              if (!cand) continue;
+              var h0 = snapshotHands && Array.isArray(snapshotHands[cand]) ? snapshotHands[cand] : [];
+              if (h0.length) return cand;
+            }
+            return '';
+          }
+
+          var rightPid = rightWithCards(hands, pid);
           var rightHand = rightPid && hands && Array.isArray(hands[rightPid]) ? hands[rightPid] : [];
           var cnt = rightHand && Array.isArray(rightHand) ? rightHand.length : 0;
           if (cnt > 0) {
@@ -16482,6 +16531,7 @@
       var pending = st && st.pending ? st.pending : null;
       var order = st && Array.isArray(st.order) ? st.order : [];
       var hands = st && st.hands ? st.hands : {};
+      var priv = st && st.private ? st.private : null;
 
       function hideIcon(iconEl) {
         try {
@@ -16506,29 +16556,70 @@
         return '';
       }
 
-      var arrows = [];
+      function handCount(pid) {
+        var h0 = hands && Array.isArray(hands[String(pid || '')]) ? hands[String(pid || '')] : [];
+        return h0 && Array.isArray(h0) ? h0.length : 0;
+      }
+
+      var maxSlots = order.length || 0;
+      var specsBySlot = new Array(maxSlots);
+      for (var f0 = 0; f0 < maxSlots; f0++) specsBySlot[f0] = null;
+
+      function setSpecByFrom(fromPid, spec) {
+        var from = String(fromPid || '');
+        var idx = order.indexOf(from);
+        if (idx < 0) idx = 0;
+        specsBySlot[idx] = spec;
+      }
+
       var pType = pending && pending.type ? String(pending.type) : '';
       if (pType === 'deal') {
         var a = String(pending.actorId || '');
         var t = String(pending.targetPid || '');
         if (a && t && a !== t) {
-          arrows.push({ from: a, to: t, iconCard: 'deal', bidirectional: true });
+          setSpecByFrom(a, { from: a, to: t, iconCard: 'deal', bidirectional: true, iconOnlyFrom: a });
         }
       } else if (pType === 'info') {
         for (var i = 0; i < order.length; i++) {
           var pid = String(order[i] || '');
           if (!pid) continue;
+          if (handCount(pid) <= 0) continue; // skip empty-hand players
           var left = hnLeftPid(order, pid);
           if (!left || String(left) === String(pid)) continue;
-          arrows.push({ from: pid, to: left, iconCard: 'info', bidirectional: false });
+          specsBySlot[i] = { from: pid, to: left, iconCard: 'info', bidirectional: false };
         }
       } else if (pType === 'rumor') {
+        var actorId = String(pending.actorId || '');
         for (var j = 0; j < order.length; j++) {
           var pid2 = String(order[j] || '');
           if (!pid2) continue;
+          if (handCount(pid2) <= 0) continue; // skip empty-hand players
           var right = rightWithCards(pid2);
           if (!right || String(right) === String(pid2)) continue;
-          arrows.push({ from: pid2, to: right, iconCard: 'rumor', bidirectional: false });
+          var iconCard = String(pid2) === String(actorId) ? 'rumor' : '';
+          specsBySlot[j] = { from: pid2, to: right, iconCard: iconCard, bidirectional: false, iconOnlyFrom: actorId };
+        }
+      } else {
+        // Non-pending effects: show private target arrows (witness/boy).
+        try {
+          if (priv && typeof priv === 'object') {
+            var keys = Object.keys(priv);
+            for (var pk = 0; pk < keys.length; pk++) {
+              var fromPid = String(keys[pk] || '');
+              var msg = priv[fromPid] || null;
+              if (!msg || !msg.type) continue;
+              var type = String(msg.type || '');
+              if (type !== 'witness' && type !== 'boy') continue;
+              var toPid = '';
+              if (type === 'witness') toPid = String(msg.targetPid || '');
+              if (type === 'boy') toPid = String(msg.culpritPid || '');
+              if (!fromPid || !toPid || fromPid === toPid) continue;
+              if (order.indexOf(fromPid) < 0) continue;
+              setSpecByFrom(fromPid, { from: fromPid, to: toPid, iconCard: type, bidirectional: false, iconOnlyFrom: fromPid });
+            }
+          }
+        } catch (ePriv) {
+          // ignore
         }
       }
 
@@ -16558,13 +16649,12 @@
         try {
           var rc = el.getBoundingClientRect();
           var r0 = Math.max(12, Math.min(48, Math.min(rc.width, rc.height) / 2));
-          return r0 + 10;
+          return r0 + 18;
         } catch (e) {
-          return 26;
+          return 34;
         }
       }
 
-      var maxSlots = order.length || 0;
       for (var slot = 0; slot < maxSlots; slot++) {
         var svg = tableEl.querySelector ? tableEl.querySelector('svg.ll-table-arrow[data-hn-arrow="' + String(slot) + '"]') : null;
         var iconEl = tableEl.querySelector ? tableEl.querySelector('div.ll-table-arrow-icon[data-hn-arrow-icon="' + String(slot) + '"]') : null;
@@ -16575,7 +16665,7 @@
           continue;
         }
 
-        var spec = slot < arrows.length ? arrows[slot] : null;
+        var spec = specsBySlot[slot] || null;
         if (!spec || !spec.from || !spec.to) {
           svg.innerHTML = '';
           hideIcon(iconEl);
@@ -16638,12 +16728,14 @@
         try {
           if (iconEl) {
             var cid = spec.iconCard ? String(spec.iconCard) : '';
+            var onlyFrom = spec && spec.iconOnlyFrom ? String(spec.iconOnlyFrom || '') : '';
+            if (onlyFrom && String(spec.from || '') !== onlyFrom) cid = '';
             var def = cid && HANNIN_CARD_DEFS ? HANNIN_CARD_DEFS[cid] : null;
             var icon = def && def.icon ? String(def.icon) : '';
             if (icon) {
               var tx = lineEnd.x - lineStart.x;
               var ty = lineEnd.y - lineStart.y;
-              var tpos = 0.14;
+              var tpos = 0.22;
               var midX = lineStart.x + tx * tpos;
               var midY = lineStart.y + ty * tpos;
               iconEl.style.left = String(midX.toFixed(1)) + 'px';
