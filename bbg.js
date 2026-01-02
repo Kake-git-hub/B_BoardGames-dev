@@ -4553,6 +4553,8 @@
       var selRumor = parseIntSafe(ui.hnRumorSelectedIndex, -1);
       if (alreadyChosenRumor) {
         contentHtml = '<div class="muted center">うわさ：引くカードを選択済みです（他の人を待っています）</div>';
+      } else if (!myHand.length) {
+        contentHtml = '<div class="muted center">うわさ：手札がありません</div>';
       } else if (!rightCount) {
         contentHtml = '<div class="muted center">うわさ：右隣の手札がありません</div>';
       } else {
