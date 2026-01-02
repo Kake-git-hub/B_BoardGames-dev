@@ -4105,6 +4105,24 @@
     return { index: nextIdx, playerId: String(order[nextIdx] || '') };
   }
 
+  function hnNextTurnSkipEmpty(order, currentPid, hands) {
+    if (!Array.isArray(order) || !order.length) return { index: 0, playerId: '' };
+    var cur = String(currentPid || '');
+    var startIdx = order.indexOf(cur);
+    if (startIdx < 0) startIdx = 0;
+
+    for (var step = 1; step <= order.length; step++) {
+      var idx = (startIdx + step) % order.length;
+      var pid = String(order[idx] || '');
+      if (!pid) continue;
+      var h = hands && Array.isArray(hands[pid]) ? hands[pid] : [];
+      if (h && h.length) return { index: idx, playerId: pid };
+    }
+
+    // Fallback: no one has cards.
+    return hnNextTurn(order, currentPid);
+  }
+
   function hnPlayerName(room, pid) {
     try {
       return String((room && room.players && room.players[pid] && room.players[pid].name) || pid || '');
@@ -4168,6 +4186,53 @@
 
     // Action modal (target/index selection like LoveLetter)
     var modalHtml = '';
+
+    // Confirm modal (for simple plays and pending selections)
+    var confirmHtml = '';
+    try {
+      if (canOperate && ui && ui.hnConfirm && ui.hnConfirm.type) {
+        var c = ui.hnConfirm;
+        var cType = String(c.type || '');
+        var cTitle = '';
+        var cBody = '';
+        var cErr = '';
+
+        if (cType === 'play') {
+          var cCardId = String(c.cardId || '');
+          var cDef = HANNIN_CARD_DEFS[cCardId] || { name: cCardId || '-', desc: '' };
+          cTitle = String(cDef.name || cCardId) + ' を使用';
+          cBody = '<div class="ll-action-card">' + hnCardImgHtml(cCardId) + '</div>';
+          if (cDef.desc) cBody += '<div class="muted">' + escapeHtml(String(cDef.desc || '')) + '</div>';
+        } else if (cType === 'info') {
+          cTitle = '情報操作：このカードを渡す';
+          cBody = '<div class="ll-action-card">' + hnCardImgHtml(String(c.cardId || '')) + '</div>';
+        } else if (cType === 'rumor') {
+          cTitle = 'うわさ：このカードを引く';
+          cBody = '<div class="ll-action-card">' + hnCardBackImgHtml() + '</div>';
+        } else if (cType === 'deal') {
+          cTitle = '取引：このカードを出す';
+          cBody = '<div class="ll-action-card">' + hnCardImgHtml(String(c.cardId || '')) + '</div>';
+        }
+
+        confirmHtml =
+          '<div class="ll-overlay ll-sheet" role="dialog" aria-modal="true">' +
+          '<div class="ll-overlay-backdrop" id="hnConfirmBg"></div>' +
+          '<div class="ll-overlay-panel">' +
+          '<div class="stack">' +
+          '<div class="big ll-modal-title">' + escapeHtml(cTitle || '確認') + '</div>' +
+          (cBody || '') +
+          '<div id="hnConfirmError" class="form-error" role="alert">' + cErr + '</div>' +
+          '<div class="row ll-modal-actions" style="justify-content:space-between">' +
+          '<button class="ghost" id="hnConfirmCancel">キャンセル</button>' +
+          '<button class="primary" id="hnConfirmOk">決定</button>' +
+          '</div>' +
+          '</div>' +
+          '</div>' +
+          '</div>';
+      }
+    } catch (eCfm) {
+      confirmHtml = '';
+    }
 
     // Reveal modal (e.g., witness)
     var revealHtml = '';
@@ -4396,7 +4461,7 @@
             '<div class="hn-hand" id="hnHand">' +
             cardsHtmlInfo +
             '</div>' +
-            '<div class="muted center hn-hint">情報操作：タップで選択 / 長押しで決定' +
+            '<div class="muted center hn-hint">情報操作：タップで選択（決定/キャンセル）' +
             (alreadyChosenInfo ? '（決定済み：選んだカードは非表示）' : '') +
             '</div>' +
             '</div>';
@@ -4437,7 +4502,7 @@
           '<div class="hn-rumor-row">' +
           facedownHtml +
           '</div>' +
-          '<div class="muted center hn-hint">タップで決定</div>' +
+          '<div class="muted center hn-hint">タップで選択（決定/キャンセル）</div>' +
           '</div>';
       }
     } else if (pending && pending.type === 'deal') {
@@ -4472,7 +4537,7 @@
             '<div class="hn-rumor-row">' +
             outDeal +
             '</div>' +
-            '<div class="muted center hn-hint">タップで決定</div>' +
+            '<div class="muted center hn-hint">タップで選択（決定/キャンセル）</div>' +
             '</div>';
         }
       } else {
@@ -4554,6 +4619,7 @@
         '</div>' +
         '</div>' +
         (revealHtml || '') +
+        (confirmHtml || '') +
         (modalHtml || '') +
         (contentHtml || '') +
       '</div>'
@@ -4602,7 +4668,8 @@
       inFlight: false,
       autoKeyDone: {},
       hnAction: null,
-      hnReveal: null
+      hnReveal: null,
+      hnConfirm: null
     };
 
     function canOperateThisDevice() {
@@ -4622,6 +4689,14 @@
     function clearRevealModal() {
       try {
         ui.hnReveal = null;
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    function clearConfirmModal() {
+      try {
+        ui.hnConfirm = null;
       } catch (e) {
         // ignore
       }
@@ -4692,8 +4767,18 @@
                 if (pending.choices && pending.choices[String(playerId)] !== undefined) return;
                 // Tap sets local pre-selection.
                 ui.hnInfoSelectedIndex = idx;
+                try {
+                  var h2 = st && st.hands && Array.isArray(st.hands[playerId]) ? st.hands[playerId] : [];
+                  var cid2 = idx >= 0 && idx < h2.length ? String(h2[idx] || '') : '';
+                  ui.hnConfirm = { type: 'info', index: idx, cardId: cid2 };
+                } catch (eC1) {
+                  // ignore
+                }
               } else if (pending && pending.type === 'rumor') {
                 // rumor tap is handled on hnRumorPick elements
+                return;
+              } else if (pending && pending.type === 'deal') {
+                // deal tap is handled on hnDealPick elements
                 return;
               } else {
                 // Normal: tap cycles the front card.
@@ -4804,6 +4889,110 @@
         bg.addEventListener('click', function () {
           clearActionModal();
           renderNow(lastRoom);
+        });
+      }
+
+      var cbg = document.getElementById('hnConfirmBg');
+      if (cbg && !cbg.__hn_bound) {
+        cbg.__hn_bound = true;
+        cbg.addEventListener('click', function () {
+          clearConfirmModal();
+          renderNow(lastRoom);
+        });
+      }
+
+      var cCancel = document.getElementById('hnConfirmCancel');
+      if (cCancel && !cCancel.__hn_bound) {
+        cCancel.__hn_bound = true;
+        cCancel.addEventListener('click', function () {
+          clearConfirmModal();
+          renderNow(lastRoom);
+        });
+      }
+
+      var cOk = document.getElementById('hnConfirmOk');
+      if (cOk && !cOk.__hn_bound) {
+        cOk.__hn_bound = true;
+        cOk.addEventListener('click', function () {
+          if (!ui.hnConfirm || ui.inFlight) return;
+          if (!canOperateThisDevice()) return;
+          if (!lastRoom || !lastRoom.state) return;
+
+          var st = lastRoom.state;
+          if (String((lastRoom && lastRoom.phase) || '') !== 'playing') return;
+
+          var c = ui.hnConfirm;
+          var t = String(c.type || '');
+          ui.inFlight = true;
+
+          // Close immediately.
+          clearConfirmModal();
+          renderNow(lastRoom);
+
+          if (t === 'play') {
+            // Simple play (no extra choices)
+            if (st.pending && st.pending.type) {
+              ui.inFlight = false;
+              return;
+            }
+            var turnPid = st.turn && st.turn.playerId ? String(st.turn.playerId) : '';
+            if (!turnPid || String(turnPid) !== String(playerId)) {
+              ui.inFlight = false;
+              return;
+            }
+            var idx = parseIntSafe(c.cardIndex, -1);
+            var myHand = playerId && st.hands && Array.isArray(st.hands[playerId]) ? st.hands[playerId] : [];
+            if (idx < 0 || idx >= myHand.length) {
+              ui.inFlight = false;
+              return;
+            }
+            playHanninCard(roomId, playerId, idx, {})
+              .catch(function (e) {
+                alert((e && e.message) || '失敗');
+              })
+              .finally(function () {
+                ui.inFlight = false;
+              });
+            return;
+          }
+
+          if (t === 'info') {
+            var idx2 = parseIntSafe(c.index, -1);
+            submitHanninInfoChoice(roomId, playerId, idx2)
+              .catch(function (e) {
+                alert((e && e.message) || '失敗');
+              })
+              .finally(function () {
+                ui.inFlight = false;
+              });
+            return;
+          }
+
+          if (t === 'rumor') {
+            var idx3 = parseIntSafe(c.index, -1);
+            submitHanninRumorChoice(roomId, playerId, idx3)
+              .catch(function (e) {
+                alert((e && e.message) || '失敗');
+              })
+              .finally(function () {
+                ui.inFlight = false;
+              });
+            return;
+          }
+
+          if (t === 'deal') {
+            var idx4 = parseIntSafe(c.index, -1);
+            submitHanninDealChoice(roomId, playerId, idx4)
+              .catch(function (e) {
+                alert((e && e.message) || '失敗');
+              })
+              .finally(function () {
+                ui.inFlight = false;
+              });
+            return;
+          }
+
+          ui.inFlight = false;
         });
       }
 
@@ -4970,7 +5159,7 @@
             if (!t) return;
             var idx = parseIntSafe(t.getAttribute('data-hn-rumor-idx'), -1);
             if (idx < 0) return;
-            // Tap-to-confirm.
+            // Tap-select then confirm/cancel modal.
             if (ui.inFlight) return;
             try {
               var st = lastRoom && lastRoom.state ? lastRoom.state : null;
@@ -4981,14 +5170,8 @@
             }
 
             ui.hnRumorSelectedIndex = idx;
-            ui.inFlight = true;
-            submitHanninRumorChoice(roomId, playerId, idx)
-              .catch(function (e) {
-                alert((e && e.message) || '失敗');
-              })
-              .finally(function () {
-                ui.inFlight = false;
-              });
+            ui.hnConfirm = { type: 'rumor', index: idx };
+            renderNow(lastRoom);
           });
         }
 
@@ -5078,14 +5261,15 @@
           } catch (eD) {
             return;
           }
-          ui.inFlight = true;
-          submitHanninDealChoice(roomId, playerId, idx)
-            .catch(function (e) {
-              alert((e && e.message) || '失敗');
-            })
-            .finally(function () {
-              ui.inFlight = false;
-            });
+
+          try {
+            var h = lastRoom && lastRoom.state && lastRoom.state.hands && Array.isArray(lastRoom.state.hands[playerId]) ? lastRoom.state.hands[playerId] : [];
+            var cid = idx >= 0 && idx < h.length ? String(h[idx] || '') : '';
+            ui.hnConfirm = { type: 'deal', index: idx, cardId: cid };
+          } catch (eD2) {
+            ui.hnConfirm = { type: 'deal', index: idx, cardId: '' };
+          }
+          renderNow(lastRoom);
         });
       }
     }
@@ -5118,18 +5302,9 @@
         return;
       }
 
-      var action = {};
-
-      // other cards have no extra choices
-
-      ui.inFlight = true;
-      playHanninCard(roomId, playerId, idx, action)
-        .catch(function (e) {
-          alert((e && e.message) || '失敗');
-        })
-        .finally(function () {
-          ui.inFlight = false;
-        });
+      // Other cards: require confirm/cancel.
+      ui.hnConfirm = { type: 'play', cardIndex: idx, cardId: cardId };
+      renderNow(lastRoom);
     }
 
     function tryConfirmInfoByLongPress() {
@@ -5382,7 +5557,7 @@
       st.log = st.log.concat([nm + '：' + cardNm + ' をプレイ']);
 
       function advanceTurn() {
-        st.turn = hnNextTurn(order, pid);
+        st.turn = hnNextTurnSkipEmpty(order, pid, hands);
       }
 
       // Resolve effects
@@ -5490,7 +5665,7 @@
           createdAt: serverNowMs(),
           giveIndex: giveIdx,
           giveCardId: String(myHand[giveIdx] || ''),
-          resumeTurn: hnNextTurn(order, pid)
+          resumeFrom: pid
         };
         st.log = st.log.concat([nm + ' は ' + hnPlayerName(room, tPid3) + ' と取引：相手が出すカードを選択中']);
         return assign({}, room, { state: st });
@@ -5503,7 +5678,7 @@
           actorId: pid,
           createdAt: serverNowMs(),
           choices: {},
-          resumeTurn: hnNextTurn(order, pid)
+          resumeFrom: pid
         };
         st.log = st.log.concat(['うわさ：全員が右隣から引くカードを選択中']);
         return assign({}, room, { state: st });
@@ -5516,7 +5691,7 @@
           actorId: pid,
           createdAt: serverNowMs(),
           choices: {},
-          resumeTurn: hnNextTurn(order, pid)
+          resumeFrom: pid
         };
         st.log = st.log.concat(['情報操作：全員が左隣へ渡すカードを選択中']);
         return assign({}, room, { state: st });
@@ -5601,9 +5776,14 @@
       }
 
       st.hands = hands;
-      var resume = st.pending && st.pending.resumeTurn ? st.pending.resumeTurn : (room.state && room.state.pending && room.state.pending.resumeTurn ? room.state.pending.resumeTurn : null);
+      var resumeFrom = '';
+      try {
+        resumeFrom = String(st.pending && (st.pending.resumeFrom || st.pending.actorId) ? (st.pending.resumeFrom || st.pending.actorId) : '');
+      } catch (eRF) {
+        resumeFrom = '';
+      }
       st.pending = null;
-      if (resume) st.turn = resume;
+      if (resumeFrom) st.turn = hnNextTurnSkipEmpty(order, resumeFrom, hands);
 
       if (!Array.isArray(st.log)) st.log = [];
       st.log = st.log.concat(['情報操作：全員が左隣へ1枚渡した']);
@@ -5696,9 +5876,14 @@
       }
 
       st.hands = nextHands;
-      var resume = st.pending && st.pending.resumeTurn ? st.pending.resumeTurn : null;
+      var resumeFrom = '';
+      try {
+        resumeFrom = String(st.pending && (st.pending.resumeFrom || st.pending.actorId) ? (st.pending.resumeFrom || st.pending.actorId) : '');
+      } catch (eRF2) {
+        resumeFrom = '';
+      }
       st.pending = null;
-      if (resume) st.turn = resume;
+      if (resumeFrom) st.turn = hnNextTurnSkipEmpty(order, resumeFrom, nextHands);
 
       if (!Array.isArray(st.log)) st.log = [];
       st.log = st.log.concat(['うわさ：全員が右隣から1枚引いた']);
@@ -5729,7 +5914,13 @@
       if (giveIdx < 0 || giveIdx >= aHand.length) {
         // Actor hand changed unexpectedly; cancel pending.
         st.pending = null;
-        if (pending && pending.resumeTurn) st.turn = pending.resumeTurn;
+        var rf = '';
+        try {
+          rf = String(pending && (pending.resumeFrom || pending.actorId) ? (pending.resumeFrom || pending.actorId) : '');
+        } catch (eR3) {
+          rf = '';
+        }
+        if (rf) st.turn = hnNextTurnSkipEmpty(Array.isArray(st.order) ? st.order.slice() : [], rf, hands);
         return assign({}, room, { state: st });
       }
 
@@ -5737,7 +5928,13 @@
       if (!tHand.length) {
         // Nothing to take.
         st.pending = null;
-        if (pending && pending.resumeTurn) st.turn = pending.resumeTurn;
+        var rf2 = '';
+        try {
+          rf2 = String(pending && (pending.resumeFrom || pending.actorId) ? (pending.resumeFrom || pending.actorId) : '');
+        } catch (eR4) {
+          rf2 = '';
+        }
+        if (rf2) st.turn = hnNextTurnSkipEmpty(Array.isArray(st.order) ? st.order.slice() : [], rf2, hands);
         if (!Array.isArray(st.log)) st.log = [];
         st.log = st.log.concat(['取引：相手の手札がなく、交換なし']);
         return assign({}, room, { state: st });
@@ -5757,7 +5954,13 @@
       st.hands = hands;
 
       st.pending = null;
-      if (pending && pending.resumeTurn) st.turn = pending.resumeTurn;
+      var rf3 = '';
+      try {
+        rf3 = String(pending && (pending.resumeFrom || pending.actorId) ? (pending.resumeFrom || pending.actorId) : '');
+      } catch (eR5) {
+        rf3 = '';
+      }
+      if (rf3) st.turn = hnNextTurnSkipEmpty(Array.isArray(st.order) ? st.order.slice() : [], rf3, hands);
 
       if (!Array.isArray(st.log)) st.log = [];
       st.log = st.log.concat([
