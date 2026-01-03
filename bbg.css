@@ -169,6 +169,8 @@ body.ll-player-screen .ll-piles-box{position:fixed;top:4px;right:4px;z-index:100
 body.ll-player-screen{overflow-x:hidden}
 .gm-participant-top{position:fixed;top:4px;left:4px;z-index:10000;border:1px solid var(--line);border-radius:12px;padding:6px 8px;background:var(--bg);display:flex;gap:10px;align-items:center}
 .gm-participant-title{font-weight:900;font-size:12px;white-space:nowrap}
+.gm-bbg-to-lobby{position:fixed;top:4px;left:4px;z-index:10000}
+body.gm-participant .app{padding-top:52px}
 .ll-piles-box{border:1px solid var(--line);border-radius:12px;padding:6px;background:#0f1520;display:flex;flex-direction:column;align-items:center;gap:6px}
 .ll-piles-text{color:var(--muted);font-size:12px;white-space:nowrap}
 .ll-piles-icon{width:88px;height:88px;object-fit:contain;border-radius:10px;border:1px solid var(--line);background:#0f1520}

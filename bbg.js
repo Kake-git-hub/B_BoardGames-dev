@@ -8660,8 +8660,16 @@
       turnHtml +
       '</div>' +
       timerTopHtml +
-      (lobbyId && isHost ? '<button id="cnAbortToLobby" class="ghost">ロビーへ</button>' : '') +
       '</div>';
+
+    var gmTopHtml = '';
+    try {
+      if (lobbyId && isHost) {
+        gmTopHtml = '<div class="gm-bbg-to-lobby"><button id="gmBbgToLobby" class="ghost">B_BoardGames(ロビーへ)</button></div>';
+      }
+    } catch (eGmTop) {
+      gmTopHtml = '';
+    }
 
     var gmToolsHtml = '';
 
@@ -8696,13 +8704,19 @@
       }
 
       var stage = room && room.lobbyStage ? String(room.lobbyStage) : 'roles';
-      var locked = stage === 'timer';
+      var locked = stage === 'timer' || !!(player && player.prefsLocked);
+      var saved = !!(myTeam && myRole);
 
-      if (locked) {
+      if (locked || saved) {
+        var note = locked
+          ? '※ テーブルでタイマー設定中です（役職登録はできません）。'
+          : '※ 役職は登録済みです（変更不要ならこのまま待機）。';
         lobbyHtml =
           '<div class="stack">' +
           '<div class="big">待機中</div>' +
-          '<div class="muted">※ テーブルでタイマー設定中です（役職登録はできません）。</div>' +
+          '<div class="muted">' +
+          escapeHtml(note) +
+          '</div>' +
           '<hr />' +
           '<div class="big">参加者（登録状況）</div>' +
           playersHtml +
@@ -8834,6 +8848,8 @@
     render(
       viewEl,
       '\n    <div class="stack">\n      ' +
+        (gmTopHtml || '') +
+        '\n      ' +
         topLine +
         '\n      ' +
         gmToolsHtml +
@@ -9334,6 +9350,15 @@
 
     var ui = opts.ui || {};
 
+    var gmTopHtml = '';
+    try {
+      if (lobbyId && isHost) {
+        gmTopHtml = '<div class="gm-bbg-to-lobby"><button id="gmBbgToLobby" class="ghost">B_BoardGames(ロビーへ)</button></div>';
+      }
+    } catch (eGmTop) {
+      gmTopHtml = '';
+    }
+
     var players = (room && room.players) || {};
     var activePlayers = [];
     var playerKeys = Object.keys(players);
@@ -9705,10 +9730,7 @@
           ? '<div class="kv"><span class="muted">追放</span><b>' + escapeHtml(votedOutLine) + '</b></div>'
           : '') +
         (lobbyId
-          ? '<hr />' +
-            (isHost
-              ? '<div class="row"><button id="wwNextToLobby" class="primary">次へ</button></div>'
-              : '<div class="muted">※ 次へ進むのはゲームマスターです。</div>')
+          ? '<hr />' + (isHost ? '' : '<div class="muted">※ ロビーへ戻るのはゲームマスターです。</div>')
           : isHost
             ? ui && ui.showContinueForm
               ? '<hr />' +
@@ -9786,7 +9808,9 @@
 
     render(
       viewEl,
-      '\n    <div class="stack">\n      <div class="row" style="justify-content:space-between;align-items:center">' +
+      '\n    <div class="stack">\n      ' +
+        (gmTopHtml || '') +
+        '\n      <div class="row" style="justify-content:space-between;align-items:center">' +
         '<div class="big">' +
         escapeHtml(selfName) +
         '</div>' +
@@ -13476,13 +13500,14 @@
             });
           }
 
-          // Lobby mode: GM only "next" => back to lobby.
-          var nextBtn = document.getElementById('wwNextToLobby');
-          if (nextBtn && !nextBtn.__ww_bound) {
-            nextBtn.__ww_bound = true;
-            nextBtn.addEventListener('click', function () {
+          // GM participant fixed button: abort game and return everyone to lobby.
+          var gmBtn = document.getElementById('gmBbgToLobby');
+          if (gmBtn && !gmBtn.__ww_bound) {
+            gmBtn.__ww_bound = true;
+            gmBtn.addEventListener('click', function () {
               if (!lobbyId) return;
-              nextBtn.disabled = true;
+              if (!confirm('ロビーへ戻ります。\n（進行中の場合はゲームを中断し、全員に反映されます）\nよろしいですか？')) return;
+              gmBtn.disabled = true;
               firebaseReady()
                 .then(function () {
                   return setLobbyCurrentGame(lobbyId, null);
@@ -13494,7 +13519,7 @@
                   alert((e && e.message) || '失敗');
                 })
                 .finally(function () {
-                  nextBtn.disabled = false;
+                  gmBtn.disabled = false;
                 });
             });
           }
@@ -13515,9 +13540,7 @@
             });
           }
 
-          if (lobbyId && room && room.phase === 'finished') {
-            ensureLobbyReturnWatcher();
-          }
+          if (lobbyId) ensureLobbyReturnWatcher();
 
           var continueBtn = document.getElementById('continueGame');
           if (continueBtn) {
@@ -14064,11 +14087,7 @@
     var gmTopHtml = '';
     try {
       if (lobbyId && isHost) {
-        gmTopHtml =
-          '<div class="gm-participant-top">' +
-          '<div class="gm-participant-title">ラブレター</div>' +
-          '<button id="gmBackToLobby" class="ghost">ロビーへ</button>' +
-          '</div>';
+        gmTopHtml = '<div class="gm-bbg-to-lobby"><button id="gmBbgToLobby" class="ghost">B_BoardGames(ロビーへ)</button></div>';
       }
     } catch (eGmTop) {
       gmTopHtml = '';
@@ -15293,12 +15312,45 @@
       var player = room && room.players ? room.players[playerId] : null;
       renderLoveLetterPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui, lobbyId: lobbyId });
 
+      // GM participant header spacing
       try {
-        var backBtn = document.getElementById('gmBackToLobby');
+        if (document && document.body && document.body.classList) {
+          document.body.classList.toggle('gm-participant', !!(isHost && lobbyId));
+        }
+      } catch (eGmCls) {
+        // ignore
+      }
+
+      try {
+        var backBtn = document.getElementById('gmBbgToLobby');
         if (backBtn && !backBtn.__gm_bound) {
           backBtn.__gm_bound = true;
           backBtn.addEventListener('click', function () {
-            redirectToLobby();
+            if (!confirm('ロビーへ戻ります。\n（進行中の場合はゲームを中断し、全員に反映されます）\nよろしいですか？')) return;
+            if (!lobbyId) return;
+            backBtn.disabled = true;
+            firebaseReady()
+              .then(function () {
+                var extras = [];
+                try {
+                  extras = lastRoom && lastRoom.settings ? lastRoom.settings.extraCards : [];
+                } catch (e0) {
+                  extras = [];
+                }
+                return setLobbyLoveLetterExtraCards(lobbyId, extras);
+              })
+              .then(function () {
+                return setLobbyCurrentGame(lobbyId, null);
+              })
+              .then(function () {
+                redirectToLobby();
+              })
+              .catch(function (e) {
+                alert((e && e.message) || '失敗');
+              })
+              .finally(function () {
+                backBtn.disabled = false;
+              });
           });
         }
       } catch (eGmBind) {
@@ -16346,28 +16398,7 @@
           renderLoveLetterTable(viewEl, { roomId: roomId, room: room, isHost: isHost, lobbyId: lobbyId });
           updateLoveLetterTableEffectArrow(viewEl, room);
 
-          var abortBtn = document.getElementById('llAbortToLobbyTable');
-          if (abortBtn && !abortBtn.__ll_bound) {
-            abortBtn.__ll_bound = true;
-            abortBtn.addEventListener('click', function () {
-              if (!confirm('【注意】ゲームを中断してロビーに戻します。\nこの操作は全員の画面に反映されます。\nよろしいですか？')) return;
-              if (!lobbyId) return;
-              abortBtn.disabled = true;
-              firebaseReady()
-                .then(function () {
-                  return setLobbyCurrentGame(lobbyId, null);
-                })
-                .then(function () {
-                  redirectToLobby();
-                })
-                .catch(function (e) {
-                  alert((e && e.message) || '失敗');
-                })
-                .finally(function () {
-                  abortBtn.disabled = false;
-                });
-            });
-          }
+          // NOTE: cnAbortToLobby is removed (use gm participant button on player screen).
 
           var nextBtn = document.getElementById('llNextToLobby');
           if (nextBtn && !nextBtn.__ll_bound) {
@@ -18449,8 +18480,15 @@
       var startBtn = document.getElementById('cnStart');
       if (startBtn) {
         startBtn.addEventListener('click', function () {
+          startBtn.disabled = true;
           startCodenamesGame(roomId)
             .then(function () {
+              return getValueOnce(codenamesRoomPath(roomId));
+            })
+            .then(function (room2) {
+              if (!room2 || String(room2.phase || '') !== 'playing') {
+                throw new Error('ゲームを開始できませんでした（役職の登録状況などを確認してください）。');
+              }
               var q = {};
               var v = getCacheBusterParam();
               if (v) q.v = v;
@@ -18475,6 +18513,9 @@
             })
             .catch(function (e) {
               alert((e && e.message) || '失敗');
+            })
+            .finally(function () {
+              startBtn.disabled = false;
             });
         });
       }
@@ -18663,6 +18704,38 @@
 
           var player = room.players ? room.players[playerId] : null;
           renderCodenamesPlayer(viewEl, { roomId: roomId, playerId: playerId, room: room, player: player, isHost: isHost, lobbyId: lobbyId });
+
+          // GM participant header spacing
+          try {
+            if (document && document.body && document.body.classList) {
+              document.body.classList.toggle('gm-participant', !!(isHost && lobbyId));
+            }
+          } catch (eGmCls) {
+            // ignore
+          }
+
+          var gmBtn = document.getElementById('gmBbgToLobby');
+          if (gmBtn && !gmBtn.__gm_bound) {
+            gmBtn.__gm_bound = true;
+            gmBtn.addEventListener('click', function () {
+              if (!confirm('ロビーへ戻ります。\n（進行中の場合はゲームを中断し、全員に反映されます）\nよろしいですか？')) return;
+              if (!lobbyId) return;
+              gmBtn.disabled = true;
+              firebaseReady()
+                .then(function () {
+                  return setLobbyCurrentGame(lobbyId, null);
+                })
+                .then(function () {
+                  redirectToLobby();
+                })
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  gmBtn.disabled = false;
+                });
+            });
+          }
 
           if (lobbyId) ensureLobbyReturnWatcher();
 
