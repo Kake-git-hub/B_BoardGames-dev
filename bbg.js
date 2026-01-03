@@ -8586,6 +8586,22 @@
       var counts = countCodenamesRoles(room);
       var canStart = phase === 'lobby' && counts.redSpymaster === 1 && counts.blueSpymaster === 1 && counts.redOperative >= 1 && counts.blueOperative >= 1;
 
+      var startHint = '';
+      if (!canStart) {
+        startHint =
+          '<div class="muted" style="margin-top:8px">' +
+          '開始条件: 赤スパイマスター=1 / 青スパイマスター=1 / 赤諜報員>=1 / 青諜報員>=1<br />' +
+          '現在: 赤スパイマスター=' +
+          escapeHtml(String(counts.redSpymaster)) +
+          ' / 青スパイマスター=' +
+          escapeHtml(String(counts.blueSpymaster)) +
+          ' / 赤諜報員=' +
+          escapeHtml(String(counts.redOperative)) +
+          ' / 青諜報員=' +
+          escapeHtml(String(counts.blueOperative)) +
+          '</div>';
+      }
+
       var normalSec = getCodenamesTimerNormalSec(room);
       var bonusSec = getCodenamesTimerFirstBonusSec(room);
       var normalVals = [60, 90, 120, 150];
@@ -8610,7 +8626,9 @@
           '</b></label><input id="cnTimerBonus" type="range" min="0" max="3" step="1" value="' +
           escapeHtml(String(bonusIdx)) +
           '" /></div>' +
-          (canStart ? '<button id="cnStart" class="primary">スタート</button>' : '<button class="primary" disabled>スタート</button>') +
+          '<button id="cnStart" class="primary">スタート</button>' +
+          '<div id="cnStartStatus" class="muted" style="min-height:1.2em"></div>' +
+          (startHint || '') +
           '</div>\n    </div>\n  '
       );
       return;
@@ -18598,8 +18616,37 @@
           startBtn.__cn_starting = true;
           startBtn.disabled = true;
 
-          startCodenamesGame(roomId)
+          var stEl = document.getElementById('cnStartStatus');
+          if (stEl) stEl.textContent = '開始処理中...';
+
+          // Pre-check with the latest snapshot so the button being tappable never results in a silent no-op.
+          getValueOnce(codenamesRoomPath(roomId))
+            .then(function (cur) {
+              var phase = (cur && cur.phase) || 'lobby';
+              var counts0 = countCodenamesRoles(cur);
+              var ok =
+                phase === 'lobby' &&
+                counts0.redSpymaster === 1 &&
+                counts0.blueSpymaster === 1 &&
+                counts0.redOperative >= 1 &&
+                counts0.blueOperative >= 1;
+              if (!ok) {
+                throw new Error(
+                  '開始条件未達: 赤スパイマスター=' +
+                    counts0.redSpymaster +
+                    ' / 青スパイマスター=' +
+                    counts0.blueSpymaster +
+                    ' / 赤諜報員=' +
+                    counts0.redOperative +
+                    ' / 青諜報員=' +
+                    counts0.blueOperative
+                );
+              }
+              return startCodenamesGame(roomId);
+            })
             .then(function (room2) {
+              if (stEl) stEl.textContent = '';
+
               if (!room2 || String(room2.phase || '') !== 'playing') {
                 var counts = countCodenamesRoles(room2);
                 throw new Error(
@@ -18638,6 +18685,7 @@
               route();
             })
             .catch(function (e) {
+              if (stEl) stEl.textContent = '';
               alert((e && e.message) || '失敗');
             })
             .finally(function () {
@@ -18649,9 +18697,9 @@
         // Some mobile browsers can miss click; bind pointer/touch as well.
         startBtn.addEventListener('click', doStart);
         if (typeof PointerEvent !== 'undefined') {
-          startBtn.addEventListener('pointerup', doStart);
+          startBtn.addEventListener('pointerdown', doStart);
         } else {
-          startBtn.addEventListener('touchend', doStart);
+          startBtn.addEventListener('touchstart', doStart, { passive: false });
         }
       }
 
