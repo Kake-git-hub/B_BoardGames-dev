@@ -10328,6 +10328,10 @@
         if (!Array.isArray(st.log)) st.log = [];
       }
 
+      function ensurePrivate() {
+        if (!st.private || typeof st.private !== 'object') st.private = {};
+      }
+
       function advanceTurnFrom(pid0) {
         st.turn = hnNextTurnSkipEmpty(order, String(pid0 || ''), hands);
       }
@@ -10337,6 +10341,12 @@
         if (st.waitFor && st.waitFor.type) {
           var wf = st.waitFor;
           st.waitFor = null;
+          // Clear old overlays after acknowledgement.
+          try {
+            st.private = {};
+          } catch (eClrPriv) {
+            // ignore
+          }
           ensureLog();
           st.log = st.log.concat(['（デバッグ）確認完了']);
           var by = wf && wf.by ? String(wf.by || '') : '';
@@ -10656,7 +10666,20 @@
       }
 
       if (cardId === 'witness') {
-        // Choose a target for realism, but effect is private; just advance.
+        // Private effect: record a witness message so the table overlay can show an arrow/icon.
+        var tpW = pickOtherPid(actor);
+        if (tpW && tpW !== actor) {
+          ensurePrivate();
+          try {
+            var wCards = hands && Array.isArray(hands[tpW]) ? hands[tpW].slice() : [];
+            st.private[actor] = { type: 'witness', createdAt: serverNowMs(), targetPid: tpW, cards: wCards };
+          } catch (eWit) {
+            st.private[actor] = { type: 'witness', createdAt: serverNowMs(), targetPid: tpW, cards: [] };
+          }
+          st.waitFor = { type: 'private_ack', by: actor, createdAt: serverNowMs(), cardId: 'witness' };
+          room.state = st;
+          return;
+        }
         advanceTurnFrom(actor);
         room.state = st;
         return;
@@ -10696,6 +10719,17 @@
           room.state = st;
           return;
         }
+
+        // Broadcast notice so table overlay can render actor -> target.
+        ensurePrivate();
+        var title0 = cardId === 'detective' ? '探偵' : 'いぬ';
+        var nowN = serverNowMs();
+        for (var n0 = 0; n0 < order.length; n0++) {
+          var rpidN = String(order[n0] || '');
+          if (!rpidN) continue;
+          st.private[rpidN] = { type: 'notice', title: title0, actorPid: actor, targetPid: tPid, createdAt: nowN };
+        }
+
         var th = hands && Array.isArray(hands[tPid]) ? hands[tPid] : [];
         var hasC = false;
         var hasA = false;
@@ -16635,6 +16669,14 @@
         }
       } else if (pType === 'rumor') {
         var actorId = String(pending.actorId || '');
+        // If the actor has no remaining hand (played rumor as last card), hide arrows but still show the icon.
+        try {
+          if (actorId && handCount(actorId) <= 0) {
+            setSpecByFrom(actorId, { from: actorId, to: actorId, iconCard: 'rumor', bidirectional: false, iconOnlyFrom: actorId, soloIcon: true });
+          }
+        } catch (eSolo0) {
+          // ignore
+        }
         for (var j = 0; j < order.length; j++) {
           var pid2 = String(order[j] || '');
           if (!pid2) continue;
@@ -16664,10 +16706,6 @@
                 fromPid = kpid;
                 toPid = String(msg.targetPid || '');
                 iconCard = 'witness';
-              } else if (type === 'boy') {
-                fromPid = kpid;
-                toPid = String(msg.culpritPid || '');
-                iconCard = 'boy';
               } else if (type === 'notice') {
                 // Detective/Dog notices are broadcast to all players; use actorPid/targetPid.
                 fromPid = String(msg.actorPid || '');
@@ -16735,9 +16773,9 @@
         try {
           var rc = el.getBoundingClientRect();
           var r0 = Math.max(12, Math.min(48, Math.min(rc.width, rc.height) / 2));
-          return r0 + 18;
+          return r0 + 34;
         } catch (e) {
-          return 34;
+          return 50;
         }
       }
 
@@ -16762,6 +16800,38 @@
         if (!fromEl || !toEl) {
           svg.innerHTML = '';
           hideIcon(iconEl);
+          continue;
+        }
+
+        // Icon-only (no arrow) mode.
+        if (spec && spec.soloIcon) {
+          svg.innerHTML = '';
+          try {
+            if (iconEl) {
+              var cid0 = spec.iconCard ? String(spec.iconCard) : '';
+              var def0 = cid0 && HANNIN_CARD_DEFS ? HANNIN_CARD_DEFS[cid0] : null;
+              var icon0 = def0 && def0.icon ? String(def0.icon) : '';
+              if (icon0) {
+                var p0 = centerOf(fromEl);
+                var cx = w / 2;
+                var cy = h / 2;
+                var dx0 = cx - p0.x;
+                var dy0 = cy - p0.y;
+                var len0 = Math.sqrt(dx0 * dx0 + dy0 * dy0);
+                var ux0 = len0 > 0.0001 ? dx0 / len0 : 0;
+                var uy0 = len0 > 0.0001 ? dy0 / len0 : 0;
+                var off = 28;
+                iconEl.style.left = String((p0.x + ux0 * off).toFixed(1)) + 'px';
+                iconEl.style.top = String((p0.y + uy0 * off).toFixed(1)) + 'px';
+                iconEl.style.display = 'block';
+                iconEl.innerHTML = '<img class="ll-table-effect-icon" alt="" src="' + escapeHtml(icon0) + '" />';
+              } else {
+                hideIcon(iconEl);
+              }
+            }
+          } catch (eSolo) {
+            hideIcon(iconEl);
+          }
           continue;
         }
 
