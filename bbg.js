@@ -243,6 +243,18 @@
     history.pushState(null, '', url);
   }
 
+  function hardNavigate(obj) {
+    var q = buildQuery(obj);
+    var url = baseUrl() + (q ? '?' + q : '');
+    if (location.hash) url += location.hash;
+    try {
+      location.href = url;
+    } catch (e) {
+      // Fallback
+      location.assign(url);
+    }
+  }
+
   function getScriptQueryParam(src, key) {
     var s = String(src || '');
     var qi = s.indexOf('?');
@@ -3253,7 +3265,7 @@
     });
   }
 
-  function advanceAfterVoteReveal(roomId) {
+  function advanceAfterVoteReveal(roomId, tieAction) {
     var base = roomPath(roomId);
     return runTxn(base, function (room) {
       if (!room) return room;
@@ -3263,6 +3275,31 @@
       var tieCandidates = rv && Array.isArray(rv.tieCandidates) ? rv.tieCandidates.slice() : null;
       if (tieCandidates && tieCandidates.length > 1) {
         var prevRound = room.voting && room.voting.runoff && room.voting.runoff.round ? parseIntSafe(room.voting.runoff.round, 0) : 0;
+
+        // GM tie choice:
+        // - tieAction === 'minority' => end immediately with minority win
+        // - tieAction === 'revote' => continue revote (no cap)
+        // - otherwise (default) keep legacy behavior: cap at 2 revotes then minority wins
+        if (String(tieAction || '') === 'minority') {
+          return assign({}, room, {
+            phase: 'finished',
+            reveal: { revealedAt: rv.revealedAt || serverNowMs(), votedOutId: '' },
+            result: { winner: 'minority', decidedAt: serverNowMs(), decidedBy: 'gm_tie_choice' }
+          });
+        }
+
+        if (String(tieAction || '') === 'revote') {
+          return assign({}, room, {
+            phase: 'voting',
+            votes: {},
+            voting: {
+              startedAt: serverNowMs(),
+              revealedAt: 0,
+              runoff: { round: prevRound + 1, candidates: tieCandidates }
+            },
+            reveal: { revealedAt: 0, votedOutId: '' }
+          });
+        }
 
         // Re-vote is allowed up to 2 times. If tie persists beyond that, resolve.
         if (prevRound >= 2) {
@@ -4201,13 +4238,6 @@
     }
 
     var gmTopHtml = '';
-    try {
-      if (isHost && lobbyId) {
-        gmTopHtml = '<div class="gm-bbg-to-lobby"><button id="gmBbgToLobby" class="ghost">B_BoardGames(ロビーへ)</button></div>';
-      }
-    } catch (eGmTop) {
-      gmTopHtml = '';
-    }
 
     // Action modal (target/index selection like LoveLetter)
     var modalHtml = '';
@@ -4829,7 +4859,6 @@
     render(
       viewEl,
       '<div class="stack ll-player">' +
-        (gmTopHtml || '') +
         '<div class="ll-topline">' +
         '<div class="ll-status">犯人は踊る ' +
         escapeHtml(playerId ? ('/ ' + hnPlayerName(room, playerId)) : '') +
@@ -5049,15 +5078,6 @@
     function renderNow(room) {
       lastRoom = room;
 
-      // GM participant header spacing
-      try {
-        if (document && document.body && document.body.classList) {
-          document.body.classList.toggle('gm-participant', !!(isHost && lobbyId));
-        }
-      } catch (eGmCls) {
-        // ignore
-      }
-
       // If we came from a lobby, keep a watcher so returning to lobby pulls players back too.
       try {
         if (lobbyId) ensureLobbyReturnWatcher();
@@ -5105,33 +5125,6 @@
       }
 
       renderHanninPlayer(viewEl, { roomId: roomId, room: room, playerId: playerId, lobbyId: lobbyId, isHost: isHost, ui: ui, isTableGmDevice: isTableGmDevice });
-
-      try {
-        var backBtn = document.getElementById('gmBbgToLobby');
-        if (backBtn && !backBtn.__gm_bound) {
-          backBtn.__gm_bound = true;
-          backBtn.addEventListener('click', function () {
-            if (!confirm('ロビーへ戻ります。\n（進行中の場合はゲームを中断し、全員に反映されます）\nよろしいですか？')) return;
-            if (!lobbyId) return;
-            backBtn.disabled = true;
-            firebaseReady()
-              .then(function () {
-                return setLobbyCurrentGame(lobbyId, null);
-              })
-              .then(function () {
-                redirectToLobby();
-              })
-              .catch(function (e) {
-                alert((e && e.message) || '失敗');
-              })
-              .finally(function () {
-                backBtn.disabled = false;
-              });
-          });
-        }
-      } catch (eGmBind) {
-        // ignore
-      }
 
       // Bind handlers on the freshly rendered DOM (important: renderNow can be called from events).
       var cards = document.querySelectorAll('.hnPCard');
@@ -7721,6 +7714,8 @@
   }
 
   var __headerLobbyBackBound = false;
+  var __gmHeaderBound = false;
+  var __gmHeaderInFlight = false;
   function updateHeaderLobbyBackButton(screen, lobbyId) {
     var btn = null;
     try {
@@ -7728,7 +7723,15 @@
     } catch (e0) {
       btn = null;
     }
-    if (!btn) return;
+    // This app now uses a clickable header title for GM participants.
+    try {
+      if (btn) {
+        btn.style.display = 'none';
+        btn.disabled = true;
+      }
+    } catch (eBtn) {
+      // ignore
+    }
 
     var q = null;
     try {
@@ -7738,85 +7741,152 @@
     }
     var isHost = !!(q && String(q.host || '') === '1');
     var isGmDev = !!(q && String(q.gmdev || '') === '1');
+    var isPlayer = !!(q && String(q.player || '') === '1');
 
     var scr = String(screen || '');
     var isLobbyScreen = scr === 'lobby_host' || scr === 'lobby_assign' || scr === 'lobby_login' || scr === 'lobby_create';
-    var isGmScreen = isHost || isGmDev || scr.indexOf('_table') >= 0 || isLobbyScreen;
 
-    // Only show when we have a lobby context, and not on the plain player waiting screen.
-    var show = !!(lobbyId && isGmScreen && scr !== 'lobby_player' && scr !== '');
+    var headerEl = null;
+    var titleEl = null;
     try {
-      btn.style.display = show ? '' : 'none';
-      btn.disabled = !show;
-    } catch (e1) {
+      headerEl = document.querySelector('header.header');
+      titleEl = headerEl ? headerEl.querySelector('h1') : null;
+    } catch (eH0) {
+      headerEl = null;
+      titleEl = null;
+    }
+    if (!headerEl || !titleEl) return;
+
+    var isLobbyAny = scr === 'lobby_host' || scr === 'lobby_assign' || scr === 'lobby_login' || scr === 'lobby_create' || scr === 'lobby_player' || scr === 'lobby_join';
+    var isGamePlayerScreen =
+      isPlayer || scr === 'loveletter_player' || scr === 'codenames_player' || scr === 'hannin_player';
+    var isGmParticipantPlayer = !!(lobbyId && isHost && !isGmDev && isGamePlayerScreen);
+
+    // Toggle a class for CSS targeting.
+    try {
+      if (document && document.body && document.body.classList) {
+        document.body.classList.toggle('gm-participant', isGmParticipantPlayer);
+      }
+    } catch (eCls) {
       // ignore
     }
 
-    if (__headerLobbyBackBound) return;
-    __headerLobbyBackBound = true;
-    btn.addEventListener('click', function () {
-      var q2 = null;
+    // Header visibility policy:
+    // - GM参加者のプレイヤー画面: show clickable header only
+    // - その他の参加者プレイヤー画面: hide header
+    // - ロビー画面: hide header
+    if (isGmParticipantPlayer) {
       try {
-        q2 = parseQuery();
-      } catch (eQ1) {
-        q2 = null;
-      }
-      var lobby = q2 && q2.lobby ? String(q2.lobby) : '';
-      if (!lobby) return;
-
-      var scr2 = q2 && q2.screen ? String(q2.screen) : '';
-      var isLobby2 =
-        scr2 === 'lobby_host' ||
-        scr2 === 'lobby_assign' ||
-        scr2 === 'lobby_login' ||
-        scr2 === 'lobby_create' ||
-        scr2 === 'lobby_player';
-
-      function goLobbyHost() {
-        var qx = {};
-        var v = getCacheBusterParam();
-        if (v) qx.v = v;
-        qx.lobby = lobby;
-        qx.screen = 'lobby_host';
-        try {
-          if (q2 && String(q2.gmdev || '') === '1') qx.gmdev = '1';
-        } catch (eG) {
-          // ignore
-        }
-        setQuery(qx);
-        route();
-      }
-
-      if (isLobby2) {
-        goLobbyHost();
-        return;
-      }
-
-      // Returning from an active game: clear currentGame so everyone syncs back to waiting.
-      if (!confirm('ロビーへ戻ります。\n（進行中の場合はゲームを中断し、全員に反映されます）\nよろしいですか？')) return;
-      try {
-        btn.disabled = true;
-      } catch (eD) {
+        headerEl.style.display = '';
+      } catch (eS1) {
         // ignore
       }
-      firebaseReady()
-        .then(function () {
-          return setLobbyCurrentGame(lobby, null);
-        })
-        .then(function () {
-          goLobbyHost();
-        })
-        .catch(function (e) {
-          alert((e && e.message) || '失敗');
-        })
-        .finally(function () {
-          try {
-            btn.disabled = false;
-          } catch (eE) {
-            // ignore
-          }
-        });
-    });
+      try {
+        titleEl.textContent = 'B_BoardGames(ロビーへ戻る)';
+        titleEl.classList.add('gm-lobby-return');
+      } catch (eT1) {
+        // ignore
+      }
+
+      if (__gmHeaderBound) return;
+      __gmHeaderBound = true;
+      titleEl.addEventListener('click', function () {
+        if (__gmHeaderInFlight) return;
+        var q2 = null;
+        try {
+          q2 = parseQuery();
+        } catch (eQ1) {
+          q2 = null;
+        }
+        var lobby = q2 && q2.lobby ? String(q2.lobby) : '';
+        if (!lobby) return;
+
+        var isHost2 = !!(q2 && String(q2.host || '') === '1');
+        var isGmDev2 = !!(q2 && String(q2.gmdev || '') === '1');
+        var isPlayer2 = !!(q2 && String(q2.player || '') === '1');
+        var scr2 = q2 && q2.screen ? String(q2.screen) : '';
+        var room2 = q2 && q2.room ? String(q2.room) : '';
+        var isGamePlayer2 = isPlayer2 || scr2 === 'loveletter_player' || scr2 === 'codenames_player' || scr2 === 'hannin_player';
+        if (!(lobby && isHost2 && !isGmDev2 && isGamePlayer2)) return;
+
+        if (!confirm('ロビーへ戻ります。\n（進行中の場合はゲームを中断し、全員に反映されます）\nよろしいですか？')) return;
+
+        __gmHeaderInFlight = true;
+        firebaseReady()
+          .then(function () {
+            // LoveLetter: preserve extra-cards setting back to lobby.
+            if (scr2 === 'loveletter_player' && room2) {
+              return getValueOnce(loveletterRoomPath(room2))
+                .then(function (roomObj) {
+                  var extras = [];
+                  try {
+                    extras = llNormalizeExtraCards(roomObj && roomObj.settings ? roomObj.settings.extraCards : []);
+                  } catch (eE0) {
+                    extras = [];
+                  }
+                  return setLobbyLoveLetterExtraCards(lobby, extras);
+                })
+                .catch(function () {
+                  return null;
+                });
+            }
+            return null;
+          })
+          .then(function () {
+            return setLobbyCurrentGame(lobby, null);
+          })
+          .then(function () {
+            var qx = {};
+            var v = getCacheBusterParam();
+            if (v) qx.v = v;
+            qx.lobby = lobby;
+            qx.screen = isHost2 ? 'lobby_host' : 'lobby_player';
+            try {
+              if (q2 && String(q2.gmdev || '') === '1') qx.gmdev = '1';
+            } catch (eG) {
+              // ignore
+            }
+            // Hard reload to ensure old subscriptions do not keep rendering.
+            hardNavigate(qx);
+          })
+          .catch(function (e) {
+            alert((e && e.message) || '失敗');
+          })
+          .finally(function () {
+            __gmHeaderInFlight = false;
+          });
+      });
+      return;
+    }
+
+    // Hide header on lobby and non-GM player screens.
+    if (isLobbyAny || isGamePlayerScreen) {
+      try {
+        headerEl.style.display = 'none';
+      } catch (eS2) {
+        // ignore
+      }
+      try {
+        titleEl.textContent = 'B_BoardGames';
+        titleEl.classList.remove('gm-lobby-return');
+      } catch (eT2) {
+        // ignore
+      }
+      return;
+    }
+
+    // Default screens: show normal header.
+    try {
+      headerEl.style.display = '';
+    } catch (eS3) {
+      // ignore
+    }
+    try {
+      titleEl.textContent = 'B_BoardGames';
+      titleEl.classList.remove('gm-lobby-return');
+    } catch (eT3) {
+      // ignore
+    }
   }
 
   function headerHtml() {
@@ -8662,15 +8732,6 @@
       timerTopHtml +
       '</div>';
 
-    var gmTopHtml = '';
-    try {
-      if (lobbyId && isHost) {
-        gmTopHtml = '<div class="gm-bbg-to-lobby"><button id="gmBbgToLobby" class="ghost">B_BoardGames(ロビーへ)</button></div>';
-      }
-    } catch (eGmTop) {
-      gmTopHtml = '';
-    }
-
     var gmToolsHtml = '';
 
     var lobbyHtml = '';
@@ -8848,7 +8909,6 @@
     render(
       viewEl,
       '\n    <div class="stack">\n      ' +
-        (gmTopHtml || '') +
         '\n      ' +
         topLine +
         '\n      ' +
@@ -9350,25 +9410,18 @@
 
     var ui = opts.ui || {};
 
-    var gmTopHtml = '';
-    try {
-      if (lobbyId && isHost) {
-        gmTopHtml = '<div class="gm-bbg-to-lobby"><button id="gmBbgToLobby" class="ghost">B_BoardGames(ロビーへ)</button></div>';
-      }
-    } catch (eGmTop) {
-      gmTopHtml = '';
-    }
-
     var players = (room && room.players) || {};
     var activePlayers = [];
-    var playerKeys = Object.keys(players);
-    for (var i = 0; i < playerKeys.length; i++) {
-      var id = playerKeys[i];
-      var p = players[id];
-      if (!p || p.role === 'spectator') continue;
-      activePlayers.push({ id: id, name: formatPlayerDisplayName(p) });
+    try {
+      var pkeys = Object.keys(players);
+      for (var pi = 0; pi < pkeys.length; pi++) {
+        var id = pkeys[pi];
+        var p = players[id] || {};
+        if (p && p.role !== 'spectator') activePlayers.push({ id: id, name: formatPlayerDisplayName(p) });
+      }
+    } catch (eP0) {
+      activePlayers = [];
     }
-
     var votedTo = room && room.votes && room.votes[playerId] && room.votes[playerId].to ? room.votes[playerId].to : '';
 
     var votesObj = (room && room.votes) || {};
@@ -9377,8 +9430,7 @@
     for (var vki = 0; vki < voteKeys.length; vki++) {
       var vid = voteKeys[vki];
       var v = votesObj[vid];
-      if (!v || !v.to) continue;
-      counts[v.to] = (counts[v.to] || 0) + 1;
+      if (v && v.to) counts[v.to] = (counts[v.to] || 0) + 1;
     }
 
     var tally = [];
@@ -9611,15 +9663,13 @@
 
     var judgeHtml = '';
 
-    // Vote reveal modal: show voted-out player (or tie) to all, GM advances.
+    // Vote reveal modal: show voted-out player (or tie) to all. On tie, GM chooses.
     var voteRevealModalHtml = '';
     if (phase === 'reveal') {
       try {
         var rv0 = (room && room.reveal) || {};
         var tie0 = rv0 && Array.isArray(rv0.tieCandidates) ? rv0.tieCandidates : null;
         if (tie0 && tie0.length > 1) {
-          var prevRoundR = room && room.voting && room.voting.runoff && room.voting.runoff.round ? parseIntSafe(room.voting.runoff.round, 0) : 0;
-          var isFinalTie = !!rv0.tieFinal || prevRoundR >= 2;
           var names0 = [];
           for (var ti0 = 0; ti0 < tie0.length; ti0++) {
             var pid0 = String(tie0[ti0] || '');
@@ -9631,18 +9681,14 @@
             '<div class="ll-overlay-backdrop"></div>' +
             '<div class="ll-overlay-panel">' +
             '<div class="big">投票結果：同票</div>' +
-            '<div class="muted">' +
-            (isFinalTie ? '同票が続いたため、再投票は行いません' : '次は同票の人だけで再投票します') +
-            '</div>' +
+            '<div class="muted">ゲームマスターが選択します</div>' +
             '<div class="card center" style="padding:14px;margin-top:10px"><div class="big">' +
             escapeHtml(names0.join(' / ') || '-') +
             '</div></div>' +
             '<div class="row" style="justify-content:flex-end;margin-top:12px">' +
             (isHost
-              ? '<button id="wwVoteRevealNext" class="primary">' +
-                (isFinalTie ? '結果へ' : '次へ') +
-                '</button>'
-              : '<div class="muted">ゲームマスターが進めます</div>') +
+              ? '<button id="wwTieRevote" class="primary">再投票する</button><button id="wwTieMinorityWin" class="danger">少数側の勝ち</button>'
+              : '<div class="muted">ゲームマスターが選択します</div>') +
             '</div>' +
             '</div>' +
             '</div>';
@@ -9809,7 +9855,6 @@
     render(
       viewEl,
       '\n    <div class="stack">\n      ' +
-        (gmTopHtml || '') +
         '\n      <div class="row" style="justify-content:space-between;align-items:center">' +
         '<div class="big">' +
         escapeHtml(selfName) +
@@ -9881,8 +9926,6 @@
         var rv = (room && room.reveal) || {};
         var tie = rv && Array.isArray(rv.tieCandidates) ? rv.tieCandidates : null;
         if (tie && tie.length > 1) {
-          var prevRoundR = room && room.voting && room.voting.runoff && room.voting.runoff.round ? parseIntSafe(room.voting.runoff.round, 0) : 0;
-          var isFinalTie = !!rv.tieFinal || prevRoundR >= 2;
           var names = [];
           for (var ti0 = 0; ti0 < tie.length; ti0++) {
             var pid0 = String(tie[ti0] || '');
@@ -9892,16 +9935,15 @@
           revealPanelHtml =
             '<div class="card" style="padding:12px">' +
             '<div class="big">投票結果：同票</div>' +
-            '<div class="muted">' +
-            (isFinalTie ? '同票が続いたため、再投票は行いません' : '次は同票の人だけで再投票します') +
-            '</div>' +
+            '<div class="muted">ゲームマスターが選択します</div>' +
             '<div class="card center" style="padding:14px;margin-top:10px"><div class="big">' +
             escapeHtml(names.join(' / ') || '-') +
             '</div></div>' +
             (isHost
-              ? '<div class="row" style="margin-top:12px"><button id="wwTableVoteRevealNext" class="primary" style="width:100%">' +
-                (isFinalTie ? '結果へ' : '次へ') +
-                '</button></div>'
+              ? '<div class="row" style="margin-top:12px;gap:8px">' +
+                '<button id="wwTableTieRevote" class="primary" style="flex:1">再投票する</button>' +
+                '<button id="wwTableTieMinorityWin" class="danger" style="flex:1">少数側の勝ち</button>' +
+                '</div>'
               : '') +
             '</div>';
         } else {
@@ -13499,29 +13541,6 @@
             });
           }
 
-          // GM participant fixed button: abort game and return everyone to lobby.
-          var gmBtn = document.getElementById('gmBbgToLobby');
-          if (gmBtn && !gmBtn.__ww_bound) {
-            gmBtn.__ww_bound = true;
-            gmBtn.addEventListener('click', function () {
-              if (!lobbyId) return;
-              if (!confirm('ロビーへ戻ります。\n（進行中の場合はゲームを中断し、全員に反映されます）\nよろしいですか？')) return;
-              gmBtn.disabled = true;
-              firebaseReady()
-                .then(function () {
-                  return setLobbyCurrentGame(lobbyId, null);
-                })
-                .then(function () {
-                  redirectToLobby();
-                })
-                .catch(function (e) {
-                  alert((e && e.message) || '失敗');
-                })
-                .finally(function () {
-                  gmBtn.disabled = false;
-                });
-            });
-          }
 
           // Vote reveal modal: GM advances to next phase.
           var voteRevealNext = document.getElementById('wwVoteRevealNext');
@@ -13535,6 +13554,37 @@
                 })
                 .finally(function () {
                   voteRevealNext.disabled = false;
+                });
+            });
+          }
+
+          // Vote reveal (tie): GM chooses whether to revote or end as minority win.
+          var tieRevoteBtn = document.getElementById('wwTieRevote');
+          if (tieRevoteBtn && !tieRevoteBtn.__ww_bound) {
+            tieRevoteBtn.__ww_bound = true;
+            tieRevoteBtn.addEventListener('click', function () {
+              tieRevoteBtn.disabled = true;
+              advanceAfterVoteReveal(roomId, 'revote')
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  tieRevoteBtn.disabled = false;
+                });
+            });
+          }
+
+          var tieMinorityBtn = document.getElementById('wwTieMinorityWin');
+          if (tieMinorityBtn && !tieMinorityBtn.__ww_bound) {
+            tieMinorityBtn.__ww_bound = true;
+            tieMinorityBtn.addEventListener('click', function () {
+              tieMinorityBtn.disabled = true;
+              advanceAfterVoteReveal(roomId, 'minority')
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  tieMinorityBtn.disabled = false;
                 });
             });
           }
@@ -13764,6 +13814,36 @@
                 })
                 .finally(function () {
                   voteRevealNext.disabled = false;
+                });
+            });
+          }
+
+          var tieRevoteBtn = document.getElementById('wwTableTieRevote');
+          if (tieRevoteBtn && !tieRevoteBtn.__ww_bound) {
+            tieRevoteBtn.__ww_bound = true;
+            tieRevoteBtn.addEventListener('click', function () {
+              tieRevoteBtn.disabled = true;
+              advanceAfterVoteReveal(roomId, 'revote')
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  tieRevoteBtn.disabled = false;
+                });
+            });
+          }
+
+          var tieMinorityBtn = document.getElementById('wwTableTieMinorityWin');
+          if (tieMinorityBtn && !tieMinorityBtn.__ww_bound) {
+            tieMinorityBtn.__ww_bound = true;
+            tieMinorityBtn.addEventListener('click', function () {
+              tieMinorityBtn.disabled = true;
+              advanceAfterVoteReveal(roomId, 'minority')
+                .catch(function (e) {
+                  alert((e && e.message) || '失敗');
+                })
+                .finally(function () {
+                  tieMinorityBtn.disabled = false;
                 });
             });
           }
@@ -14082,15 +14162,6 @@
         ? '<img class="ll-piles-icon" alt="grave" src="' + escapeHtml((llCardDef(graveLatest) || {}).icon || '') + '" />'
         : '') +
       '</div>';
-
-    var gmTopHtml = '';
-    try {
-      if (lobbyId && isHost) {
-        gmTopHtml = '<div class="gm-bbg-to-lobby"><button id="gmBbgToLobby" class="ghost">B_BoardGames(ロビーへ)</button></div>';
-      }
-    } catch (eGmTop) {
-      gmTopHtml = '';
-    }
 
     function llCardImgHtml(rank) {
       var d = llCardDef(rank);
@@ -14528,7 +14599,6 @@
     render(
       viewEl,
       '\n    <div class="stack ll-player">\n      ' +
-        (gmTopHtml || '') +
         '\n      <div class="big ll-player-name">' +
         escapeHtml(selfName) +
         '</div>\n\n      ' +
@@ -15323,51 +15393,6 @@
 
       var player = room && room.players ? room.players[playerId] : null;
       renderLoveLetterPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui, lobbyId: lobbyId });
-
-      // GM participant header spacing
-      try {
-        if (document && document.body && document.body.classList) {
-          document.body.classList.toggle('gm-participant', !!(isHost && lobbyId));
-        }
-      } catch (eGmCls) {
-        // ignore
-      }
-
-      try {
-        var backBtn = document.getElementById('gmBbgToLobby');
-        if (backBtn && !backBtn.__gm_bound) {
-          backBtn.__gm_bound = true;
-          backBtn.addEventListener('click', function () {
-            if (!confirm('ロビーへ戻ります。\n（進行中の場合はゲームを中断し、全員に反映されます）\nよろしいですか？')) return;
-            if (!lobbyId) return;
-            backBtn.disabled = true;
-            firebaseReady()
-              .then(function () {
-                var extras = [];
-                try {
-                  extras = lastRoom && lastRoom.settings ? lastRoom.settings.extraCards : [];
-                } catch (e0) {
-                  extras = [];
-                }
-                return setLobbyLoveLetterExtraCards(lobbyId, extras);
-              })
-              .then(function () {
-                return setLobbyCurrentGame(lobbyId, null);
-              })
-              .then(function () {
-                redirectToLobby();
-              })
-              .catch(function (e) {
-                alert((e && e.message) || '失敗');
-              })
-              .finally(function () {
-                backBtn.disabled = false;
-              });
-          });
-        }
-      } catch (eGmBind) {
-        // ignore
-      }
 
       // Prevent long-press image search/callout and dragging on card images.
       try {
@@ -18717,38 +18742,6 @@
 
           var player = room.players ? room.players[playerId] : null;
           renderCodenamesPlayer(viewEl, { roomId: roomId, playerId: playerId, room: room, player: player, isHost: isHost, lobbyId: lobbyId });
-
-          // GM participant header spacing
-          try {
-            if (document && document.body && document.body.classList) {
-              document.body.classList.toggle('gm-participant', !!(isHost && lobbyId));
-            }
-          } catch (eGmCls) {
-            // ignore
-          }
-
-          var gmBtn = document.getElementById('gmBbgToLobby');
-          if (gmBtn && !gmBtn.__gm_bound) {
-            gmBtn.__gm_bound = true;
-            gmBtn.addEventListener('click', function () {
-              if (!confirm('ロビーへ戻ります。\n（進行中の場合はゲームを中断し、全員に反映されます）\nよろしいですか？')) return;
-              if (!lobbyId) return;
-              gmBtn.disabled = true;
-              firebaseReady()
-                .then(function () {
-                  return setLobbyCurrentGame(lobbyId, null);
-                })
-                .then(function () {
-                  redirectToLobby();
-                })
-                .catch(function (e) {
-                  alert((e && e.message) || '失敗');
-                })
-                .finally(function () {
-                  gmBtn.disabled = false;
-                });
-            });
-          }
 
           if (lobbyId) ensureLobbyReturnWatcher();
 
