@@ -2622,6 +2622,88 @@
     });
   }
 
+  function applyLobbyCodenamesAssignToRoom(roomId, lobbyId) {
+    var lid = String(lobbyId || '').trim();
+    if (!lid) return Promise.resolve(null);
+    return getValueOnce(lobbyPath(lid) + '/codenamesAssign')
+      .catch(function () {
+        return null;
+      })
+      .then(function (assignMap) {
+        var map = assignMap && typeof assignMap === 'object' ? assignMap : {};
+        return runTxn(codenamesRoomPath(roomId), function (room) {
+          if (!room) return room;
+          if (room.phase !== 'lobby') return room;
+
+          var players = assign({}, room.players || {});
+          var keys = Object.keys(players);
+          for (var i = 0; i < keys.length; i++) {
+            var pid = String(keys[i] || '');
+            if (!pid) continue;
+            var p = players[pid] || {};
+            var a = map && map[pid] ? map[pid] : null;
+            if (!a) continue;
+            var t = a.team === 'red' || a.team === 'blue' ? String(a.team) : '';
+            var r = a.role === 'spymaster' || a.role === 'operative' ? String(a.role) : '';
+            players[pid] = assign({}, p, {
+              team: t || String(p.team || ''),
+              role: r || String(p.role || '')
+            });
+          }
+
+          // Normalize: exactly one spymaster per team; others operative.
+          function pickSpymaster(team) {
+            var best = '';
+            var bestJoined = 1e18;
+            // Prefer lobby assign spymaster.
+            for (var k = 0; k < keys.length; k++) {
+              var pid2 = String(keys[k] || '');
+              if (!pid2) continue;
+              var p2 = players[pid2] || {};
+              if (String(p2.team || '') !== String(team || '')) continue;
+              var a2 = map && map[pid2] ? map[pid2] : null;
+              if (!a2 || String(a2.role || '') !== 'spymaster') continue;
+              var j2 = p2.joinedAt || 0;
+              if (!best || j2 < bestJoined) {
+                best = pid2;
+                bestJoined = j2;
+              }
+            }
+            if (best) return best;
+            // Fallback: earliest-joined in team.
+            for (var k2 = 0; k2 < keys.length; k2++) {
+              var pid3 = String(keys[k2] || '');
+              if (!pid3) continue;
+              var p3 = players[pid3] || {};
+              if (String(p3.team || '') !== String(team || '')) continue;
+              var j3 = p3.joinedAt || 0;
+              if (!best || j3 < bestJoined) {
+                best = pid3;
+                bestJoined = j3;
+              }
+            }
+            return best;
+          }
+
+          var redSm = pickSpymaster('red');
+          var blueSm = pickSpymaster('blue');
+
+          for (var kk = 0; kk < keys.length; kk++) {
+            var pid4 = String(keys[kk] || '');
+            if (!pid4) continue;
+            var p4 = players[pid4] || {};
+            var tm = String(p4.team || '');
+            if (tm !== 'red' && tm !== 'blue') continue;
+            players[pid4] = assign({}, p4, { role: 'operative' });
+          }
+          if (redSm && players[redSm]) players[redSm] = assign({}, players[redSm], { role: 'spymaster' });
+          if (blueSm && players[blueSm]) players[blueSm] = assign({}, players[blueSm], { role: 'spymaster' });
+
+          return assign({}, room, { players: players, assignFromLobbyAt: room.assignFromLobbyAt || serverNowMs() });
+        });
+      });
+  }
+
   function joinPlayerInCodenamesRoom(roomId, playerId, name, isHostPlayer) {
     var base = codenamesRoomPath(roomId);
     return runTxn(base, function (room) {
@@ -18620,7 +18702,24 @@
           if (stEl) stEl.textContent = '開始処理中...';
 
           // Pre-check with the latest snapshot so the button being tappable never results in a silent no-op.
-          getValueOnce(codenamesRoomPath(roomId))
+          var qx0 = null;
+          var lobbyId0 = '';
+          try {
+            qx0 = parseQuery();
+            lobbyId0 = qx0 && qx0.lobby ? String(qx0.lobby) : '';
+          } catch (eQ0) {
+            qx0 = null;
+            lobbyId0 = '';
+          }
+
+          Promise.resolve()
+            .then(function () {
+              if (!lobbyId0) return null;
+              return applyLobbyCodenamesAssignToRoom(roomId, lobbyId0);
+            })
+            .then(function () {
+              return getValueOnce(codenamesRoomPath(roomId));
+            })
             .then(function (cur) {
               var phase = (cur && cur.phase) || 'lobby';
               var counts0 = countCodenamesRoles(cur);
