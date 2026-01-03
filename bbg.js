@@ -9049,7 +9049,6 @@
       escapeHtml(turnLabel) +
       (who ? '（' + escapeHtml(who) + '）' : '') +
       '</div>' +
-      (lobbyId && isHost ? '<button id="cnAbortToLobbyTable" class="ghost">ロビーへ</button>' : '') +
       '</div>';
 
     var lobbyHtml = '';
@@ -9589,7 +9588,7 @@
     if (statusShort) headerRightLines.push(String(statusShort));
     if (roleLine) headerRightLines.push(String(roleLine));
     if (turnLine) headerRightLines.push(String(turnLine));
-    if (phase === 'discussion') headerRightLines.push('残り ' + formatMMSS(remain));
+    if (phase === 'discussion' && role !== 'majority') headerRightLines.push('残り ' + formatMMSS(remain));
 
     var headerRightHtml = '<div class="muted" style="text-align:right;line-height:1.25">';
     for (var hri = 0; hri < headerRightLines.length; hri++) {
@@ -16190,9 +16189,6 @@
     render(
       viewEl,
       '\n    <div class="stack">\n      <div class="big">ラブレター（テーブル）</div>\n      ' +
-        (lobbyId && isHost
-          ? '<div class="row" style="justify-content:flex-end"><button id="llAbortToLobbyTable" class="ghost">ロビーへ</button></div>'
-          : '') +
         '\n      ' +
         (phase === 'finished' ? resultHtml + '<hr />' : '') +
         '<div class="ll-table">' +
@@ -17869,29 +17865,6 @@
             rerenderCnTimer();
           }, 250);
 
-          var abortBtn = document.getElementById('cnAbortToLobbyTable');
-          if (abortBtn && !abortBtn.__cn_bound) {
-            abortBtn.__cn_bound = true;
-            abortBtn.addEventListener('click', function () {
-              if (!confirm('【注意】ゲームを中断してロビーに戻します。\nこの操作は全員の画面に反映されます。\nよろしいですか？')) return;
-              if (!lobbyId) return;
-              abortBtn.disabled = true;
-              firebaseReady()
-                .then(function () {
-                  return setLobbyCurrentGame(lobbyId, null);
-                })
-                .then(function () {
-                  redirectToLobby();
-                })
-                .catch(function (e) {
-                  alert((e && e.message) || '失敗');
-                })
-                .finally(function () {
-                  abortBtn.disabled = false;
-                });
-            });
-          }
-
           if (lobbyId) ensureLobbyReturnWatcher();
 
           var abortBtn = document.getElementById('cnAbortToLobby');
@@ -18615,13 +18588,11 @@
       }
 
       var startBtn = document.getElementById('cnStart');
-      if (startBtn) {
+      if (startBtn && !startBtn.__cn_bound) {
+        startBtn.__cn_bound = true;
         startBtn.addEventListener('click', function () {
           startBtn.disabled = true;
           startCodenamesGame(roomId)
-            .then(function () {
-              return getValueOnce(codenamesRoomPath(roomId));
-            })
             .then(function (room2) {
               if (!room2 || String(room2.phase || '') !== 'playing') {
                 throw new Error('ゲームを開始できませんでした（役職の登録状況などを確認してください）。');
