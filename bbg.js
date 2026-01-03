@@ -22,7 +22,8 @@
       var src = arguments[i];
       if (!src) continue;
       for (var k in src) {
-        if (hasOwn.call(src, k)) target[k] = src[k];
+        if (!hasOwn.call(src, k)) continue;
+        target[k] = src[k];
       }
     }
     return target;
@@ -6044,6 +6045,15 @@
               st.private[pda0] = { type: 'notice', title: '探偵', message: msg0, actorPid: pid, createdAt: at0, targetPid: String(tPid || '') };
             }
             st.waitFor = { type: 'notice_ack', by: pid, createdAt: at0, cardId: 'detective' };
+
+            // Reflect the same result text in last play.
+            try {
+              if (!st.lastPlay || typeof st.lastPlay !== 'object') st.lastPlay = {};
+              st.lastPlay.to = String(tPid || '');
+              st.lastPlay.text = String(msg0 || '');
+            } catch (eLPD0) {
+              // ignore
+            }
           } catch (eDA) {
             // ignore
           }
@@ -6053,6 +6063,13 @@
         }
 
         if (hasC && !hasA) {
+          try {
+            if (!st.lastPlay || typeof st.lastPlay !== 'object') st.lastPlay = {};
+            st.lastPlay.to = String(tPid || '');
+            st.lastPlay.text = '探偵が犯人を指摘した';
+          } catch (eLPDWin) {
+            // ignore
+          }
           hnSetResult(st, 'citizen', room, tPid, '探偵が犯人を指摘した');
           st.log = st.log.concat(['一般人側の勝利']);
           return assign({}, room, { state: st });
@@ -6070,6 +6087,15 @@
             st.private[pbi] = { type: 'notice', title: '探偵', message: msg1, actorPid: pid, createdAt: at1, targetPid: String(tPid || '') };
           }
           st.waitFor = { type: 'notice_ack', by: pid, createdAt: at1, cardId: 'detective' };
+
+          // Reflect the same result text in last play.
+          try {
+            if (!st.lastPlay || typeof st.lastPlay !== 'object') st.lastPlay = {};
+            st.lastPlay.to = String(tPid || '');
+            st.lastPlay.text = String(msg1 || '');
+          } catch (eLPD1) {
+            // ignore
+          }
         } catch (eNC0) {
           // ignore
         }
@@ -6089,6 +6115,13 @@
           return assign({}, room, { state: st });
         }
         if (String(th2[pick] || '') === 'culprit') {
+          try {
+            if (!st.lastPlay || typeof st.lastPlay !== 'object') st.lastPlay = {};
+            st.lastPlay.to = String(tPid2 || '');
+            st.lastPlay.text = 'いぬが犯人カードを当てた';
+          } catch (eLPDogWin) {
+            // ignore
+          }
           hnSetResult(st, 'citizen', room, tPid2, 'いぬが犯人カードを当てた');
           st.log = st.log.concat(['一般人側の勝利']);
           return assign({}, room, { state: st });
@@ -6106,6 +6139,15 @@
             st.private[pbj] = { type: 'notice', title: 'いぬ', message: msg2, actorPid: pid, createdAt: at2, targetPid: String(tPid2 || '') };
           }
           st.waitFor = { type: 'notice_ack', by: pid, createdAt: at2, cardId: 'dog' };
+
+          // Reflect the same result text in last play.
+          try {
+            if (!st.lastPlay || typeof st.lastPlay !== 'object') st.lastPlay = {};
+            st.lastPlay.to = String(tPid2 || '');
+            st.lastPlay.text = String(msg2 || '');
+          } catch (eLPDog2) {
+            // ignore
+          }
         } catch (eDogN2) {
           // ignore
         }
@@ -7684,11 +7726,23 @@
     }
     var verHtml = ver ? '<div class="muted" style="text-align:center">Version: ' + escapeHtml(ver) + '</div>' : '';
 
+    var debugBtns = '';
+    try {
+      if (isDevDebugSite()) {
+        debugBtns =
+          '\n      <div class="row">\n        <button id="homeLoveLetterSim" class="ghost">ラブレター（デバッグ）テーブルシミュレーション</button>\n      </div>\n      <div class="row">\n        <button id="homeHanninSim" class="ghost">犯人は踊る（デバッグ）テーブルシミュレーション</button>\n      </div>';
+      }
+    } catch (eDbgBtn) {
+      debugBtns = '';
+    }
+
     render(
       viewEl,
       '\n    <div class="stack">\n      ' +
         (verHtml || '') +
-        '\n      <div class="row">\n        <button id="homeCreateJoin" class="primary">ロビー作成（この端末もゲームに参加）</button>\n      </div>\n      <div class="row">\n        <button id="homeCreateGm" class="ghost">ロビー作成（この端末をゲームマスターデバイス）</button>\n      </div>\n      <div class="row">\n        <button id="homeLoveLetterSim" class="ghost">ラブレター（デバッグ）テーブルシミュレーション</button>\n      </div>\n      <div class="row">\n        <button id="homeHanninSim" class="ghost">犯人は踊る（デバッグ）テーブルシミュレーション</button>\n      </div>\n    </div>\n  '
+        '\n      <div class="row">\n        <button id="homeCreateJoin" class="primary">ロビー作成（この端末もゲームに参加）</button>\n      </div>\n      <div class="row">\n        <button id="homeCreateGm" class="ghost">ロビー作成（この端末をゲームマスターデバイス）</button>\n      </div>' +
+        (debugBtns || '') +
+        '\n    </div>\n  '
     );
   }
 
@@ -17113,6 +17167,28 @@
       playerId = '';
     }
 
+    // If this device is in GM table mode but also has a player identity,
+    // do not show the table screen; use player screen only.
+    try {
+      var qGm = parseQuery();
+      var isTableGm = !!(qGm && String(qGm.gmdev || '') === '1');
+      if (isTableGm && playerId) {
+        var qxP = {};
+        var vP = getCacheBusterParam();
+        if (vP) qxP.v = vP;
+        qxP.room = roomId;
+        if (qGm && qGm.lobby) qxP.lobby = String(qGm.lobby);
+        qxP.player = String(playerId);
+        qxP.gmdev = '0';
+        qxP.screen = 'hannin_player';
+        setQuery(qxP);
+        route();
+        return;
+      }
+    } catch (eGmOnly) {
+      // ignore
+    }
+
     var lastRoom = null;
 
     firebaseReady()
@@ -18844,7 +18920,7 @@
       var v2 = document.getElementById('view');
       if (v2) {
         v2.innerHTML =
-        '\n      <div class="row">\n        <button id="homeLoveLetterSim" class="ghost">ラブレター（デバッグ）テーブルシミュレーション</button>\n      </div>\n      <div class="row">\n        <button id="homeHanninSim" class="ghost">犯人は踊る（デバッグ）テーブルシミュレーション</button>\n      </div>\n    </div>\n  '
+          '<div class="stack"><div class="badge">エラー</div><div class="big">表示できません</div><div class="muted">詳細: ' +
           escapeHtml((e3 && e3.message) || String(e3)) +
           '</div></div>';
       }
