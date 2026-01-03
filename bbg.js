@@ -4203,11 +4203,7 @@
     var gmTopHtml = '';
     try {
       if (isHost && lobbyId) {
-        gmTopHtml =
-          '<div class="gm-participant-top">' +
-          '<div class="gm-participant-title">犯人は踊る</div>' +
-          '<button id="gmBackToLobby" class="ghost">ロビーへ</button>' +
-          '</div>';
+        gmTopHtml = '<div class="gm-bbg-to-lobby"><button id="gmBbgToLobby" class="ghost">B_BoardGames(ロビーへ)</button></div>';
       }
     } catch (eGmTop) {
       gmTopHtml = '';
@@ -5053,6 +5049,15 @@
     function renderNow(room) {
       lastRoom = room;
 
+      // GM participant header spacing
+      try {
+        if (document && document.body && document.body.classList) {
+          document.body.classList.toggle('gm-participant', !!(isHost && lobbyId));
+        }
+      } catch (eGmCls) {
+        // ignore
+      }
+
       // If we came from a lobby, keep a watcher so returning to lobby pulls players back too.
       try {
         if (lobbyId) ensureLobbyReturnWatcher();
@@ -5102,11 +5107,26 @@
       renderHanninPlayer(viewEl, { roomId: roomId, room: room, playerId: playerId, lobbyId: lobbyId, isHost: isHost, ui: ui, isTableGmDevice: isTableGmDevice });
 
       try {
-        var backBtn = document.getElementById('gmBackToLobby');
+        var backBtn = document.getElementById('gmBbgToLobby');
         if (backBtn && !backBtn.__gm_bound) {
           backBtn.__gm_bound = true;
           backBtn.addEventListener('click', function () {
-            redirectToLobby();
+            if (!confirm('ロビーへ戻ります。\n（進行中の場合はゲームを中断し、全員に反映されます）\nよろしいですか？')) return;
+            if (!lobbyId) return;
+            backBtn.disabled = true;
+            firebaseReady()
+              .then(function () {
+                return setLobbyCurrentGame(lobbyId, null);
+              })
+              .then(function () {
+                redirectToLobby();
+              })
+              .catch(function (e) {
+                alert((e && e.message) || '失敗');
+              })
+              .finally(function () {
+                backBtn.disabled = false;
+              });
           });
         }
       } catch (eGmBind) {
@@ -17776,6 +17796,7 @@
       if (document && document.body && document.body.classList) {
         document.body.classList.remove('ll-player-screen');
         document.body.classList.remove('ll-table-screen');
+        document.body.classList.remove('gm-participant');
       }
     } catch (e0) {
       // ignore
