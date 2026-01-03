@@ -4130,6 +4130,7 @@
     var lobbyId = opts.lobbyId ? String(opts.lobbyId) : '';
     var ui = opts.ui || {};
     var isTableGmDevice = !!opts.isTableGmDevice;
+    var isHost = !!opts.isHost;
 
     var players = (room && room.players) || {};
     var st = (room && room.state) || {};
@@ -4197,6 +4198,19 @@
         '</div>';
     } catch (ePile) {
       pilesHtml = '';
+    }
+
+    var gmTopHtml = '';
+    try {
+      if (isHost && lobbyId) {
+        gmTopHtml =
+          '<div class="gm-participant-top">' +
+          '<div class="gm-participant-title">犯人は踊る</div>' +
+          '<button id="gmBackToLobby" class="ghost">ロビーへ</button>' +
+          '</div>';
+      }
+    } catch (eGmTop) {
+      gmTopHtml = '';
     }
 
     // Action modal (target/index selection like LoveLetter)
@@ -4401,6 +4415,10 @@
           var pid2 = String(order0[ti] || '');
           if (!pid2) continue;
           if (pid2 === playerId) continue;
+          if (cardId === 'deal') {
+            var thx = hands && Array.isArray(hands[pid2]) ? hands[pid2] : [];
+            if (!thx.length) continue;
+          }
           eligible.push(pid2);
         }
 
@@ -4815,10 +4833,13 @@
     render(
       viewEl,
       '<div class="stack ll-player">' +
+        (gmTopHtml || '') +
         '<div class="ll-topline">' +
-        '<div class="ll-status">犯人は踊る ' + escapeHtml(playerId ? ('/ ' + hnPlayerName(room, playerId)) : '') + '</div>' +
-        '<div class="badge">' +
-        escapeHtml('手番: ' + (turnPid ? hnPlayerName(room, turnPid) : '-')) +
+        '<div class="ll-status">犯人は踊る ' +
+        escapeHtml(playerId ? ('/ ' + hnPlayerName(room, playerId)) : '') +
+        '<span class="muted" style="margin-left:10px">' +
+        escapeHtml((turnPid ? hnPlayerName(room, turnPid) : '-') + 'のターン') +
+        '</span>' +
         '</div>' +
         '</div>' +
         (pilesHtml || '') +
@@ -5079,6 +5100,18 @@
       }
 
       renderHanninPlayer(viewEl, { roomId: roomId, room: room, playerId: playerId, lobbyId: lobbyId, isHost: isHost, ui: ui, isTableGmDevice: isTableGmDevice });
+
+      try {
+        var backBtn = document.getElementById('gmBackToLobby');
+        if (backBtn && !backBtn.__gm_bound) {
+          backBtn.__gm_bound = true;
+          backBtn.addEventListener('click', function () {
+            redirectToLobby();
+          });
+        }
+      } catch (eGmBind) {
+        // ignore
+      }
 
       // Bind handlers on the freshly rendered DOM (important: renderNow can be called from events).
       var cards = document.querySelectorAll('.hnPCard');
@@ -5437,6 +5470,15 @@
           } else if (cardId === 'deal') {
             var t3 = String(ui.hnAction.targetPid || '');
             if (!t3) return;
+            try {
+              var th3 = st && st.hands && Array.isArray(st.hands[t3]) ? st.hands[t3] : [];
+              if (!th3.length) {
+                setInlineError('hnPlayError', '相手に手札がありません');
+                return;
+              }
+            } catch (eDealT) {
+              // ignore
+            }
             action = { targetPid: t3 };
           }
 
@@ -6260,6 +6302,29 @@
         if (!tPid3 || tPid3 === pid) {
           advanceTurn();
           return assign({}, room, { state: st });
+        }
+
+        // If the actor has no remaining hand after using Deal, the effect cannot resolve.
+        // Skip the effect and proceed to next turn.
+        try {
+          var ah3 = hands && Array.isArray(hands[pid]) ? hands[pid] : [];
+          if (!ah3.length) {
+            advanceTurn();
+            return assign({}, room, { state: st });
+          }
+        } catch (eDealA0) {
+          // ignore
+        }
+
+        // Target must have at least one card to exchange.
+        try {
+          var th3 = hands && Array.isArray(hands[tPid3]) ? hands[tPid3] : [];
+          if (!th3.length) {
+            advanceTurn();
+            return assign({}, room, { state: st });
+          }
+        } catch (eDealT0) {
+          // ignore
         }
 
         // Pending: actor and target choose simultaneously.
@@ -13976,6 +14041,19 @@
         : '') +
       '</div>';
 
+    var gmTopHtml = '';
+    try {
+      if (lobbyId && isHost) {
+        gmTopHtml =
+          '<div class="gm-participant-top">' +
+          '<div class="gm-participant-title">ラブレター</div>' +
+          '<button id="gmBackToLobby" class="ghost">ロビーへ</button>' +
+          '</div>';
+      }
+    } catch (eGmTop) {
+      gmTopHtml = '';
+    }
+
     function llCardImgHtml(rank) {
       var d = llCardDef(rank);
       var icon = d && d.icon ? String(d.icon) : '';
@@ -14411,15 +14489,15 @@
 
     render(
       viewEl,
-      '\n    <div class="stack ll-player">\n      <div class="big ll-player-name">' +
+      '\n    <div class="stack ll-player">\n      ' +
+        (gmTopHtml || '') +
+        '\n      <div class="big ll-player-name">' +
         escapeHtml(selfName) +
         '</div>\n\n      ' +
         pilesHtml +
         '\n\n      <div class="card ll-status-card" style="padding:10px">\n        <div class="ll-topline">\n          <div class="ll-status">' +
         escapeHtml(statusText || '') +
-        '</div>\n          ' +
-        (lobbyId && isHost ? '<button id="llAbortToLobby" class="ghost">ロビーへ</button>' : '') +
-        '\n        </div>\n      </div>\n\n      ' +
+        '</div>\n        </div>\n      </div>\n\n      ' +
         (resultHtml || '') +
         '\n\n      ' +
         (spectateHtml || '') +
@@ -15194,6 +15272,18 @@
 
       var player = room && room.players ? room.players[playerId] : null;
       renderLoveLetterPlayer(viewEl, { roomId: roomId, playerId: playerId, player: player, room: room, isHost: isHost, ui: ui, lobbyId: lobbyId });
+
+      try {
+        var backBtn = document.getElementById('gmBackToLobby');
+        if (backBtn && !backBtn.__gm_bound) {
+          backBtn.__gm_bound = true;
+          backBtn.addEventListener('click', function () {
+            redirectToLobby();
+          });
+        }
+      } catch (eGmBind) {
+        // ignore
+      }
 
       // Prevent long-press image search/callout and dragging on card images.
       try {
@@ -17276,7 +17366,7 @@
 
           // (removed) Manual deal button: auto-deal is used.
 
-          function chooseTargetPid(room, actorPid, allowSelf) {
+          function chooseTargetPid(room, actorPid, allowSelf, requireHasHand) {
             var players = (room && room.players) || {};
             var order = room && room.state && Array.isArray(room.state.order) ? room.state.order : Object.keys(players || {});
             var opts = [];
@@ -17284,6 +17374,10 @@
               var pid = String(order[i] || '');
               if (!pid) continue;
               if (!allowSelf && String(pid) === String(actorPid)) continue;
+              if (requireHasHand) {
+                var hh = room && room.state && room.state.hands && Array.isArray(room.state.hands[pid]) ? room.state.hands[pid] : [];
+                if (!hh.length) continue;
+              }
               opts.push(pid);
             }
             if (!opts.length) return '';
@@ -17351,7 +17445,7 @@
                 if (pick < 0) return;
                 action = { targetPid: t2, targetIndex: pick };
               } else if (cardId === 'deal') {
-                var t3 = chooseTargetPid(room, pid, false);
+                var t3 = chooseTargetPid(room, pid, false, true);
                 if (!t3) return;
                 action = { targetPid: t3 };
               } else if (cardId === 'witness') {
