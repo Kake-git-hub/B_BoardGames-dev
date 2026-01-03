@@ -5963,7 +5963,21 @@
 
       var nm = hnPlayerName(room, pid);
       var cardNm = (HANNIN_CARD_DEFS[cardId] ? HANNIN_CARD_DEFS[cardId].name : cardId);
-      st.log = st.log.concat([nm + '：' + cardNm + ' をプレイ']);
+      (function () {
+        var line = '';
+        try {
+          var tPid0 = a && a.targetPid ? String(a.targetPid || '') : '';
+          var tNm0 = tPid0 ? hnPlayerName(room, tPid0) : '';
+          if (cardId === 'detective' || cardId === 'dog' || cardId === 'witness' || cardId === 'deal') {
+            line = tNm0 ? nm + ' が ' + tNm0 + ' へ ' + cardNm + ' を使用' : nm + ' が ' + cardNm + ' を使用';
+          } else {
+            line = nm + ' が ' + cardNm + ' を使用';
+          }
+        } catch (eLP0) {
+          line = nm + ' が ' + cardNm + ' を使用';
+        }
+        st.log = st.log.concat([line]);
+      })();
 
       function advanceTurn() {
         st.turn = hnNextTurnSkipEmpty(order, pid, hands);
@@ -10820,6 +10834,13 @@
         var y = 50 + radius * Math.sin(rad);
         var isTurnSeat = !!(turnPid && String(pid) === String(turnPid));
         var cnt = handCount(pid);
+        var plotOn = false;
+        try {
+          var allies0 = st && st.allies && typeof st.allies === 'object' ? st.allies : {};
+          plotOn = !!(allies0 && allies0[String(pid)]);
+        } catch (ePlot0) {
+          plotOn = false;
+        }
         seatsHtml +=
           '<div class="ll-seat' +
           (isTurnSeat ? ' ll-seat--turn' : '') +
@@ -10835,6 +10856,7 @@
           '<div class="ll-seat-card hn-sim-seat-card">' +
           '<div class="ll-seat-name">' +
           escapeHtml(pname(pid)) +
+          (plotOn ? ' <span class="badge">たくらみ中</span>' : '') +
           '</div>' +
           '<div class="hn-sim-handcount muted">手札: ' +
           escapeHtml(String(cnt)) +
@@ -16174,8 +16196,18 @@
 
       var lastPlay = hnLastPlayText(room);
 
+      var lastPlayHtml = '';
+      try {
+        if (lastPlay) {
+          lastPlayHtml = '<div class="ll-table-lastplay ll-table-lastplay-banner" aria-live="polite">' + escapeHtml(String(lastPlay || '')) + '</div>';
+        }
+      } catch (eLP) {
+        lastPlayHtml = '';
+      }
+
       var centerHtml =
-        '<div class="ll-table-center" style="margin-top:-8px">' +
+        '<div class="ll-table-center ll-table-center--ll" style="margin-top:-18px">' +
+        '<div class="ll-table-center-top">' +
         '<div class="ll-table-pile">' +
         '<div class="muted">墓地</div>' +
         '<div class="ll-table-pile-count"><b>' +
@@ -16184,8 +16216,9 @@
         '<div class="ll-table-grave-stack">' +
         graveHtml2 +
         '</div>' +
-        (lastPlay ? '<div class="ll-table-lastplay muted">' + escapeHtml(lastPlay) + '</div>' : '') +
         '</div>' +
+        '</div>' +
+        (lastPlayHtml ? '<div class="ll-table-center-bottom">' + lastPlayHtml + '</div>' : '') +
         '</div>';
 
       var arrowHtml = '';
@@ -16212,6 +16245,13 @@
         var y = 50 + radius * Math.sin(rad);
         var isTurnSeat = !!(turnPid && String(pid) === String(turnPid));
         var cnt = handCount(pid);
+        var plotOn = false;
+        try {
+          var allies0 = st && st.allies && typeof st.allies === 'object' ? st.allies : {};
+          plotOn = !!(allies0 && allies0[String(pid)]);
+        } catch (ePlot0) {
+          plotOn = false;
+        }
         seatsHtml +=
           '<div class="ll-seat' +
           (isTurnSeat ? ' ll-seat--turn' : '') +
@@ -16227,6 +16267,7 @@
           '<div class="ll-seat-card hn-sim-seat-card">' +
           '<div class="ll-seat-name">' +
           escapeHtml(pname(pid)) +
+          (plotOn ? ' <span class="badge">たくらみ中</span>' : '') +
           '</div>' +
           '<div class="hn-sim-handcount muted">手札: ' +
           escapeHtml(String(cnt)) +
@@ -16582,13 +16623,15 @@
           setSpecByFrom(a, { from: a, to: t, iconCard: 'deal', bidirectional: true, iconOnlyFrom: a });
         }
       } else if (pType === 'info') {
+        var actorId0 = String(pending.actorId || '');
         for (var i = 0; i < order.length; i++) {
           var pid = String(order[i] || '');
           if (!pid) continue;
           if (handCount(pid) <= 0) continue; // skip empty-hand players
-          var left = hnLeftPid(order, pid);
-          if (!left || String(left) === String(pid)) continue;
-          specsBySlot[i] = { from: pid, to: left, iconCard: 'info', bidirectional: false };
+          // Visual direction should match rumor (clockwise/right).
+          var right0 = hnRightPid(order, pid);
+          if (!right0 || String(right0) === String(pid)) continue;
+          specsBySlot[i] = { from: pid, to: right0, iconCard: 'info', bidirectional: false, iconOnlyFrom: actorId0 };
         }
       } else if (pType === 'rumor') {
         var actorId = String(pending.actorId || '');
@@ -16606,18 +16649,59 @@
         try {
           if (priv && typeof priv === 'object') {
             var keys = Object.keys(priv);
+            var bestByFrom = {};
             for (var pk = 0; pk < keys.length; pk++) {
-              var fromPid = String(keys[pk] || '');
-              var msg = priv[fromPid] || null;
+              var kpid = String(keys[pk] || '');
+              var msg = priv[kpid] || null;
               if (!msg || !msg.type) continue;
               var type = String(msg.type || '');
-              if (type !== 'witness' && type !== 'boy') continue;
+
+              var fromPid = '';
               var toPid = '';
-              if (type === 'witness') toPid = String(msg.targetPid || '');
-              if (type === 'boy') toPid = String(msg.culpritPid || '');
+              var iconCard = '';
+
+              if (type === 'witness') {
+                fromPid = kpid;
+                toPid = String(msg.targetPid || '');
+                iconCard = 'witness';
+              } else if (type === 'boy') {
+                fromPid = kpid;
+                toPid = String(msg.culpritPid || '');
+                iconCard = 'boy';
+              } else if (type === 'notice') {
+                // Detective/Dog notices are broadcast to all players; use actorPid/targetPid.
+                fromPid = String(msg.actorPid || '');
+                toPid = String(msg.targetPid || '');
+                var title = String(msg.title || '');
+                if (title === '探偵') iconCard = 'detective';
+                else if (title === 'いぬ') iconCard = 'dog';
+                else iconCard = '';
+              } else {
+                continue;
+              }
+
               if (!fromPid || !toPid || fromPid === toPid) continue;
               if (order.indexOf(fromPid) < 0) continue;
-              setSpecByFrom(fromPid, { from: fromPid, to: toPid, iconCard: type, bidirectional: false, iconOnlyFrom: fromPid });
+              if (order.indexOf(toPid) < 0) continue;
+
+              var at = 0;
+              try {
+                at = parseIntSafe(msg.createdAt, 0);
+              } catch (eAt0) {
+                at = 0;
+              }
+              var prev = bestByFrom[fromPid] || null;
+              if (!prev || at >= (prev.at || 0)) {
+                bestByFrom[fromPid] = { at: at, spec: { from: fromPid, to: toPid, iconCard: iconCard, bidirectional: false, iconOnlyFrom: fromPid } };
+              }
+            }
+
+            var fromKeys = Object.keys(bestByFrom);
+            for (var kk = 0; kk < fromKeys.length; kk++) {
+              var fp = String(fromKeys[kk] || '');
+              var ent = bestByFrom[fp];
+              if (!ent || !ent.spec) continue;
+              setSpecByFrom(fp, ent.spec);
             }
           }
         } catch (ePriv) {
