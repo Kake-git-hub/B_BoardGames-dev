@@ -172,8 +172,8 @@ body.ll-player-screen{overflow-x:hidden}
 .ll-piles-icon{width:88px;height:88px;object-fit:contain;border-radius:10px;border:1px solid var(--line);background:#0f1520}
 
 /* Hannin: per-player grave icons in the piles box */
-.hn-grave-icons{display:flex;flex-wrap:wrap;gap:4px;justify-content:center;max-width:96px}
-.hn-grave-icons .ll-grave-icon{width:18px;height:18px;vertical-align:-5px;margin-left:4px;border-radius:5px}
+.hn-grave-icons{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:180px}
+body.ll-player-screen .hn-grave-icons .ll-grave-icon{width:56px;height:56px;vertical-align:0;margin-left:0;border-radius:10px}
 
 /* Love Letter: table screen */
 body.ll-table-screen .app{max-width:980px}

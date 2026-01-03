@@ -4793,6 +4793,25 @@
       resultHtml = '';
     }
 
+    // "Next" after game end: show for GM device and GM participant.
+    var nextHtml = '';
+    try {
+      var r2 = (st && st.result) || {};
+      if (lobbyId && r2 && r2.decidedAt) {
+        var isGmParticipant = !!opts.isHost;
+        try {
+          if (!isGmParticipant && playerId && players && players[playerId] && players[playerId].isHost) isGmParticipant = true;
+        } catch (eGm) {
+          // ignore
+        }
+        nextHtml = isGmParticipant
+          ? '<div class="row" style="justify-content:center"><button id="hnNextToLobby" class="primary">次へ</button></div>'
+          : '<div class="muted center">※ 次へ進むのはゲームマスターです。</div>';
+      }
+    } catch (eNext) {
+      nextHtml = '';
+    }
+
     render(
       viewEl,
       '<div class="stack ll-player">' +
@@ -4804,6 +4823,7 @@
         '</div>' +
         (pilesHtml || '') +
         (resultHtml || '') +
+        (nextHtml || '') +
         (privateHtml || '') +
         (revealHtml || '') +
         (confirmHtml || '') +
@@ -5803,7 +5823,56 @@
             renderError(viewEl, '部屋が見つかりません');
             return;
           }
+
+          // Host-side fallback: auto-deal if the table device isn't open yet.
+          try {
+            var stAD = room && room.state ? room.state : null;
+            var orderAD = stAD && Array.isArray(stAD.order) ? stAD.order : [];
+            var expectedAD = orderAD && orderAD.length ? orderAD.length : 0;
+            var actualAD = room && room.players ? Object.keys(room.players || {}).length : 0;
+            var enoughAD = expectedAD >= 3 ? actualAD >= expectedAD : actualAD >= 3;
+            if (isHost && room && room.phase === 'lobby' && room.players && enoughAD) {
+              if (!routeHanninPlayer.__autoDealt) routeHanninPlayer.__autoDealt = {};
+              var keyAD = String(roomId || '') + '|' + String(actualAD);
+              if (!routeHanninPlayer.__autoDealt[keyAD]) {
+                routeHanninPlayer.__autoDealt[keyAD] = true;
+                dealHanninGame(roomId).catch(function () {
+                  // ignore
+                });
+              }
+            }
+          } catch (eAutoDealP) {
+            // ignore
+          }
+
           renderNow(room);
+
+          // Bind "Next" button when shown.
+          try {
+            var nextBtn = document.getElementById('hnNextToLobby');
+            if (nextBtn && !nextBtn.__hn_bound) {
+              nextBtn.__hn_bound = true;
+              nextBtn.addEventListener('click', function () {
+                if (!lobbyId) return;
+                nextBtn.disabled = true;
+                firebaseReady()
+                  .then(function () {
+                    return setLobbyCurrentGame(lobbyId, null);
+                  })
+                  .then(function () {
+                    redirectToLobby();
+                  })
+                  .catch(function (e) {
+                    alert((e && e.message) || '失敗');
+                  })
+                  .finally(function () {
+                    nextBtn.disabled = false;
+                  });
+              });
+            }
+          } catch (eBindNext) {
+            // ignore
+          }
         });
       })
       .then(function (u) {
@@ -16647,59 +16716,11 @@
 
     render(
       viewEl,
-      '<div class="stack">' +
-        '<div class="big">犯人は踊る</div>' +
-        '<div class="kv"><span class="muted">ルームID</span><b>' +
-        escapeHtml(roomId) +
-        '</b></div>' +
-        '<div class="kv"><span class="muted">状態</span><b>' +
-        escapeHtml(phase || '-') +
-        '</b></div>' +
-        '<div class="kv"><span class="muted">進行</span><b>' +
-        (started ? '進行中' : '開始前（第一発見者を捨てる）') +
-        '</b></div>' +
-        (pending && pending.type === 'info'
-          ? '<div class="card"><b>情報操作</b><div class="muted">左隣へ渡すカードを全員選択してください。</div></div>'
-          : '') +
-        (pending && pending.type === 'deal'
-          ? '<div class="card"><b>取引</b><div class="muted">' +
-            escapeHtml(hnPlayerName(room, String(pending.targetPid || ''))) +
-            ' と ' +
-            escapeHtml(hnPlayerName(room, String(pending.actorId || ''))) +
-            ' が出すカードを選択中です。</div></div>'
-          : '') +
-        (result && result.decidedAt
-          ? (function () {
-              var w = Array.isArray(result.winners) ? result.winners : [];
-              var names = [];
-              for (var iW = 0; iW < w.length; iW++) names.push(hnPlayerName(room, String(w[iW] || '')));
-              return (
-                '<div class="card"><b>' +
-                escapeHtml(result.side === 'culprit' ? '犯人側の勝利' : result.side === 'citizen' ? '一般人側の勝利' : '結果') +
-                '</b>' +
-                (names.length ? '<div class="muted">勝者: ' + escapeHtml(names.join(' / ')) + '</div>' : '') +
-                '<div class="muted">' +
-                escapeHtml(String(result.reason || '')) +
-                '</div></div>'
-              );
-            })()
-          : '') +
-        (isHost
-          ? '<div class="row">' +
-            (lobbyId ? '<button id="hnAbortToLobby" class="danger">中断してロビーへ</button>' : '') +
-            (lobbyId && result && result.decidedAt ? '<button id="hnNextToLobby" class="primary">次へでロビーに戻る</button>' : '') +
-            '</div>'
-          : '') +
-        (debugIframeHtml || '') +
-        '<div class="stack"><div class="muted">テーブル</div>' +
+      '<div class="hn-table hn-table-only">' +
         (hanninTableVizHtml() || '<div class="muted">（表示できません）</div>') +
-        '</div>' +
-        '<div class="stack"><div class="muted">プレイヤー</div>' +
-        playersHtml +
-        '</div>' +
-        '<div class="stack"><div class="muted">墓地</div>' +
-        graveHtml +
-        '</div>' +
+        (lobbyId && result && result.decidedAt
+          ? '<div class="row" style="justify-content:center;margin-top:12px"><button id="hnNextToLobby" class="primary">次へ</button></div>'
+          : '') +
       '</div>'
     );
   }
@@ -17191,7 +17212,8 @@
             var order = st && Array.isArray(st.order) ? st.order : [];
             var expected = order && order.length ? order.length : 0;
             var actual = room && room.players ? Object.keys(room.players || {}).length : 0;
-            if (isHost && isTable && room && room.phase === 'lobby' && room.players && expected >= 3 && actual >= expected) {
+            var enough = expected >= 3 ? actual >= expected : actual >= 3;
+            if (isHost && isTable && room && room.phase === 'lobby' && room.players && enough) {
               if (!routeHanninTable.__autoDealt) routeHanninTable.__autoDealt = {};
               var key = String(roomId || '') + '|' + String(Object.keys(room.players || {}).length);
               if (!routeHanninTable.__autoDealt[key]) {
