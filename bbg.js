@@ -12104,8 +12104,8 @@
               if (kind === 'codenames') {
                 q.host = '1';
                 if (!isTableGm) {
-                  q.player = '1';
-                  q.screen = 'codenames_player';
+                  // GM参加者（テーブル端末ではない）はタイマー設定画面へ。
+                  q.screen = 'codenames_host';
                 } else {
                   // Insert timer settings screen before showing the table view.
                   q.screen = 'codenames_host';
@@ -12255,10 +12255,9 @@
       q.autojoin = '1';
 
       if (kind === 'codenames') {
-        q.screen = isHostDevice ? 'codenames_player' : 'codenames_join';
+        q.screen = isHostDevice ? 'codenames_host' : 'codenames_join';
         if (isHostDevice) {
           q.host = '1';
-          q.player = '1';
         }
       } else if (kind === 'loveletter') {
         q.screen = isHostDevice ? 'loveletter_player' : 'loveletter_join';
@@ -15208,7 +15207,7 @@
 
     var playerId = getOrCreateLoveLetterPlayerId(roomId);
     var unsub = null;
-    var ui = { pending: null, modal: null, handFrontIndex: 1, peekDismissedKey: '', ackInFlight: false, modalScrollTop: 0 };
+    var ui = { pending: null, modal: null, handFrontIndex: 1, peekDismissedKey: '', ackInFlight: false, modalScrollTop: 0, cancelled: false };
     var lastRoom = null;
 
     var lobbyId = '';
@@ -15224,6 +15223,19 @@
 
     function redirectToLobby() {
       if (!lobbyId) return;
+      ui.cancelled = true;
+      try {
+        if (unsub) unsub();
+      } catch (eU0) {
+        // ignore
+      }
+      unsub = null;
+      try {
+        if (ui && ui.lobbyUnsub) ui.lobbyUnsub();
+      } catch (eL0) {
+        // ignore
+      }
+      ui.lobbyUnsub = null;
       var q = {};
       var v = getCacheBusterParam();
       if (v) q.v = v;
@@ -15778,6 +15790,7 @@
     firebaseReady()
       .then(function () {
         return subscribeLoveLetterRoom(roomId, function (room) {
+          if (ui.cancelled) return;
           if (!room) {
             renderError(viewEl, '部屋が見つかりません');
             return;
