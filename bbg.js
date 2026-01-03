@@ -1013,49 +1013,6 @@
     });
   }
 
-  function ensureLobbyTestPlayers(lobbyId, testPlayers) {
-    var lid = String(lobbyId || '').trim();
-    if (!lid) return Promise.reject(new Error('ロビーIDがありません'));
-    var list = Array.isArray(testPlayers) ? testPlayers.slice() : [];
-    if (!list.length) return Promise.resolve(null);
-
-    var now = serverNowMs ? serverNowMs() : Date.now();
-    return runTxn(lobbyPath(lid), function (current) {
-      if (!current) return current;
-      if (!current.members) current.members = {};
-      if (!current.order || !Array.isArray(current.order)) current.order = [];
-
-      for (var i = 0; i < list.length; i++) {
-        var p = list[i] || {};
-        var id = String(p.id || '').trim();
-        var nm = String(p.name || '').trim();
-        if (!id || !nm) continue;
-
-        if (!current.members[id]) {
-          current.members[id] = { name: nm, joinedAt: now, lastSeenAt: now };
-        } else {
-          current.members[id].name = nm;
-          current.members[id].lastSeenAt = now;
-          try {
-            if (current.members[id] && current.members[id].isGmDevice) delete current.members[id].isGmDevice;
-          } catch (eDel) {
-            // ignore
-          }
-        }
-
-        var exists = false;
-        for (var j = 0; j < current.order.length; j++) {
-          if (String(current.order[j]) === id) {
-            exists = true;
-            break;
-          }
-        }
-        if (!exists) current.order.push(id);
-      }
-      return current;
-    });
-  }
-
   function setLobbyOrder(lobbyId, nextOrder) {
     if (!Array.isArray(nextOrder)) return Promise.reject(new Error('順番が不正です'));
     return setValue(lobbyPath(lobbyId) + '/order', nextOrder);
@@ -11345,14 +11302,6 @@
     var btn = document.getElementById('lobbyCreateBtn');
     if (!btn) return;
     btn.addEventListener('click', function () {
-      var autoTest = false;
-      try {
-        var q0 = parseQuery();
-        autoTest = !!(q0 && String(q0.autotest || '') === '1');
-      } catch (eAuto) {
-        autoTest = false;
-      }
-
       var form;
       try {
         clearInlineError('lobbyCreateError');
@@ -11367,17 +11316,6 @@
       firebaseReady()
         .then(function () {
           return createLobbyWithRetry(form.name, false);
-        })
-        .then(function (res) {
-          if (!autoTest) return res;
-          // Dev helper: start with 1 real participant + 3 test players already joined.
-          return ensureLobbyTestPlayers(res.lobbyId, [
-            { id: 'test_p1', name: 'テスト1' },
-            { id: 'test_p2', name: 'テスト2' },
-            { id: 'test_p3', name: 'テスト3' }
-          ]).then(function () {
-            return res;
-          });
         })
         .then(function (res) {
           var q = {};
