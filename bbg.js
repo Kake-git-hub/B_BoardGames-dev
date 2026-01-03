@@ -1059,6 +1059,19 @@
     });
   }
 
+  function isDevDeployment() {
+    try {
+      var host = (typeof location !== 'undefined' && location && location.host) ? String(location.host) : '';
+      var path = (typeof location !== 'undefined' && location && location.pathname) ? String(location.pathname) : '';
+      // Treat the dev GitHub Pages site and localhost as dev.
+      if (host.indexOf('localhost') >= 0 || host.indexOf('127.0.0.1') >= 0) return true;
+      if (path.indexOf('B_BoardGames-dev') >= 0) return true;
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function setLobbyOrder(lobbyId, nextOrder) {
     if (!Array.isArray(nextOrder)) return Promise.reject(new Error('順番が不正です'));
     return setValue(lobbyPath(lobbyId) + '/order', nextOrder);
@@ -12323,7 +12336,9 @@
               } catch (eQAuto) {
                 qAuto = null;
               }
-              var want = !!(qAuto && String(qAuto.autotest || '') === '1');
+              var autoParam = qAuto ? String(qAuto.autotest || '') : '';
+              // Default-on for dev deployment; allow explicit disable with ?autotest=0
+              var want = autoParam === '0' ? false : (autoParam === '1' ? true : isDevDeployment());
               if (want && !lobby.currentGame) {
                 ensureLobbyTestPlayers(lobbyId, [
                   { id: 'test_p1', name: 'テスト1' },
