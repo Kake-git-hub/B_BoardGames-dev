@@ -5958,26 +5958,32 @@
       st.hands = hands;
       st.graveyard = grave;
       st.used = used;
-      st.lastPlay = { at: serverNowMs(), playerId: pid, cardId: cardId };
       if (!Array.isArray(st.log)) st.log = [];
 
       var nm = hnPlayerName(room, pid);
       var cardNm = (HANNIN_CARD_DEFS[cardId] ? HANNIN_CARD_DEFS[cardId].name : cardId);
-      (function () {
-        var line = '';
-        try {
-          var tPid0 = a && a.targetPid ? String(a.targetPid || '') : '';
-          var tNm0 = tPid0 ? hnPlayerName(room, tPid0) : '';
-          if (cardId === 'detective' || cardId === 'dog' || cardId === 'witness' || cardId === 'deal') {
-            line = tNm0 ? nm + ' が ' + tNm0 + ' へ ' + cardNm + ' を使用' : nm + ' が ' + cardNm + ' を使用';
-          } else {
-            line = nm + ' が ' + cardNm + ' を使用';
-          }
-        } catch (eLP0) {
+      var lastPlayTo = '';
+      var line = '';
+      try {
+        var tPid0 = a && a.targetPid ? String(a.targetPid || '') : '';
+        lastPlayTo = String(tPid0 || '');
+        var tNm0 = tPid0 ? hnPlayerName(room, tPid0) : '';
+        if (cardId === 'detective' || cardId === 'dog' || cardId === 'witness' || cardId === 'deal') {
+          line = tNm0 ? nm + ' が ' + tNm0 + ' へ ' + cardNm + ' を使用' : nm + ' が ' + cardNm + ' を使用';
+        } else {
           line = nm + ' が ' + cardNm + ' を使用';
         }
-        st.log = st.log.concat([line]);
-      })();
+      } catch (eLP0) {
+        line = nm + ' が ' + cardNm + ' を使用';
+      }
+      st.log = st.log.concat([line]);
+      try {
+        var text0 = String(line || '');
+        if (text0 && text0[text0.length - 1] !== '。') text0 += '。';
+        st.lastPlay = { at: serverNowMs(), playerId: pid, cardId: cardId, to: String(lastPlayTo || ''), text: text0 };
+      } catch (eLP1) {
+        st.lastPlay = { at: serverNowMs(), playerId: pid, cardId: cardId };
+      }
 
       function advanceTurn() {
         st.turn = hnNextTurnSkipEmpty(order, pid, hands);
@@ -10618,11 +10624,36 @@
 
       if (typeof st.turnCount !== 'number') st.turnCount = 0;
       st.turnCount = (parseIntSafe(st.turnCount, 0) || 0) + 1;
-      st.lastPlay = { at: serverNowMs(), playerId: actor, cardId: cardId };
       ensureLog();
       var nm = hnPlayerName(room, actor);
       var cardNm = (HANNIN_CARD_DEFS[cardId] ? HANNIN_CARD_DEFS[cardId].name : cardId);
-      st.log = st.log.concat([nm + '：' + cardNm + ' をプレイ']);
+      var lastPlayTo = '';
+      try {
+        if (cardId === 'detective' || cardId === 'dog' || cardId === 'witness' || cardId === 'deal') {
+          lastPlayTo = String(pickOtherPid(actor) || '');
+        }
+      } catch (eLPTo) {
+        lastPlayTo = '';
+      }
+      var line = '';
+      try {
+        var tnm0 = lastPlayTo ? hnPlayerName(room, lastPlayTo) : '';
+        if (cardId === 'detective' || cardId === 'dog' || cardId === 'witness' || cardId === 'deal') {
+          line = tnm0 ? nm + ' が ' + tnm0 + ' へ ' + cardNm + ' を使用' : nm + ' が ' + cardNm + ' を使用';
+        } else {
+          line = nm + ' が ' + cardNm + ' を使用';
+        }
+      } catch (eLPLine) {
+        line = nm + ' が ' + cardNm + ' を使用';
+      }
+      st.log = st.log.concat([line]);
+      try {
+        var t0 = String(line || '');
+        if (t0 && t0[t0.length - 1] !== '。') t0 += '。';
+        st.lastPlay = { at: serverNowMs(), playerId: actor, cardId: cardId, to: String(lastPlayTo || ''), text: t0 };
+      } catch (eLPSet) {
+        st.lastPlay = { at: serverNowMs(), playerId: actor, cardId: cardId };
+      }
 
       function finish(side, culpritId, reason) {
         st.result = { side: String(side || ''), winners: [], culpritId: String(culpritId || ''), decidedAt: serverNowMs(), reason: String(reason || '') };
@@ -10828,23 +10859,33 @@
       var centerHtml =
         '<div class="ll-table-center">' +
         '<div class="ll-table-pile">' +
-        '<div class="muted">墓地</div>' +
-        '<div class="ll-table-pile-count"><b>' +
+        '<div class="muted">墓地/<b>' +
         escapeHtml(String(grave.length || 0)) +
-        '</b></div>' +
+        '枚</b></div>' +
         '<div class="ll-table-grave-stack">' +
         graveHtml +
         '</div>' +
         (function () {
           var lp = '';
           try {
-            var log = st && Array.isArray(st.log) ? st.log : [];
-            lp = log && log.length ? String(log[log.length - 1] || '') : '';
+            var lp0 = st && st.lastPlay ? st.lastPlay : null;
+            lp = lp0 && lp0.text ? String(lp0.text || '') : '';
+            if (!lp) {
+              var log = st && Array.isArray(st.log) ? st.log : [];
+              for (var i = (log.length || 0) - 1; i >= 0; i--) {
+                var s = String(log[i] || '');
+                if (!s) continue;
+                if (s.indexOf(' を使用') >= 0 || s.indexOf(' をプレイ') >= 0) {
+                  lp = s;
+                  break;
+                }
+              }
+            }
           } catch (eLP) {
             lp = '';
           }
           if (lp && lp[lp.length - 1] !== '。') lp += '。';
-          return lp ? '<div class="ll-table-lastplay muted">' + escapeHtml(lp) + '</div>' : '';
+          return lp ? '<div class="ll-table-lastplay ll-table-lastplay-banner" aria-live="polite">' + escapeHtml(lp) + '</div>' : '';
         })() +
         '</div>' +
         '</div>';
@@ -10904,7 +10945,7 @@
 
       render(
         rootEl,
-        '<div class="ll-table">' +
+        '<div class="ll-table hn-table">' +
           arrowHtml +
           arrowIconHtml +
           seatsHtml +
@@ -16158,11 +16199,21 @@
     function hnLastPlayText(room) {
       try {
         var st0 = room && room.state ? room.state : null;
+        var lp0 = st0 && st0.lastPlay ? st0.lastPlay : null;
+        var t0 = lp0 && lp0.text ? String(lp0.text || '') : '';
+        if (t0) {
+          if (t0 && t0[t0.length - 1] !== '。') t0 += '。';
+          return t0;
+        }
+        // Fallback: scan the log for the latest "... を使用" line (so we don't show e.g. "勝利" lines).
         var log = st0 && Array.isArray(st0.log) ? st0.log : [];
-        var last = log && log.length ? String(log[log.length - 1] || '') : '';
-        if (last) {
-          if (last && last[last.length - 1] !== '。') last += '。';
-          return last;
+        for (var i = (log.length || 0) - 1; i >= 0; i--) {
+          var s = String(log[i] || '');
+          if (!s) continue;
+          if (s.indexOf(' を使用') >= 0 || s.indexOf(' をプレイ') >= 0) {
+            if (s && s[s.length - 1] !== '。') s += '。';
+            return s;
+          }
         }
       } catch (e0) {
         // ignore
@@ -16243,10 +16294,9 @@
         '<div class="ll-table-center ll-table-center--ll" style="margin-top:-18px">' +
         '<div class="ll-table-center-top">' +
         '<div class="ll-table-pile">' +
-        '<div class="muted">墓地</div>' +
-        '<div class="ll-table-pile-count"><b>' +
+        '<div class="muted">墓地/<b>' +
         escapeHtml(String(grave.length || 0)) +
-        '</b></div>' +
+        '枚</b></div>' +
         '<div class="ll-table-grave-stack">' +
         graveHtml2 +
         '</div>' +
@@ -16314,7 +16364,7 @@
       }
 
       return (
-        '<div class="ll-table">' +
+        '<div class="ll-table hn-table">' +
         arrowHtml +
         arrowIconHtml +
         seatsHtml +
