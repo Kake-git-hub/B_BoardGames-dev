@@ -11938,7 +11938,9 @@
                 q.screen = 'loveletter_extras';
               } else if (kind === 'hannin') {
                 q.host = '1';
-                if (hostPidH) q.player = String(hostPidH);
+                // GM端末(テーブル表示)は player を持たせない：player があると誤ってプレイヤー画面扱いになるため。
+                // この端末もプレイヤーとして参加したい場合は、別途プレイヤー用URLで参加する。
+                if (!isTableGm && hostPidH) q.player = String(hostPidH);
                 q.screen = isTableGm ? 'hannin_table' : 'hannin_player';
               }
               setQuery(q);
@@ -17167,28 +17169,6 @@
       playerId = '';
     }
 
-    // If this device is in GM table mode but also has a player identity,
-    // do not show the table screen; use player screen only.
-    try {
-      var qGm = parseQuery();
-      var isTableGm = !!(qGm && String(qGm.gmdev || '') === '1');
-      if (isTableGm && playerId) {
-        var qxP = {};
-        var vP = getCacheBusterParam();
-        if (vP) qxP.v = vP;
-        qxP.room = roomId;
-        if (qGm && qGm.lobby) qxP.lobby = String(qGm.lobby);
-        qxP.player = String(playerId);
-        qxP.gmdev = '0';
-        qxP.screen = 'hannin_player';
-        setQuery(qxP);
-        route();
-        return;
-      }
-    } catch (eGmOnly) {
-      // ignore
-    }
-
     var lastRoom = null;
 
     firebaseReady()
@@ -17207,7 +17187,11 @@
           try {
             var qx = parseQuery();
             var isTable = !!(qx && String(qx.gmdev || '') === '1');
-            if (isHost && isTable && room && room.phase === 'lobby' && room.players) {
+            var st = room && room.state ? room.state : null;
+            var order = st && Array.isArray(st.order) ? st.order : [];
+            var expected = order && order.length ? order.length : 0;
+            var actual = room && room.players ? Object.keys(room.players || {}).length : 0;
+            if (isHost && isTable && room && room.phase === 'lobby' && room.players && expected >= 3 && actual >= expected) {
               if (!routeHanninTable.__autoDealt) routeHanninTable.__autoDealt = {};
               var key = String(roomId || '') + '|' + String(Object.keys(room.players || {}).length);
               if (!routeHanninTable.__autoDealt[key]) {
