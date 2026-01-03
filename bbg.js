@@ -1013,6 +1013,52 @@
     });
   }
 
+  function ensureLobbyTestPlayers(lobbyId, testPlayers) {
+    var lid = String(lobbyId || '').trim();
+    if (!lid) return Promise.reject(new Error('ロビーIDがありません'));
+    var list = Array.isArray(testPlayers) ? testPlayers.slice() : [];
+    if (!list.length) return Promise.resolve(null);
+
+    var now = serverNowMs ? serverNowMs() : Date.now();
+    return runTxn(lobbyPath(lid), function (current) {
+      if (!current) return current;
+      // Do not seed during an active game.
+      if (current.currentGame) return current;
+
+      if (!current.members) current.members = {};
+      if (!current.order || !Array.isArray(current.order)) current.order = [];
+
+      for (var i = 0; i < list.length; i++) {
+        var p = list[i] || {};
+        var id = String(p.id || '').trim();
+        var nm = String(p.name || '').trim();
+        if (!id || !nm) continue;
+
+        if (!current.members[id]) {
+          current.members[id] = { name: nm, joinedAt: now, lastSeenAt: now };
+        } else {
+          current.members[id].name = nm;
+          current.members[id].lastSeenAt = now;
+          try {
+            if (current.members[id] && current.members[id].isGmDevice) delete current.members[id].isGmDevice;
+          } catch (eDel) {
+            // ignore
+          }
+        }
+
+        var exists = false;
+        for (var j = 0; j < current.order.length; j++) {
+          if (String(current.order[j]) === id) {
+            exists = true;
+            break;
+          }
+        }
+        if (!exists) current.order.push(id);
+      }
+      return current;
+    });
+  }
+
   function setLobbyOrder(lobbyId, nextOrder) {
     if (!Array.isArray(nextOrder)) return Promise.reject(new Error('順番が不正です'));
     return setValue(lobbyPath(lobbyId) + '/order', nextOrder);
@@ -11403,7 +11449,7 @@
     } catch (e0) {
       isTableGmDevice = false;
     }
-    var ui = { selectedKind: '', lastLobby: null };
+    var ui = { selectedKind: '', lastLobby: null, _autotestSeeded: false };
     var joinUrl = makeLobbyJoinUrl(lobbyId);
 
     function drawQr(size) {
@@ -12264,6 +12310,32 @@
           } catch (eAuth) {
             redirectToLobbyPlayer();
             return;
+          }
+
+          // Dev helper: seed lobby with test players for quick UI checks.
+          // Enabled only when URL has ?autotest=1 and only in lobby (no active game).
+          try {
+            if (!ui._autotestSeeded) {
+              ui._autotestSeeded = true;
+              var qAuto = null;
+              try {
+                qAuto = parseQuery();
+              } catch (eQAuto) {
+                qAuto = null;
+              }
+              var want = !!(qAuto && String(qAuto.autotest || '') === '1');
+              if (want && !lobby.currentGame) {
+                ensureLobbyTestPlayers(lobbyId, [
+                  { id: 'test_p1', name: 'テスト1' },
+                  { id: 'test_p2', name: 'テスト2' },
+                  { id: 'test_p3', name: 'テスト3' }
+                ]).catch(function () {
+                  // ignore
+                });
+              }
+            }
+          } catch (eSeed) {
+            // ignore
           }
 
           // Avoid re-rendering on high-frequency heartbeat updates (keeps QR from resetting).
