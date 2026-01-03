@@ -1013,6 +1013,49 @@
     });
   }
 
+  function ensureLobbyTestPlayers(lobbyId, testPlayers) {
+    var lid = String(lobbyId || '').trim();
+    if (!lid) return Promise.reject(new Error('ロビーIDがありません'));
+    var list = Array.isArray(testPlayers) ? testPlayers.slice() : [];
+    if (!list.length) return Promise.resolve(null);
+
+    var now = serverNowMs ? serverNowMs() : Date.now();
+    return runTxn(lobbyPath(lid), function (current) {
+      if (!current) return current;
+      if (!current.members) current.members = {};
+      if (!current.order || !Array.isArray(current.order)) current.order = [];
+
+      for (var i = 0; i < list.length; i++) {
+        var p = list[i] || {};
+        var id = String(p.id || '').trim();
+        var nm = String(p.name || '').trim();
+        if (!id || !nm) continue;
+
+        if (!current.members[id]) {
+          current.members[id] = { name: nm, joinedAt: now, lastSeenAt: now };
+        } else {
+          current.members[id].name = nm;
+          current.members[id].lastSeenAt = now;
+          try {
+            if (current.members[id] && current.members[id].isGmDevice) delete current.members[id].isGmDevice;
+          } catch (eDel) {
+            // ignore
+          }
+        }
+
+        var exists = false;
+        for (var j = 0; j < current.order.length; j++) {
+          if (String(current.order[j]) === id) {
+            exists = true;
+            break;
+          }
+        }
+        if (!exists) current.order.push(id);
+      }
+      return current;
+    });
+  }
+
   function setLobbyOrder(lobbyId, nextOrder) {
     if (!Array.isArray(nextOrder)) return Promise.reject(new Error('順番が不正です'));
     return setValue(lobbyPath(lobbyId) + '/order', nextOrder);
@@ -7741,7 +7784,7 @@
     }
     var isHost = !!(q && String(q.host || '') === '1');
     var isGmDev = !!(q && String(q.gmdev || '') === '1');
-    var isPlayer = !!(q && String(q.player || '') === '1');
+    var hasRoom = !!(q && q.room && String(q.room || '').trim());
 
     var scr = String(screen || '');
     var isLobbyScreen = scr === 'lobby_host' || scr === 'lobby_assign' || scr === 'lobby_login' || scr === 'lobby_create';
@@ -7758,14 +7801,19 @@
     if (!headerEl || !titleEl) return;
 
     var isLobbyAny = scr === 'lobby_host' || scr === 'lobby_assign' || scr === 'lobby_login' || scr === 'lobby_create' || scr === 'lobby_player' || scr === 'lobby_join';
-    var isGamePlayerScreen =
-      isPlayer || scr === 'loveletter_player' || scr === 'codenames_player' || scr === 'hannin_player';
-    var isGmParticipantPlayer = !!(lobbyId && isHost && !isGmDev && isGamePlayerScreen);
+    // Treat any screen with `room` as an in-game screen (player/join/table/host sub-screens).
+    var isGameScreen = !!(!isLobbyAny && hasRoom);
+
+    // Show clickable header for:
+    // - GM participant device (host=1)
+    // - GM table device (gmdev=1)
+    // (only when tied to a lobby + in an in-game screen)
+    var canUseGmLobbyReturn = !!(lobbyId && isGameScreen && (isHost || isGmDev));
 
     // Toggle a class for CSS targeting.
     try {
       if (document && document.body && document.body.classList) {
-        document.body.classList.toggle('gm-participant', isGmParticipantPlayer);
+        document.body.classList.toggle('gm-participant', canUseGmLobbyReturn);
       }
     } catch (eCls) {
       // ignore
@@ -7775,14 +7823,14 @@
     // - GM参加者のプレイヤー画面: show clickable header only
     // - その他の参加者プレイヤー画面: hide header
     // - ロビー画面: hide header
-    if (isGmParticipantPlayer) {
+    if (canUseGmLobbyReturn) {
       try {
         headerEl.style.display = '';
       } catch (eS1) {
         // ignore
       }
       try {
-        titleEl.textContent = 'B_BoardGames(ロビーへ戻る)';
+        titleEl.textContent = 'B_BoardGames(ロビーへ)';
         titleEl.classList.add('gm-lobby-return');
       } catch (eT1) {
         // ignore
@@ -7803,11 +7851,18 @@
 
         var isHost2 = !!(q2 && String(q2.host || '') === '1');
         var isGmDev2 = !!(q2 && String(q2.gmdev || '') === '1');
-        var isPlayer2 = !!(q2 && String(q2.player || '') === '1');
         var scr2 = q2 && q2.screen ? String(q2.screen) : '';
         var room2 = q2 && q2.room ? String(q2.room) : '';
-        var isGamePlayer2 = isPlayer2 || scr2 === 'loveletter_player' || scr2 === 'codenames_player' || scr2 === 'hannin_player';
-        if (!(lobby && isHost2 && !isGmDev2 && isGamePlayer2)) return;
+        var hasRoom2 = !!(q2 && q2.room && String(q2.room || '').trim());
+        var isLobbyAny2 =
+          scr2 === 'lobby_host' ||
+          scr2 === 'lobby_assign' ||
+          scr2 === 'lobby_login' ||
+          scr2 === 'lobby_create' ||
+          scr2 === 'lobby_player' ||
+          scr2 === 'lobby_join';
+        var isGameScreen2 = !!(!isLobbyAny2 && hasRoom2);
+        if (!(lobby && isGameScreen2 && (isHost2 || isGmDev2))) return;
 
         if (!confirm('ロビーへ戻ります。\n（進行中の場合はゲームを中断し、全員に反映されます）\nよろしいですか？')) return;
 
@@ -7840,7 +7895,7 @@
             var v = getCacheBusterParam();
             if (v) qx.v = v;
             qx.lobby = lobby;
-            qx.screen = isHost2 ? 'lobby_host' : 'lobby_player';
+            qx.screen = isHost2 || isGmDev2 ? 'lobby_host' : 'lobby_player';
             try {
               if (q2 && String(q2.gmdev || '') === '1') qx.gmdev = '1';
             } catch (eG) {
@@ -7860,7 +7915,7 @@
     }
 
     // Hide header on lobby and non-GM player screens.
-    if (isLobbyAny || isGamePlayerScreen) {
+    if (isLobbyAny || isGameScreen) {
       try {
         headerEl.style.display = 'none';
       } catch (eS2) {
@@ -11290,6 +11345,14 @@
     var btn = document.getElementById('lobbyCreateBtn');
     if (!btn) return;
     btn.addEventListener('click', function () {
+      var autoTest = false;
+      try {
+        var q0 = parseQuery();
+        autoTest = !!(q0 && String(q0.autotest || '') === '1');
+      } catch (eAuto) {
+        autoTest = false;
+      }
+
       var form;
       try {
         clearInlineError('lobbyCreateError');
@@ -11304,6 +11367,17 @@
       firebaseReady()
         .then(function () {
           return createLobbyWithRetry(form.name, false);
+        })
+        .then(function (res) {
+          if (!autoTest) return res;
+          // Dev helper: start with 1 real participant + 3 test players already joined.
+          return ensureLobbyTestPlayers(res.lobbyId, [
+            { id: 'test_p1', name: 'テスト1' },
+            { id: 'test_p2', name: 'テスト2' },
+            { id: 'test_p3', name: 'テスト3' }
+          ]).then(function () {
+            return res;
+          });
         })
         .then(function (res) {
           var q = {};

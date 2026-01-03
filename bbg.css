@@ -59,7 +59,7 @@ hr{border:none;border-top:1px solid var(--line);margin:12px 0}
 .footer{padding:10px 4px;color:var(--muted);text-align:center}
 
 /* Love Letter player screen: maximize vertical space */
-body.ll-player-screen .header{display:none}
+body.ll-player-screen:not(.gm-participant) .header{display:none}
 body.ll-player-screen .app{padding-top:10px}
 
 .form-error{color:var(--danger);font-size:13px;line-height:1.4}
@@ -154,7 +154,7 @@ body.ll-player-screen .app{padding-top:10px}
 .ll-card-back{transform:translate(0,0) scale(.90);opacity:.85}
 .ll-card-front{transform:translate(14px,16%) scale(.90)}
 .ll-turn-waiting .ll-card-front{transform:translate(0,0) scale(.90);opacity:.85}
-.ll-card-img{width:100%;height:100%;object-fit:contain;display:block;-webkit-user-drag:none;user-drag:none;-webkit-touch-callout:none}
+.ll-card-img{width:100%;height:100%;object-fit:contain;display:block;-webkit-user-drag:none;user-drag:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;touch-action:manipulation;pointer-events:none}
 .ll-hint{font-size:13px}
 
 .ll-player{gap:8px}
