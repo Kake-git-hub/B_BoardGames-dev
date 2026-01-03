@@ -18590,13 +18590,31 @@
       var startBtn = document.getElementById('cnStart');
       if (startBtn && !startBtn.__cn_bound) {
         startBtn.__cn_bound = true;
-        startBtn.addEventListener('click', function () {
+
+        function doStart(ev) {
+          if (ev && ev.preventDefault) ev.preventDefault();
+          if (ev && ev.stopPropagation) ev.stopPropagation();
+          if (startBtn.__cn_starting) return;
+          startBtn.__cn_starting = true;
           startBtn.disabled = true;
+
           startCodenamesGame(roomId)
             .then(function (room2) {
               if (!room2 || String(room2.phase || '') !== 'playing') {
-                throw new Error('ゲームを開始できませんでした（役職の登録状況などを確認してください）。');
+                var counts = countCodenamesRoles(room2);
+                throw new Error(
+                  'ゲームを開始できませんでした。\n' +
+                    '赤スパイマスター=' +
+                    counts.redSpymaster +
+                    ' / 青スパイマスター=' +
+                    counts.blueSpymaster +
+                    ' / 赤諜報員=' +
+                    counts.redOperative +
+                    ' / 青諜報員=' +
+                    counts.blueOperative
+                );
               }
+
               var q = {};
               var v = getCacheBusterParam();
               if (v) q.v = v;
@@ -18623,9 +18641,18 @@
               alert((e && e.message) || '失敗');
             })
             .finally(function () {
+              startBtn.__cn_starting = false;
               startBtn.disabled = false;
             });
-        });
+        }
+
+        // Some mobile browsers can miss click; bind pointer/touch as well.
+        startBtn.addEventListener('click', doStart);
+        if (typeof PointerEvent !== 'undefined') {
+          startBtn.addEventListener('pointerup', doStart);
+        } else {
+          startBtn.addEventListener('touchend', doStart);
+        }
       }
 
       var normalVals = [60, 90, 120, 150];
